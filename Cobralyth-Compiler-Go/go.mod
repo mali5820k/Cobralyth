@@ -1,3 +1,3 @@
-module cobralyth_dev
+module cobralyth
 
 go 1.20

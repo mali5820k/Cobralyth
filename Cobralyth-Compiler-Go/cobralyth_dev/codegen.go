@@ -1,7 +1,5 @@
 package cobralyth_dev
 
-//import "lexer"
-
-func ParseAST(ASTNode *rootNode) {
+func ParseAST(rootNode *ASTNode) {
 	// perform post-order traversal. (left child, then right-child, then us)
 }
