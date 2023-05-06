@@ -21,4 +21,4 @@ A Compiled language that is inspired from C++ runtime performance and Python's s
 - As an extension, I may decide to pivot and create a separate version of this language or a new revision that is strictly an AOT compiled, dynamically-typed language featureset. Not trying to jump on that now but something I may consider making with Cobralyth if it's feasible.
 
 - NOTE: I had to delete the old repository for the sake of cleaning up the entire project. This is now the latest project with the files carrying over from the previous repo version that was deleted. The license was originally from 2022, so that was the only adjustment I made in this repo's license to revert it back to 2022 from 2023.
-- NOTE: I may also create a VM interpreter for this language for being able to both test and debug features.
+- NOTE: I may also create a VM interpreter for this language for being able to both test and debug features (that is if I see it makes sense).
