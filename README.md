@@ -6,6 +6,31 @@ A Compiled language that is inspired from C++ runtime performance and Python's s
 - Cross platform compilation (either native or wasm)
 - GUI support
 - Simple syntax providing scripting langauge like featureset and pythonic white-space formatting for scopes
+- Function-leaping/hopping or Function-zipping (still trying to decide on a good name for this feature):
+   - Where the function-control-flow can be altered by returning directly to the root-caller of a function-call-stack instead of linear return-flow from function to function. 
+   - This is different from gotos since it's limiting the hop to the root-caller and not freely allowing jumps to any other block of code.
+   - Example for what it would look like if an existing language supported such a feature out of the box (using Go for displaying the concept; Go doesn't have this feature): 
+    ```go
+    func main() {
+      myVal float = val1(1, 2)
+      fmt.Printf("%f", myVal) // This should print out 100
+    }
+    
+    func val1(int a, int b) int {
+      if (a > 5) {
+        return 0;
+      }
+      
+      return val2(a, b);
+    }
+    
+    func val2(int a, int b) float32 {
+      if (a == 2) {
+        return (math.pow(a, b)* 0.75)
+      }
+      val2.returnToRoot(math.pow(a*10, b))
+    }
+    ```
 - Websockets and Webserver backend support
 - Package system
 
