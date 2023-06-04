@@ -409,6 +409,9 @@ func (lexer *Lexer) ScanFile() bool {
 	// Lex the input strings into tokens:
 	lexer.Tokenize(currentFileLines)
 
+	// Dummy testing:
+	lexer.scannedTokens = currentFileLines
+
 	// We've tokenized the main file
 	return true
 }

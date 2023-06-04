@@ -30,9 +30,9 @@ func main() {
 	// Initialize lexer and parsers:
 	lexer := NewLexer("D:\\Github Projects\\Cobralyth\\Sample-Cobralyth-Programs\\Hello-World\\helloworld.clyth")
 	fmt.Println("Main Program Start")
-	fmt.Printf("This is the lexer to string before lexing: %s", lexer)
+	fmt.Printf("This is the lexer to string before lexing: %s", lexer.String())
 
 	lexer.ScanFile()
-	fmt.Printf("This is the lexer to string after scanning: %s", lexer)
+	fmt.Printf("This is the lexer to string after scanning: %s", lexer.String())
 	fmt.Println("Main Program End")
 }
