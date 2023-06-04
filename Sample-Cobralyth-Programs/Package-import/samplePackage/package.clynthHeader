@@ -1,0 +1,12 @@
+---
+package_files:
+    - file1.clynth
+
+package_authors:
+    - mali5820k
+
+package_license:
+    - MIT
+
+package_version:
+    - 1.0.0

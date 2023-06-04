@@ -1,0 +1,6 @@
+// Sample Hello World program in Cobralyth (Clyth for short)
+
+func main(string args) {
+    // This is a hello world program with a formatted print println
+    println("Hello World%s", "hi there")
+}

@@ -1,9 +1,10 @@
 package main
 
 import (
-	. "cobralyth/cobralyth_dev" // I know this isn't best practice but I like the brevity for my codebase :p
 	"flag"
 	"fmt"
+
+	. "cobralyth_dev/cobralyth_dev"
 )
 
 // Global-scope
@@ -27,7 +28,11 @@ func main() {
 	setupFlags()
 
 	// Initialize lexer and parsers:
-	lexer := NewLexer()
+	lexer := NewLexer("D:\\Github Projects\\Cobralyth\\Sample-Cobralyth-Programs\\Hello-World\\helloworld.clyth")
 	fmt.Println("Main Program Start")
-	fmt.Printf("This is the lexer to string: %s", lexer)
+	fmt.Printf("This is the lexer to string before lexing: %s", lexer)
+
+	lexer.ScanFile()
+	fmt.Printf("This is the lexer to string after scanning: %s", lexer)
+	fmt.Println("Main Program End")
 }

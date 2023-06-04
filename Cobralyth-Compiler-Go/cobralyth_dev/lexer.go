@@ -1,6 +1,10 @@
 package cobralyth_dev
 
-import "fmt"
+import (
+	"bufio"
+	"fmt"
+	"os"
+)
 
 type TokenType int32
 
@@ -69,8 +73,6 @@ const (
 	TOKEN_COMMENT_SINGLE
 	TOKEN_COMMENT_MULTI_START
 	TOKEN_COMMENT_MULTI_END
-	TOKEN_DOCUMENT_START
-	TOKEN_DOCUMENT_END
 	TOKEN_DOT
 	TOKEN_STRUCT
 	TOKEN_CLASS
@@ -78,9 +80,89 @@ const (
 	TOKEN_PRIVATE
 )
 
-/**
- * String representation of all token-types for REPL
- */
+// Map for string to keyword token-type lookup
+var languageDictionary = map[string]TokenType{
+	"null":     TOKEN_NULL,
+	"if":       TOKEN_IF,
+	"else":     TOKEN_ELSE,
+	"for":      TOKEN_FOR,
+	"[":        TOKEN_SQUARE_LEFT_BRACKET,
+	"]":        TOKEN_SQUARE_RIGHT_BRACKET,
+	"{":        TOKEN_CURLY_LEFT_BRACKET,
+	"}":        TOKEN_CURLY_RIGHT_BRACKET,
+	"(":        TOKEN_PAREN_LEFT,
+	")":        TOKEN_PAREN_RIGHT,
+	"var":      TOKEN_VAR,
+	"uint8":    TOKEN_UINT8,
+	"uint16":   TOKEN_UINT16,
+	"uint32":   TOKEN_UINT32,
+	"uint64":   TOKEN_UINT64,
+	"int8":     TOKEN_INT8,
+	"int16":    TOKEN_INT16,
+	"int32":    TOKEN_INT32,
+	"int64":    TOKEN_INT64,
+	"float":    TOKEN_FLOAT,
+	"double":   TOKEN_DOUBLE,
+	"char":     TOKEN_CHAR,
+	"string":   TOKEN_STRING,
+	"byte":     TOKEN_BYTE,
+	"bool":     TOKEN_BOOL,
+	"func":     TOKEN_FUNCTION,
+	"/":        TOKEN_DIVIDE,
+	"*":        TOKEN_MULTIPLY,
+	"+":        TOKEN_PLUS,
+	"-":        TOKEN_MINUS,
+	"++":       TOKEN_PLUS_PLUS,
+	"--":       TOKEN_MINUS_MINUS,
+	"+=":       TOKEN_PLUS_EQUALS,
+	"-=":       TOKEN_MINUS_EQUALS,
+	"*=":       TOKEN_TIMES_EQUALS,
+	"/=":       TOKEN_DIVIDE_EQUALS,
+	"return":   TOKEN_RETURN,
+	"break":    TOKEN_BREAK,
+	"continue": TOKEN_CONTINUE,
+	"switch":   TOKEN_SWITCH,
+	"case":     TOKEN_CASE,
+	"default":  TOKEN_DEFAULT,
+	";":        TOKEN_SEMICOLON,
+	"=":        TOKEN_EQUALS,
+	"==":       TOKEN_EQUALS_EQUALS,
+	">":        TOKEN_GREATER_THAN,
+	"<":        TOKEN_LESS_THAN,
+	">=":       TOKEN_GREATER_THAN_EQUALS,
+	"<=":       TOKEN_LESS_THAN_EQUALS,
+	"!=":       TOKEN_NOT_EQUALS,
+	"or":       TOKEN_LOGIC_OR,
+	"and":      TOKEN_LOGIC_AND,
+	"bnot":     TOKEN_BIT_NOT,
+	"bor":      TOKEN_BIT_OR,
+	"band":     TOKEN_BIT_AND,
+	"!":        TOKEN_LOGIC_NOT,
+	"not":      TOKEN_LOGIC_NOT,
+	"\"":       TOKEN_DOUBLE_QUOTE,
+	"'":        TOKEN_SINGLE_QUOTE,
+	"%":        TOKEN_MODULO,
+	"//":       TOKEN_COMMENT_SINGLE,
+	"/*":       TOKEN_COMMENT_MULTI_START,
+	"*/":       TOKEN_COMMENT_MULTI_END,
+	".":        TOKEN_DOT,
+	"STRUCT":   TOKEN_STRUCT,
+	"CLASS":    TOKEN_CLASS,
+	"PUBLIC":   TOKEN_PUBLIC,
+	"PRIVATE":  TOKEN_PRIVATE,
+}
+
+var KeywordsTrie *TrieNode
+
+func GenerateKeywordsTrie() (bool, error) {
+	for key := range languageDictionary {
+		addStringToTree(key, KeywordsTrie)
+	}
+
+	return true, nil
+}
+
+// String representation of all token-types for REPL
 func (tokenType TokenType) String() string {
 	switch tokenType {
 	case TOKEN_NULL:
@@ -192,7 +274,7 @@ func (tokenType TokenType) String() string {
 	case TOKEN_LOGIC_AND:
 		return "AND"
 	case TOKEN_LOGIC_NOT:
-		return "BNOT"
+		return "LNOT"
 	case TOKEN_BIT_OR:
 		return "BOR"
 	case TOKEN_BIT_AND:
@@ -210,10 +292,6 @@ func (tokenType TokenType) String() string {
 	case TOKEN_COMMENT_MULTI_START:
 		return "/*"
 	case TOKEN_COMMENT_MULTI_END:
-		return "*/"
-	case TOKEN_DOCUMENT_START:
-		return "/**"
-	case TOKEN_DOCUMENT_END:
 		return "*/"
 	case TOKEN_DOT:
 		return "."
@@ -238,6 +316,8 @@ type Token struct {
 	Value    string
 }
 
+// TokenType, Token-file, Token-line, Token-Contents, Token-Value
+// Token-Value is the literal value of that token, so if an int, it's a value of type int.
 func NewToken(args ...interface{}) *Token {
 	// Default parameters:
 	myToken := Token{TOKEN_UNDEFINED, "", 1, "", ""}
@@ -273,54 +353,91 @@ func NewToken(args ...interface{}) *Token {
 }
 
 type Lexer struct {
-	File          string
-	lineNumber    int64
-	scannedTokens []string
-	currentChar   string
-	nextChar      string
+	FilePath          string
+	scannedTokens     []string
+	secondaryPaths    []string
+	fileContentsIndex int64
+	fileContents      []string
+	lineNumber        int64
+	scanBufferIndex   int64
+	scanBuffer        []string
+	errorLog          []string
 }
 
-func NewLexer(args ...interface{}) *Lexer {
+// Returns a new Lexer object to scan and generate tokens from a particular file
+// Variadic arguments allow for default variable assignments
+// The order of param-evaluation is: filepath, line number, scanned tokens list, current character, and next character.
+func NewLexer(FilePath string) Lexer {
 	// Default parameters:
 	myLexer := Lexer{}
-	myLexer.File = ""
+	myLexer.FilePath = FilePath
 	myLexer.lineNumber = 1
 	myLexer.scannedTokens = []string{}
-	myLexer.currentChar = ""
-	myLexer.nextChar = ""
+	myLexer.secondaryPaths = []string{}
+	myLexer.fileContentsIndex = 0
+	myLexer.fileContents = []string{}
+	myLexer.lineNumber = 0
+	myLexer.scanBufferIndex = 0
+	myLexer.scanBuffer = []string{}
+	myLexer.errorLog = []string{}
+	return myLexer
+}
 
-	if len(args) == 0 {
-		return &myLexer
+// All files stored in a directory can be imported separately from the package name: "PackageName.filename".
+// All directories can be a package if they contain a package-header file: "PackageName.c".
+// For package installations and package management, a particular directory can be defined.
+// That way, all packages are stored in a standard location and can be referred to by name.
+func (lexer *Lexer) ScanFile() bool {
+	// Line buffers:
+	var currentFileLines []string
+	// Start by scanning the main file
+	file, err := os.Open(lexer.FilePath)
+	if err != nil {
+		fmt.Printf("\n\nERROR: FILE NOT FOUND! Filename: %s", lexer.FilePath)
+		return false
+	}
+	defer file.Close()
+
+	fileScanner := bufio.NewScanner(file)
+
+	// This will read in token by token.
+	for fileScanner.Scan() {
+		// Subsequent calls to fileScanner.Text() will return fully scanned lines.
+		currentFileLines = append(currentFileLines, fileScanner.Text())
 	}
 
-	switch len(args) {
-	case 5:
-		if x, isValid := args[4].(string); isValid {
-			myLexer.nextChar = x
-		}
-	case 4:
-		if x, isValid := args[3].(string); isValid {
-			myLexer.currentChar = x
-		}
-	case 3:
-		if x, isValid := args[2].([]string); isValid {
-			myLexer.scannedTokens = x
-		}
-	case 2:
-		// Check if the first argument/param is indeed a LexerType type.
-		if x, isValid := args[1].(int64); isValid {
-			myLexer.lineNumber = x
-		}
-	default:
-		// Check if the first argument/param is indeed a LexerType type.
-		if x, isValid := args[0].(string); isValid {
-			myLexer.File = x
+	// Lex the input strings into tokens:
+	lexer.Tokenize(currentFileLines)
+
+	// We've tokenized the main file
+	return true
+}
+
+func (lexer *Lexer) lexingError(errorMessage string) {
+	// Add error message to Lexer Logs:
+	lexingError := errorMessage + "\n"
+	lexer.errorLog = append(lexer.errorLog, lexingError)
+}
+
+// We'll append to the list of "other-files" for a package
+// This function's approach is inspired by the approach written in "Crafting-Interpreters" from my own memories of what
+// Robert (Bob) Nystrom explained, however, this approach is unique as it's traversing a Trie for language keywords and types.
+func (lexer *Lexer) Tokenize(fileLines []string) (bool, error) {
+	for _, line := range fileLines {
+		// For each line, we want to perform a Trie-traversal for each token encountered.
+		for i := 0; i < len(line); i++ {
+
 		}
 	}
-	return &myLexer
+	return true, nil
+}
+
+func isKeyword(wordBuffer string) (bool, error) {
+
+	return false, nil
 }
 
 func (lexer Lexer) String() string {
-	repr := fmt.Sprintf("Lexer:\n\tFile=%s\n\tlineNumber=%d\n\tscannedTokens=%v\n\tcurrentChar=%s\n\tnextChar=%s\n", lexer.File, lexer.lineNumber, lexer.scannedTokens, lexer.currentChar, lexer.nextChar)
+	repr := fmt.Sprintf("Lexer:\n\tFile=%s\n\tlineNumber=%d\n\tscannedTokens=%v\n", lexer.FilePath, lexer.lineNumber, lexer.scannedTokens)
 	return repr
 }
