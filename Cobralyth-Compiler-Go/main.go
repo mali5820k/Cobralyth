@@ -30,9 +30,16 @@ func main() {
 	// Initialize lexer and parsers:
 	lexer := NewLexer("D:\\Github Projects\\Cobralyth\\Sample-Cobralyth-Programs\\Hello-World\\helloworld.clyth")
 	fmt.Println("Main Program Start")
-	fmt.Printf("This is the lexer to string before lexing: %s", lexer.String())
+	fmt.Printf("This is the lexer to string before lexing: %s", lexer)
+	success, error := GenerateKeywordsTrie()
+	if error != nil {
+		fmt.Println("ERROR: An error has occurred with generating keywords-trie structure!")
+	}
+	if success {
+		fmt.Println("Successfully generating keywords-trie structure.")
+	}
 
 	lexer.ScanFile()
-	fmt.Printf("This is the lexer to string after scanning: %s", lexer.String())
+	fmt.Printf("This is the lexer to string after scanning: %s", lexer)
 	fmt.Println("Main Program End")
 }

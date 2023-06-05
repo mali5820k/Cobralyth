@@ -1,9 +1,14 @@
 package cobralyth_dev
 
+import (
+	"fmt"
+)
+
 type TrieNode struct {
-	character rune
-	tokenType TokenType
-	neighbors map[rune]TrieNode
+	character        rune
+	tokenType        TokenType
+	neighbors        map[rune]TrieNode
+	indentationLevel int
 }
 
 func addStringToTree(keywordString string, rootTriNode *TrieNode) bool {
@@ -22,13 +27,18 @@ func addStringToTree(keywordString string, rootTriNode *TrieNode) bool {
 
 	var i int = 0
 	var neighbor *TrieNode = rootTriNode
-	for true {
-		if value, ok := neighbor.neighbors[rune(keywordString[i])]; ok {
-			i++
-			neighbor = &value
-			continue
-		} else if i >= len(keywordString) {
-			return false
+	fmt.Printf("\n\n" + keywordString + "\n")
+	for {
+		if i < len(keywordString) {
+			if value, ok := neighbor.neighbors[rune(keywordString[i])]; ok {
+				i++
+				neighbor = &value
+				PrintTrie(&value)
+				continue
+			} else {
+				// Didn't find a matching key so will break to add it in now.
+				break
+			}
 		} else {
 			// Break to create the alternate nodes and mark reachedEnd;
 			break
@@ -37,9 +47,10 @@ func addStringToTree(keywordString string, rootTriNode *TrieNode) bool {
 	// Create the individual trienodes for each character and append them as a neighbor in the
 	// previous node's map of neighbors.
 	for i < len(keywordString) {
-		newTrieNode := NewTrieNode(rune(keywordString[i]), TOKEN_UNDEFINED)
+		newTrieNode := NewTrieNode(rune(keywordString[i]), TOKEN_UNDEFINED, neighbor.indentationLevel+1)
 		neighbor.neighbors[newTrieNode.character] = *newTrieNode
 		neighbor = newTrieNode
+		PrintTrie(neighbor)
 		i++
 		if i == len(keywordString) {
 			neighbor.tokenType = languageDictionary[keywordString]
@@ -48,17 +59,31 @@ func addStringToTree(keywordString string, rootTriNode *TrieNode) bool {
 	return true
 }
 
-func PrintOutTree(rootTriNode *TrieNode) {
-
-	// Likely want a pre-order traversal on this one so all elements are printed out row-by-row.
-	for true {
-		return
-	}
+func PrintTrie(rootTriNode *TrieNode) {
+	trieString := rootTriNode.String()
+	fmt.Print(trieString)
 }
 
-func NewTrieNode(character rune, tokenType TokenType) *TrieNode {
+func (tri TrieNode) String() string {
+
+	// Likely want a pre-order traversal on this one so all elements are printed out row-by-row.
+	allKeys := ""
+	for key := range tri.neighbors {
+		allKeys += ", " + string(key)
+	}
+
+	// Sets the appropriate indentation level of this specific Trie
+	indentationString := ""
+	for i := tri.indentationLevel; i > 0; i-- {
+		indentationString += "\t"
+	}
+	repr := fmt.Sprintf("%sTrieNode:\tCharacter: %s\tTokenType: %d\tNeighbors: %s\tIndentationLevel: %d\n", indentationString, string(tri.character), tri.tokenType, allKeys, tri.indentationLevel)
+	return repr
+}
+
+func NewTrieNode(character rune, tokenType TokenType, indentationLevel int) *TrieNode {
 	neighbors := map[rune]TrieNode{}
-	newTrieNode := TrieNode{character, tokenType, neighbors}
+	newTrieNode := TrieNode{character, tokenType, neighbors, indentationLevel}
 	return &newTrieNode
 }
 

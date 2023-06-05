@@ -2,6 +2,7 @@ package cobralyth_dev
 
 import (
 	"bufio"
+	"errors"
 	"fmt"
 	"os"
 )
@@ -146,18 +147,26 @@ var languageDictionary = map[string]TokenType{
 	"/*":       TOKEN_COMMENT_MULTI_START,
 	"*/":       TOKEN_COMMENT_MULTI_END,
 	".":        TOKEN_DOT,
-	"STRUCT":   TOKEN_STRUCT,
-	"CLASS":    TOKEN_CLASS,
-	"PUBLIC":   TOKEN_PUBLIC,
-	"PRIVATE":  TOKEN_PRIVATE,
+	"struct":   TOKEN_STRUCT,
+	"class":    TOKEN_CLASS,
+	"public":   TOKEN_PUBLIC,
+	"private":  TOKEN_PRIVATE,
 }
 
 var KeywordsTrie *TrieNode
 
 func GenerateKeywordsTrie() (bool, error) {
-	for key := range languageDictionary {
-		addStringToTree(key, KeywordsTrie)
+	if KeywordsTrie == nil {
+		KeywordsTrie = NewTrieNode('#', TOKEN_UNDEFINED, 0)
 	}
+	for key := range languageDictionary {
+		success := addStringToTree(key, KeywordsTrie)
+		if !success {
+			return false, errors.New("ERROR: Failed to add partial or total keywords to trie root object")
+		}
+	}
+
+	// PrintTrie(KeywordsTrie)
 
 	return true, nil
 }
@@ -408,9 +417,6 @@ func (lexer *Lexer) ScanFile() bool {
 
 	// Lex the input strings into tokens:
 	lexer.Tokenize(currentFileLines)
-
-	// Dummy testing:
-	lexer.scannedTokens = currentFileLines
 
 	// We've tokenized the main file
 	return true
