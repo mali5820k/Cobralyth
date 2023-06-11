@@ -12,7 +12,7 @@ A Compiled language that is inspired from C++ runtime performance and Python's s
    - Example for what it would look like if an existing language supported such a feature out of the box (using Go for displaying the concept; Go doesn't have this feature): 
     ```go
     func main() {
-      myVal float = val1(1, 2)
+      myVal := val1(1, 2)
       fmt.Printf("%f", myVal) // This should print out 100
     }
     
@@ -44,6 +44,8 @@ A Compiled language that is inspired from C++ runtime performance and Python's s
 - Furthermore, I'm in no way assuming trademark of the name "Cobralyth" as it's an open-source project of mine that I am not intending on making commercial/monetary gains from. Personally, I think trademarking progamming language names is ridiculous as it's a language name, but I'm not a lawyer and this is my statement to anyone it may pertain to that my intention for using "Cobralyth" as a name is strictly for the sake of naming my project and not to infringe on trademarks or cause legal conflicts, and I assume no legal responsibility in the case this name is used elsewhere.
 
 - As an extension, I may decide to pivot and create a separate version of this language or a new revision that is strictly an AOT compiled, dynamically-typed language featureset. Not trying to jump on that now but something I may consider making with Cobralyth if it's feasible.
+- **An important note:** if I find myself running short on time to dedicate to this project, I may pivot and utilize a parser tool like Antlr4 for accelerating the progress of this project. Pratt Parsers, custom lexers and parsers are magnificent, but it's also subject to rigorous unit-testing to match a high-quality lexer/parser, in which case Antlr4 already hits that mark right from the get-go. What this also means is that the 'trie'-based lexer in the custom implementation prior to switching to Antlr will still be referrable to in a separate branch. 
 
-- NOTE: I had to delete the old repository for the sake of cleaning up the entire project. This is now the latest project with the files carrying over from the previous repo version that was deleted. The license was originally from 2022, so that was the only adjustment I made in this repo's license to revert it back to 2022 from 2023.
-- NOTE: I may also create a VM interpreter for this language for being able to both test and debug features (that is if I see it makes sense).
+- Other informative update(s) notes:
+   - I had to delete the old repository for the sake of cleaning up the entire project. This is now the latest project with the files carrying over from the previous repo version that was deleted. The license was originally from 2022, so that was the only adjustment I made in this repo's license to revert it back to 2022 from 2023.
+   - If it makes sense in the long run, I may also create a VM interpreter for this language for being able to both test and debug features.
