@@ -32,10 +32,9 @@ func main() {
 	fmt.Println("Main Program Start")
 	fmt.Printf("This is the lexer to string before lexing: %s", lexer)
 	success, error := GenerateKeywordsTrie()
-	if error != nil {
+	if error != nil || !success {
 		fmt.Println("ERROR: An error has occurred with generating keywords-trie structure!")
-	}
-	if success {
+	} else {
 		fmt.Println("Successfully generating keywords-trie structure.")
 	}
 
