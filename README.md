@@ -33,6 +33,7 @@ A Compiled language that is inspired from C++ runtime performance and Python's s
     ```
 - Websockets and Webserver backend support
 - Package system
+- **An important note:** I may utilize Antlr4 for accelerating the progress of this project to get the first-gen compiler. Pratt Parsers, custom lexers and parsers are magnificent, but it's also subject to rigorous unit-testing to match a high-quality lexer/parser, in which case Antlr4 already hits that mark right from the get-go. What this also means is that the 'trie'-based lexer in the custom implementation prior to switching to Antlr will still be referrable to in a separate branch and simply may be reimplemented in Cobralyth itself for the second-gen compiler.
 
 ### Secondary Goals:
 - OpenCL and CUDA support
@@ -44,8 +45,12 @@ A Compiled language that is inspired from C++ runtime performance and Python's s
 - Furthermore, I'm in no way assuming trademark of the name "Cobralyth" as it's an open-source project of mine that I am not intending on making commercial/monetary gains from. Personally, I think trademarking progamming language names is ridiculous as it's a language name, but I'm not a lawyer and this is my statement to anyone it may pertain to that my intention for using "Cobralyth" as a name is strictly for the sake of naming my project and not to infringe on trademarks or cause legal conflicts, and I assume no legal responsibility in the case this name is used elsewhere.
 
 - As an extension, I may decide to pivot and create a separate version of this language or a new revision that is strictly an AOT compiled, dynamically-typed language featureset. Not trying to jump on that now but something I may consider making with Cobralyth if it's feasible.
-- **An important note:** if I find myself running short on time to dedicate to this project, I may pivot and utilize a parser tool like Antlr4 for accelerating the progress of this project to get the first-gen compiler. Pratt Parsers, custom lexers and parsers are magnificent, but it's also subject to rigorous unit-testing to match a high-quality lexer/parser, in which case Antlr4 already hits that mark right from the get-go. What this also means is that the 'trie'-based lexer in the custom implementation prior to switching to Antlr will still be referrable to in a separate branch and simply may be reimplemented in Cobralyth itself for the second-gen compiler.
 
 - Other informative update(s) notes:
    - I had to delete the old repository for the sake of cleaning up the entire project. This is now the latest project with the files carrying over from the previous repo version that was deleted. The license was originally from 2022, so that was the only adjustment I made in this repo's license to revert it back to 2022 from 2023.
-   - If it makes sense in the long run, I may also create a VM interpreter for this language for being able to both test and debug features.
+
+# LLVM Support:
+- This will be in the distant future once the Go version of Cobralyth is what I would call "feature-complete" in terms of the goals I had for the language.
+- The target codegen would be leveraging MLIR/IR, and so the lexer and parser will be generated from Antlr4 as well to prevent re-inventing the wheel.
+- The LLVM version may supercede the Go version of Cobralyth once it has reached feature-parity and performs objectively better than the go-version.
+- Lastly, this version may have its own generational garbage-collector, which I will decide on a later date if and how I'd want to make a scope-mechanism to allow developers to prevent the GC from applying to certain code for manual memory management capabilities.
