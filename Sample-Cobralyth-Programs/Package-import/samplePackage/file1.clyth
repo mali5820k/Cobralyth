@@ -1,3 +1,0 @@
-func MyPackageFunction() int32 {
-	return 10
-}
