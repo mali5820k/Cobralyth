@@ -2,6 +2,8 @@
 #define lexer_hpp
 
 #include <string>
+#include <vector>
+#include <map>
 
 enum TokenType {
     IF, ELSE, RETURN, CONTINUE, WHILE, FOR, BREAK, SWITCH, CASE, DEFAULT, 
@@ -34,6 +36,29 @@ class Token {
         int tokenLine;
         std::string tokenValue;
         TokenType tokenType;
+};
+
+class Lexer {
+    public:
+        Lexer(std::string filename, std::map<std::string, bool> importTable);
+        ~Lexer();
+        std::vector<std::string> scannedContents();
+        std::vector<Token> tokenList();
+        bool startScanning();
+        bool updateFilename(std::string filename);
+        int testConsume(std::string term, int index, std::string fileLine);
+        void lexLine();
+        bool consumeChar();
+
+    private:
+        std::map<std::string, bool> *importTableReference;
+        std::string filename;
+        std::vector<Token> scannedTokens;
+        std::string fileLine;
+        int currentLineCharIndex;
+        int lineCounter;
+        char currentChar;
+        char nextChar;
 };
 
 #endif
