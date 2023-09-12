@@ -93,7 +93,7 @@ void Lexer::lexLine() {
             //     this->scannedTokens.push_back(Token(*lineCounter, "array", TokenType.ARRAY));
             //     // Clear buffer since match was found
             // }
-            testConsume("array", );
+            
             break;
         case 'b':
         case 'c':
