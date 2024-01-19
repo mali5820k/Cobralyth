@@ -46,16 +46,78 @@ A Compiled language that is inspired from C++ runtime performance and Python's s
     ```
 
 # Project Structure:
-   The project is divided into two main parts:
+   The project is divided into three main parts:
   - Frontend:
     - Lexer
     - Parser
     - Main-program entrypoint
   - Backend:
-    - Codegen module to transpile to a specific target language (currently C++)
-    - Runtime module files that provide a C++ API that provides the language's runtime functionality (Not a VM or Interpreter)
-    - Debug module for debugger
-    
+    - Codegen module to compile to a specific target language (currently C++)
+       - Also variants of codegen modules for utilizing different runtime module API calls.
+    - Debug module for debugger 
+  - Runtime module(s):
+    - Files that provide a C++ API exposing the language's runtime functionality (Not a VM or Interpreter)
+    - Aim is to allow for swapping of runtime modules for testing different runtimes.
+## Runtime Specification:
+- Pass-by-reference and Pass-by-value handling:
+   - Pass-by-reference will be via "&" and if not using "&" pass-by-value is utilized instead.
+     For example:
+     ```ts
+     function sampleFunction(int x, int y) {
+         x += y;
+         y *= x;
+     }
+
+     // "let" is equivalent of "auto" in C++ for variable declarations
+     let x = 10;
+     let y = 20;
+     
+      // Pass-by-value:
+     sampleFunction(x, y); // x remains 10 and y remains 20
+
+     // Pass-by-reference:
+     sampleFunction(&x, &y); // x is now 30 and y is now 600
+     ```
+     All the primitives of the language will be compiled to wrapper-classes that are built around the primitives of C++ with extra functionality and very lean metadata. This allows for a simple-wrapper object to be passed to functions that allows for switching in between passing-by-reference and passing-by-value.
+     For example:
+     ```cpp
+     template <typename T>
+     class PrimitiveWrapper {
+        public:
+         T *p_ref;
+         bool is_ref;
+         TypeInfo value_type;
+         PrimitiveWrapper(T value, bool is_ref) {
+            if(is_ref) { this->p_value = value; }
+            else { this->p_ref = &value; }
+         }
+         void updateValue(T value) {
+            if (is_ref) { this->p_ref; }
+            else { this->p_value = value; }
+         }
+         T getValue(T value) {
+            return this->p_ref
+         }
+     };
+     ```
+- Memory Management Module (Included within a Runtime Module):
+   - Scope-based Inheritance Borrow Checker Reference Table Scheme (SIBCRT):
+      - Each scope will maintain its own SIBCRT which tracks strong and weak references amongst objects to prevent cyclic references from occurring in garbage-collected languages, theoretically reducing garbage collection overhead if done in a minimal fashion.
+      - Strong references can be made by any object to another, as long as the object storing the reference doesn't already have the object it's referring to stored as a strong reference in one of its parents. IE objA objB and objC exist, objA stores a strong reference to objC, objC stores a strong reference to objB, but objB can't store a strong reference to objA nor objC if it needs to, therefore objB will resort to weak-references to both objA and objC to prevent a cycle of references from occurring.
+      - SIBCRT lookups will be performed whenever a reference is assigned by an object to another on invocation of the "=" operator. The SIBCRT for that scope will be referenced and the parents of the object being pointed to will be checked for existing strong references before assigning the type of reference to use.
+      - Owners of an object can be multiple in number, they will simply be appended to a queue of owners that will "inherit" the ownership of the object that all the other owners are currently referencing as well. In the case an owner goes out of scope or is no longer referring to an object with multiple owners, then only that owner is removed from the queue of owners. Once all owners no longer maintain the reference to the shared object, that object will be garbage-collected as no strong references will remain after the last owner loses the reference to the shared object.
+      - When exiting a scope, the SIBCRT will:
+         - upgrade all weak-references of an object that is being returned to strong-references before returning from the scope.
+         - transfer the "owner" of the object being returned to the parent-scope's SIBCRT
+   - Async Atomic Tracing Garbage Collector:
+      - Garbage Collector will run atomically and asynchronously to the main program, preventing GC overhead induced from common stop-the-world collectors at runtime.
+      - Will only be invoked whenever a strong-reference goes out of scope or an owner of an object from the queue of owners is freed or no longer maintains the strong reference it had on its referenced object.
+- Concurrency:
+   -  Threads are synonymous to Jobs. Jobs abstract away the complexity of managing threads and allow for programming logic in a single-threaded fashion, allowing the language's runtime to do the heavy-lifting of managing atomic accesses and thread scheduling.
+   -  Threads will be utilized to implement the underlying behavior of Jobs for scheduling them on multiple CPU cores.
+   -  Language variable primitives will be updated to be atomic when declared and used outside of a Jobs' scope, ensuring that global variables are atomically accessible. When declared inside of a Jobs' scope, language variable primitives will not be atomic by default.
+   -  Atomic datastructures will be provided for out of the box usage, included in the standard library. Non-atomic variants will also be included as they'll be wrapped in logic to form their atomic variants.
+   -  Jobs orchestration is handled by the programmer to a certain degree, such as the order of execution can be defined for a series of jobs by declaring them as dependencies of other Jobs, similar to an "await" statement.
 
 # Author's Note:
 - Upon completing the C-based Lox Programming language implementation from Bob (Robert) Nystrom's "Crafting Interpreters" book, I set out to construct my own programming language from what I had learned then and have learned thus far in my own free time doing research into programming language design and construction of AOT, JIT compilers and interpreters. For reference, this project is not a continuation of Nystrom's work, nor is it a continuation of my past work that was derived from his book, hence this project is my own from-scratch implementation for a language that I am designing from the ground up and isn't affiliated with Robert Nystrom nor with "Crafting Interpreters". 
