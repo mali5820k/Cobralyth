@@ -60,7 +60,7 @@ A Compiled language that is inspired from C++ runtime performance and Python's s
     - Aim is to allow for swapping of runtime modules for testing different runtimes.
 ## Runtime Specification:
 - Pass-by-reference and Pass-by-value handling:
-   - Pass-by-reference will be via "&" and if not using "&" pass-by-value is utilized instead.
+   - Pass-by-reference is used by prefixing a variable with an "&", pass-by-value is used otherwise.
      For example:
      ```ts
      function sampleFunction(int x, int y) {
@@ -100,7 +100,7 @@ A Compiled language that is inspired from C++ runtime performance and Python's s
          }
      };
      ```
-- Memory Management Module (Included within a Runtime Module):
+- Memory Management Module (Included as a Runtime Module for modularity):
    - Scope-based Inheritance Borrow Checker Reference Table Scheme (SIBCRT):
       - Each scope will maintain its own SIBCRT which tracks strong and weak references amongst objects to prevent cyclic references from occurring in garbage-collected languages, theoretically reducing garbage collection overhead if done in a minimal fashion.
       - Strong references can be made by any object to another, as long as the object storing the reference doesn't already have the object it's referring to stored as a strong reference in one of its parents. IE objA objB and objC exist, objA stores a strong reference to objC, objC stores a strong reference to objB, but objB can't store a strong reference to objA nor objC if it needs to, therefore objB will resort to weak-references to both objA and objC to prevent a cycle of references from occurring.
@@ -118,7 +118,49 @@ A Compiled language that is inspired from C++ runtime performance and Python's s
    -  Language variable primitives will be updated to be atomic when declared and used outside of a Jobs' scope, ensuring that global variables are atomically accessible. When declared inside of a Jobs' scope, language variable primitives will not be atomic by default.
    -  Atomic datastructures will be provided for out of the box usage, included in the standard library. Non-atomic variants will also be included as they'll be wrapped in logic to form their atomic variants.
    -  Jobs orchestration is handled by the programmer to a certain degree, such as the order of execution can be defined for a series of jobs by declaring them as dependencies of other Jobs, similar to an "await" statement.
-
+   -  An example of Jobs in action:
+     ```js
+     function testJob(int a, string filename) {
+        /// write a-lines to this file of random characters...
+        return 0
+     }
+     let x = new Job(testJob())
+     let y = x.runJob().getExitCode() /// blocking variant
+     x.runJob.runJob().getExitCode(&y) /// async-variant, better to check for in loops
+     let z = x.jobStatus() /// stores the job status of x in z; ie. starting, in-progress, failed, finished
+     
+     if y == 0 {
+         print("\nAll good! Success!\n")
+     }
+     else {
+         print("\nJob failed!\n")
+     }
+     ```
+   - An example where you can utilize Job-chaining/Job-orchestration:
+     ```js
+     let x = new Job(testJob(20, "filename-here.txt"))
+     let y = new Job(testOnJobCompletion())
+     x.runJob().onCompletion([ y ]) // Array of jobs to run on completion of x's job
+     ```
+   - An example where you can utilize notify-events to run Jobs at different stages of a particular Job:
+     ```js
+     let x = new Job(testJob(20, "filename-here.txt"))
+     let y = new Job(testOnJobCompletion)
+     let z = new Job(testOnJobCompletion2, "function-parameter-for-test-on-job-completion-2") /// function parameters compile to array of PrimitiveWrapper classes (as an example implementation)
+     let w1 = new Job(() => {
+         print("JobStart notification")
+     })
+     let w2 = new Job(() => {
+         print("JobInProgress notification")
+     })
+     let w3 = new Job(() => {
+         print("JobEnd notification")
+     })
+     x.runJob().onCompletion([y, z]).onNotify(["jobStart", [w1]], ["jobInProgress", [w2]] ,["jobEnd", [w3]]) // onNotify runs on job x, not y and z.
+     ```
+  - Syntax and feature expansion of jobs will be coming in the future as functionality is implemented.
+  - Consideration of job-to-job communication is a topic of interest, as well as allowing parameters to be sent to jobs to allow for greater reusability.
+    
 # Author's Note:
 - Upon completing the C-based Lox Programming language implementation from Bob (Robert) Nystrom's "Crafting Interpreters" book, I set out to construct my own programming language from what I had learned then and have learned thus far in my own free time doing research into programming language design and construction of AOT, JIT compilers and interpreters. For reference, this project is not a continuation of Nystrom's work, nor is it a continuation of my past work that was derived from his book, hence this project is my own from-scratch implementation for a language that I am designing from the ground up and isn't affiliated with Robert Nystrom nor with "Crafting Interpreters". 
 
