@@ -126,7 +126,7 @@ A Compiled language that is inspired from C++ runtime performance and Python's s
      }
      let x = new Job(testJob())
      let y = x.runJob().getExitCode() /// blocking variant
-     x.runJob.runJob().getExitCode(&y) /// async-variant, better to check for in loops
+     x.runJob().getExitCode(&y) /// async-variant, better to check for in loops
      let z = x.jobStatus() /// stores the job status of x in z; ie. starting, in-progress, failed, finished
      
      if y == 0 {
