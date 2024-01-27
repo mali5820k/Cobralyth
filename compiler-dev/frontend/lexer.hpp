@@ -23,6 +23,7 @@ enum TokenType {
 
     LEFT_PAREN, RIGHT_PAREN, LEFT_BRACKET, RIGHT_BRACKET, LEFT_CURLY, RIGHT_CURLY,
     SEMICOLON, COLON, DOT, COMMENT, MULTI_COMMENT_START, MULTI_COMMENT_END,
+    IDENTIFIER,
 
 };
 
@@ -40,18 +41,17 @@ class Token {
 
 class Lexer {
     public:
-        Lexer(std::string filename, std::map<std::string, bool> importTable);
+        Lexer();
         ~Lexer();
         std::vector<std::string> scannedContents();
         std::vector<Token> tokenList();
-        bool startScanning();
-        bool updateFilename(std::string filename);
-        int testConsume(std::string term, int index, std::string fileLine);
+        bool scanFile(std::string filename);
+        void consumeChar();
+        void checkMatch(std::vector<std::string> keywordList);
         void lexLine();
-        bool consumeChar();
+        
 
     private:
-        std::map<std::string, bool> *importTableReference;
         std::string filename;
         std::vector<Token> scannedTokens;
         std::string fileLine;
@@ -59,6 +59,7 @@ class Lexer {
         int lineCounter;
         char currentChar;
         char nextChar;
+        bool endOfFileReached;
 };
 
 #endif

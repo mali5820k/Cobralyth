@@ -4,6 +4,9 @@
 #include "astgen.hpp"
 #include <vector>
 #include <map>
+#include <filesystem>
+#include <format>
+
 /**
  * Package-based imports instead of direct file-based imports for the sake of linker-tracing simplification.
  * Packages are simply folders with unique names.
@@ -14,13 +17,23 @@ std::string packagesDirPath;
 std::map<std::string, bool> nestedPackages;
 
 int main (int argc, char** argv) {
-    // Only open .clyth files
-    // Lex starting file *usually the file containing the main function*
-    // The lexer will auto-populate the nestedPackages list with the appropriate paths and mark if imported
-    // parse the lexer's tokens and generate AST
-    // Codegen AST to target language
+    // Check if any arguments are provided to the compiler before continuing:
+    if (argc < 2) {
+        // error out:
+        std::cout << "\nERROR: No arguments were provided for compilation\n";
+        return 1;
+    }
 
-    // Print Status on exit.
+    // Only open .clyth files
+    // So check if from the end of the fileName "7 characters" the .clyth characters exist
+    std::string programFile(argv[1]);
+    if (extensionLength <= 0 || std::filesystem::path(programFile).extension() != ".clyth") {
+        std::cout << std::format("\nERROR: Starting file: {} doesn't have valid extension\n", programFile);
+        return 2;
+    }
+
+    // Scan starting the provided file.
+    
 
     return 0;
 }

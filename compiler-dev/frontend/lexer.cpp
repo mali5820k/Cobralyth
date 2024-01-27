@@ -1,6 +1,7 @@
 #include "lexer.hpp"
 #include <filesystem>
 #include <fstream>
+#include <format>
 
 Token::Token(int tokenLine, std::string tokenValue, TokenType tokenType) {
     this->tokenLine = tokenLine;
@@ -8,14 +9,14 @@ Token::Token(int tokenLine, std::string tokenValue, TokenType tokenType) {
     this->tokenType = tokenType;
 }
 
+Token::~Token() {}
+
 std::string Token::toString() {
     std::string representation("Token line: " + std::to_string(this->tokenLine) + "\nToken type: "+ std::to_string(this->tokenType) + "\nToken value:" + this->tokenValue + "\n\n");
     return representation;
 }
 
-Lexer::Lexer(std::string filename, std::map<std::string, bool> importTable) {
-    this->importTableReference = &importTable;
-    this->filename = filename;
+Lexer::Lexer() {
     this->currentLineCharIndex = 0;
     this->lineCounter = 0;
 }
@@ -23,14 +24,20 @@ Lexer::Lexer(std::string filename, std::map<std::string, bool> importTable) {
 Lexer::~Lexer() {}
 
 std::vector<std::string> Lexer::scannedContents() {
+    std::vector<std::string> returnVal = {};
 
+    return returnVal;
 }
 
 std::vector<Token> Lexer::tokenList() {
+    std::vector<Token> returnVal = {};
 
+    return returnVal;
 }
 
-bool Lexer::startScanning() {
+// Scans the provided file
+bool Lexer::scanFile(std::string filename) {
+    this->filename = filename;
     // Check if file extension is not of .clyth
     if (std::filesystem::path(this->filename).extension() != ".clyth") {
         return false;
@@ -45,86 +52,91 @@ bool Lexer::startScanning() {
     }
 
     startingFile.close();
+
+    return true;
 }
 
-bool Lexer::updateFilename(std::string filename) {
-    this->filename = filename;
-}
-
-// Returns 0 if not found, positive integer for last index of string parsed.
-int Lexer::testConsume(std::string term, int index, std::string fileLine) {
-    int retVal = 0;
-    for (int i = index; i < term.length(); i++) {
-
-    }
-
-    return retVal;
-}
-
-bool Lexer::consumeChar() {
+void Lexer::consumeChar() {
     if (this->currentLineCharIndex + 1 < this->fileLine.length()) {
         this->currentLineCharIndex += 1;
         this->currentChar = this->nextChar;
         this->nextChar = this->fileLine[this->currentLineCharIndex];
-        return true;
+        this->endOfFileReached = false;
+        return;
+    }
+    this->endOfFileReached = true;
+    return;
+}
+
+void Lexer::checkMatch(std::vector<std::string> keywordList) {
+    // Check for number-literal, string-literal, function/class/method/variable signatures.
+
+    std::string matchedKeyword = "";
+
+    // Check each word to see if the currentCharacter matches the current index of that word.
+    // If not, we exit that loop iteration and skip past the matched letters by checking with the
+    // current matchedKeyword's contents.
+    // Starting case is that the matchedKeyword buffer is empty, in which case we want to scan using the current character
+    // Otherwise, we want to exhaust all the characters in the matchedKeyword buffer and then continue scanning with the currentChar.
+
+    // TODO: Create the looping logic that implements the above ^^^^^
+    for (auto & word : keywordList) {
+        for (auto & letter : word) {
+            if (letter == this->currentChar) {
+
+            }
+        }
     }
 
-    return false;
+    // IF match is found, create a token for that type and append to this->scannedTokens;
+    // ELSE, create token of type identifier
 }
 
 // It'd be better to make a trie that contains all of the key-words in a large tree, so the "testConsume" function parses the list of words until it finds one
 void Lexer::lexLine() {
-    bool inString = false;
     std::string currentBuffer = "";
     // Check for longest match on each keyword and clear if match found.
-    // Otherwise, check for number-literal, string-literal, function/class/method/variable signatures.
-    // Lastly, could simply be an unsupported bit in the language, so throw an error.
-    switch (currentChar) {
-        case 'a':
-            
-            // int part1 = testConsume("array", i, fileLine);
-            // if (part1) {
-            //     // Parse part2:
-            //     int part2 = testConsume("<", part1, fileLine);
-            //     if (part2) {
-                    
-            //     }
-            //     // Create new token
-            //     this->scannedTokens.push_back(Token(*lineCounter, "array", TokenType.ARRAY));
-            //     // Clear buffer since match was found
-            // }
-            
-            break;
-        case 'b':
-        case 'c':
-        case 'd':
-        case 'e':
-        case 'f':
-        case 'i':
-        case 'l':
-        case 'm':
-        case 'n':
-        case 'o':
-        case 'p':
-        case 'r':
-        case 's':
-        case 'u':
-        case 'v':
-        case 'w':
-        case 'x':
-        case ' ':
-            // We consume all whitespace since it's not in a string if we haven't hit a single or double-quote
-            consumeChar();
-            break;
-        case '"':
-        case '\'':
-            // It's a character/string, so just read it all in until you hit another single-quote
-            while (this->currentChar != '\'') {
+    while (!this->endOfFileReached) {
+        switch (this->currentChar) {
+            case '+':
+            case '-':
+            case '*':
+            case '/':
+            case '^':
+            case '=':
+            case '>':
+            case '<':
+            case '|':
+            case '{':
+            case '[':
+            case '(':
+            case ',':
+            case '.':
+            case '%':
+            case ' ':
+                // We consume all whitespace since it's not in a string if we haven't hit a single or double-quote
+                consumeChar();
+                break;
+            case '"':
+                // Essentially consume all characters until the end of the string is encountered.
+                int startingStringLine = this->lineCounter;
+                while (this->currentChar != '"') {
+                    if (this->endOfFileReached) {
+                        std::cout << std::format("\nERROR: EOF reached without closure to string starting at line {}!!\n", startingStringLine);
+                    }
+                    currentBuffer += this->currentChar;
+                    consumeChar();
+                }
                 currentBuffer += this->currentChar;
                 consumeChar();
-            }
-        default:
-            break;
-        
+                break;
+            default:
+                std::vector<std::string> keywordList = {
+                    "and",
+                };
+                
+                checkMatch(keywordList);
+                break;
+        }
     }
 }

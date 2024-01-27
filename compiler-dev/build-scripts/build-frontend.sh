@@ -2,7 +2,6 @@
 
 FRONTEND_DIR="../frontend"
 BUILD_DIR="../builds"
-rm ${BUILD_DIR}/frontend-binary
 
-clang++ -stdlib=libc++ -std=c++17 ${FRONTEND_DIR}/*.cpp -o ${BUILD_DIR}/frontend-binary
+clang++-17 -stdlib=libc++ -std=c++20 ${FRONTEND_DIR}/*.cpp -o ${BUILD_DIR}/frontend-binary
 
