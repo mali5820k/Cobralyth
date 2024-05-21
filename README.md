@@ -12,6 +12,7 @@ A Compiled language that is inspired from C++ runtime performance and Python's s
 **An important note:** I may utilize Antlr4 for accelerating the progress of this project to get the first-gen compiler. Pratt Parsers, custom lexers and parsers are magnificent, but it's also subject to rigorous unit-testing to match a high-quality lexer/parser, in which case Antlr4 already hits that mark right from the get-go. What this also means is that the 'trie'-based lexer in the custom implementation prior to switching to Antlr will still be referrable to in a separate branch and simply may be reimplemented in Cobralyth itself for the second-gen compiler.
 
 ### Secondary Goals:
+- Deep Learning based optimization passes; ie auto-parallelization of serial code, dead-code removal, auto GPU kernel optimization for target hardware, and more as time allows.
 - GUI support
 - OpenCL and CUDA support
 - IoT devices such as running on a raspberry pi
