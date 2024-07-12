@@ -1,0 +1,13 @@
+/**
+ * Test program
+ */
+func main(): int {
+    let x : int32 = 10;
+    let y = 100;
+    const z = 100;
+
+    system.log(x);
+
+    /// Optional semi-colons:
+    system.log("This is a test Clyth program!")
+}

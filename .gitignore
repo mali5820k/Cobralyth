@@ -21,3 +21,4 @@
 go.work
 compiler-dev/builds/frontend-binary
 compiler-dev/frontend/test.bin
+compiler-dev/frontend/.vscode/settings.json
