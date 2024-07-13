@@ -1,10 +1,28 @@
 /**
  * Test program
+ * @returns: int32
  */
 func main(): int {
     let x : int32 = 10;
     let y = 100;
     const z = 100;
+    const i: float32 = 200.00f;
+    const j: double64 = 2000.00d; In C++, you'd not type the 'd' for auto to recognize it as a double type.
+
+    let sample_list: list<int32> = list<int32>[];
+    let sample_list2 = list<int32>[];
+    /// The "numeric" type is a class wrapper that encompasses the int8-128, uint8-128, float32-64(double), and byte.
+    /// Developers may create their own class wrapper for custom types and store multiple types of structures in their lists.
+    /// ie list<custom_type>[] or list<all>["string", 204, 20984.0f, 20984.0d, null];
+    let sample_generic_list = list<numeric>[];
+    let sample_map = map<numeric, string>[
+        1 : "something",
+        2 : "something else",
+        1000: "something elser",
+    ];
+    let sample_set = set<numeric>[
+        1, 2, 3, 4, 5, 10, 3000, 2000, 2000, 3000, 283494.0f, 999920348.0d
+    ];
 
     system.log(x);
 
