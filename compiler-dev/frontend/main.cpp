@@ -1,5 +1,5 @@
 #include "common.hpp"
-#include "cxxopts.hpp"
+#include "cxxopts/cxxopts.hpp"
 
 int main(int argc, char** argv) {
     
@@ -22,7 +22,7 @@ int main(int argc, char** argv) {
         
 
         if (result.count("help")) {
-            std::printf("%s\n", options.help().c_str());
+            std::println("{}\n", options.help().c_str());
         }
 
         // Debug-mode check:
@@ -41,23 +41,23 @@ int main(int argc, char** argv) {
 
         // Version flag check:
         if (result.count("version")) {
-            std::printf("%s\n", compiler_version.c_str());
+            std::println("{}\n", compiler_version);
         }
 
         // Get the main-file provided by the user:
         main_file = program_entrypoint;
     } catch(std::exception& e) {
-        std::printf("ERROR occurred: %s\nExiting compilation\n", e.what());
+        std::println("ERROR occurred: {}\nExiting compilation\n", e.what());
         return 1;
     }
 
     if (std::filesystem::exists(main_file)) {
         if (main_file.extension() != std::string(".clyth")) {
-            std::printf("ERROR: Ensure the main program file contains the '.clyth' file extension.\nExiting...");
+            std::println("ERROR: Ensure the main program file contains the '.clyth' file extension.\nExiting...");
             return 1;
         }
 
-        std::printf("Compiling %s\n", main_file.c_str());
+        std::println("Compiling {}\n", main_file.c_str());
     }
 
     return 0;

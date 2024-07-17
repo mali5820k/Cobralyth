@@ -1,4 +1,4 @@
-# Cobralyth, or potential name change to "PC" (Painless C)
+# Cobralyth, Clyth for short
 A Compiled language that is inspired from C++ runtime performance and Python's scripting properties, as well as various syntax inspirations from C#, JavaScript, Java, and Kotlin.
 
 ## Project Goals:
@@ -45,6 +45,23 @@ A Compiled language that is inspired from C++ runtime performance and Python's s
     }
     ```
 
+    Regular function call logic-flow for the above block looks like this:
+    ```mermaid
+    graph TD;
+      main-->val1;
+      val1-->main;
+      val1-->val2;
+      val2-->val1;
+    ```
+
+    Function hopping looks like this:
+    ```mermaid
+    graph TD;
+      main-->val1;
+      val1-->val2;
+      val2-->main;
+    ```
+    
 # Project Structure:
    The project is divided into three main parts:
   - Frontend:
