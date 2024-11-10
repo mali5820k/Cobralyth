@@ -1,5 +1,5 @@
 # Cobralyth, Clyth for short
-A Compiled language that is inspired from C++ runtime performance and Python's scripting properties, as well as various syntax inspirations from C#, JavaScript, Java, and Kotlin.
+A Compiled language that is inspired from C++ runtime performance and Python's scripting properties, as well as various syntax inspirations from C#, JavaScript, TypeScript, Java, and Kotlin.
 
 ## Project Goals:
 ### Primary Goals:

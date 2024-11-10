@@ -1,0 +1,11 @@
+let sample_list: list<int32> = list<int32>[];
+let sample_list2 = list<int32>[];
+let sample_generic_list = list<numeric>[];
+let sample_map = map<numeric, string>[
+    1 : "something",
+    2 : "something else",
+    1000: "something elser",
+];
+let sample_set = set<numeric>[
+    1, 2, 3, 4, 5, 10, 3000, 2000, 2000, 3000, 283494.0f, 999920348.0d
+];

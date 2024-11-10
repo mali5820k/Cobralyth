@@ -7,7 +7,7 @@ func main(): int {
     let y = 100;
     const z = 100;
     const i: float32 = 200.00f;
-    const j: double64 = 2000.00d; In C++, you'd not type the 'd' for auto to recognize it as a double type.
+    const j: float64 = 2000.00d; /// In C++, you'd not type the 'd' for auto to recognize it as a double type.
 
     let sample_list: list<int32> = list<int32>[];
     let sample_list2 = list<int32>[];
