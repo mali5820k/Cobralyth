@@ -18,6 +18,7 @@ A Compiled language that is inspired from C++ runtime performance and Python's s
 - Websockets and Webserver backend support
 - Package system
 - Cross platform compilation (either native or wasm)
+- Porting components to LLVM IR/MLIR for further optimizations (as applicable)
 - Function-leaping/hopping or Function-zipping (still trying to decide on a good name for this feature if it becomes a sensible/practical feature):
    - Where the function-control-flow can be altered by returning directly to the root-caller of a function-call-stack instead of linear return-flow from function to function. 
    - This is different from gotos since it's limiting the hop to the root-caller and not freely allowing jumps to any other block of code.
@@ -74,7 +75,7 @@ A Compiled language that is inspired from C++ runtime performance and Python's s
     - Debug module for debugger 
   - Runtime module(s):
     - Files that provide a C++ API exposing the language's runtime functionality (Not a VM or Interpreter)
-    - Aim is to allow for swapping of runtime modules for testing different runtimes.
+    - Aim is to allow for swapping of runtime modules for testing different runtimes and features.
 ## Runtime Specification:
 - Pass-by-reference and Pass-by-value handling:
    - Pass-by-reference is used by prefixing a variable with an "&", pass-by-value is used otherwise.
@@ -118,7 +119,7 @@ A Compiled language that is inspired from C++ runtime performance and Python's s
      };
      ```
 - Memory Management Module (Included as a Runtime Module for modularity):
-   - Scope-based Inheritance Borrow Checker Reference Table Scheme (SIBCRT):
+    - Option 1 `No longer considered for implmentation`: Scope-based Inheritance Borrow Checker Reference Table Scheme (SIBCRT)
       - Each scope will maintain its own SIBCRT which tracks strong and weak references amongst objects to prevent cyclic references from occurring in mark-and-sweep-like garbage-collected languages, theoretically reducing garbage collection overhead if done in a minimal fashion.
       - Strong references can be made by any object to another, as long as the object storing the reference doesn't already have the object it's referring to stored as a strong reference in one of its parents. IE objA objB and objC exist, objA stores a strong reference to objC, objC stores a strong reference to objB, but objB can't store a strong reference to objA nor objC if it needs to, therefore objB will resort to weak-references to both objA and objC to prevent a cycle of references from occurring.
       - SIBCRT lookups will be performed whenever a reference is assigned by an object to another on invocation of the "=" operator. The SIBCRT for that scope will be referenced and the parents of the object being pointed to will be checked for existing strong references before assigning the type of reference to use.
@@ -126,9 +127,31 @@ A Compiled language that is inspired from C++ runtime performance and Python's s
       - When exiting a scope, the SIBCRT will:
          - upgrade all weak-references of an object that is being returned to strong-references before returning from the scope.
          - transfer the "owner" of the object being returned to the parent-scope's SIBCRT
-   - Async Atomic Tracing Garbage Collector:
-      - Garbage Collector will run atomically and asynchronously to the main program, preventing GC overhead induced from common stop-the-world collectors at runtime.
-      - Will only be invoked whenever a strong-reference goes out of scope or an owner of an object from the queue of owners is freed or no longer maintains the strong reference it had on its referenced object.
+      - Async Atomic Tracing Garbage Collector Component
+        - Garbage Collector will run atomically and asynchronously to the main program, preventing GC overhead induced from common stop-the-world collectors at runtime.
+        - Will only be invoked whenever a strong-reference goes out of scope or an owner of an object from the queue of owners is freed or no longer maintains the strong reference it had on its referenced object.
+    - Option 2 (`Prioritized and Preferred implementation`): EC Architecture (Entanglement Component(s))
+      - EC Architecture consists of EC entities and EC sockets. Inspired by exploration of Websockets and Smart-Pointers. The entire purpose of this architecture is to have a lean garbage collector that mimicks manual memory management but is automated via a borrow-checker-like 'entanglement' system. Entanglement can be best described as a subscription of components (known as EC entities) and sockets (known as EC sockets) that manage them. This allows for a runtime-oriented implementation that allows for greater flexibility than a typical reference-counting or ahead of time (AOT) borrow-checker implementation, all while stripping the usual Garbage-Collection 'helper' cycles to determine cyclic refrences,
+        - EC Entities:
+          - Wrappers around data or objects that 
+        - EC Sockets:
+          - Maintain references to EC entities where ownership of entities is managed through transfer operations.
+          - Difference between smart-pointers in C++ and EC sockets is this: EC sockets manage transfer operations for reference passing, copying of pointers or objects, being thread-safe (atomic), and NOT relying on reference counting while allowing for a flexible borrow-checker-like Garbage collection scheme at runtime.
+          - EC sockets manage memory/garbage collection of the EC entities they have ownership over. As the name implies, each EC socket is allowed to manage an EC entity if the EC socket has ownership over that particular This action of entities being managed by sockets is called 'entanglement', which is what makes the 'Entanglement-Component' acronym in the EC Architecture. As a result of a single-owner, sockets have method that can be invoked to perform various null-safe or non-null-safe operations for transferring reference-ownership, non-ownership-references, copy of entity that's currently entangled. This greatly simplifies memory management to where GC tracing for cyclic cycles is no longer a concern and memory deallocations can occur asynchronously in a 'chain-like' effect, similar to how manual memory-management in C and C++ languages is conducted but more-inline with C++ destructors being automatically called.
+        - Transfer operations:
+          - transfer: Transfer of ownership over to another EC socket, performing null-safety-checks to ensure the EC entity object itself isn't null.
+          - ftransfer: Fast-transfer of ownership over to another EC Socket, not performing any null-safety-checks.
+          - ctransfer: Copy-transfer, which copies the original object's memory and transfers ownership of that copied entity to the new EC socket.
+        - Detail Specification:
+          - This requires a EC-centric standard library implementation that covers all primitives of the language to allow the EC system to have first-class support. An additional standard library implementation for non-EC primitives will be made for the sake of advanced systems programming for those who require it, especially in embedded system environments/platforms. These standard libraries will contain mostly primitives and datastructures that are the building-blocks to creating seemless objects and constructs with for developers. In the case of the EC-standard library, its main focus is to provide EC-friendly datastructures, primitives, and types, allowing developers to not concern themselves with managing the memory, instead focusing on the implementation details of their programs with the expectation of automated memory management.
+            - Standard library variants would allow each library variant a unique modularity that allows any type of GC to be supported. The intended design is for each standard library type to be namespaced under the ```stdlib.{variant name}``` nomenclature for separation of concerns.
+            - Cross-compatibility between EC and non-EC components will be managed through a 'wrapper' class that any non-EC component can be wrapped into to allow cross-compatibility.
+            - Datastructures for the EC-centric standard library will primarily consist of EC sockets, and optimized with integration for EC entities.
+              - Developers can specify if the specific datastructure or EC socket being assigned an EC entity is receiving direct ownership or a reference. All references are considered weak-references unless an ownership transfer is used for that particular reference EC entity that contains that pointer value.
+              - Nested EC sockets are possible, which will allow for multi-dimensional data-structures like 3D+ arrays/lists.
+    - Option 3: Tracing garbage collector:
+      - Not a high-priority to implement since most languages have or have had some form of this type of garbage collector. This collector type can be implemented at a later date, but implementing this design for the main language would introduce cycles and memory overhead that generally slows performance down considerably and introduces challenges to parallelize across multiple threads.
+
 - Concurrency:
    -  Threads are synonymous to Jobs. Jobs abstract away the complexity of managing threads and allow for programming logic in a single-threaded fashion, allowing the language's runtime to do the heavy-lifting of managing atomic accesses and thread scheduling.
    -  Threads will be utilized to implement the underlying behavior of Jobs for scheduling them on multiple CPU cores.
@@ -189,3 +212,8 @@ As the language develops a more concrete documentation of the desired runtime wi
 - Other informative update(s) notes:
    - I had to delete the old repository for the sake of cleaning up the entire project. This is now the latest project with the files carrying over from the previous repo version that was deleted. The license was originally from 2022, so that was the only adjustment I made in this repo's license to revert it back to 2022 from 2023.
    -  Lastly, the Go-approach that I started is archived as a deprecated branch if anyone is interested in taking a look at it.
+
+# Acknowledgements:
+  - The design and implementation of the language, SIBCRT, and the EC architecture are fully my own, developed independently and adhering to FOSS principles. Conversations with ChatGPT served as a valuable sounding board, helping to explore, clarify, and polish concepts and potential approaches to implementation without directly shaping the underlying design.
+  - With that said, I am thankful for ChatGPT and feel it was an invaluable experience to bounce ideas off of and discuss many aspects of compiler and programming language design with, essentially like a research partner who helped me learn how to discover what design and planning a complex compiler project looks like and ultimately motivated me to create a project that is my own work.
+  As a matter of fact, the first bullet-point of this acknowledgements section was generated by ChatGPT itself. And to further clarify, there is no AI generated code used in this project as it is my own original work and original concepts, ideas, and documentation, and the first paragraph in this Acknoledgements section is the only one generated by ChatGPT so I could say more in a concise fashion.
