@@ -25,3 +25,9 @@ compiler-dev/frontend/.vscode/settings.json
 .vscode/settings.json
 compiler-dev/frontend/clythcpp
 compiler-dev/frontend/clythcpp
+.DS_Store
+*.atn
+*.interp
+*.tokens
+/compiler-dev/frontend/clyth_generated_parser/.antlr
+compiler-dev/frontend/clythcpp
