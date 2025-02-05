@@ -1,0 +1,39 @@
+#**
+ * Test program
+ * @returns: i32 the return code
+ *#
+func main() i32 {
+    let x1 = "somestring \n\n\tisverywacky \'\" string continues"
+    let x = 10 # Default type is int64
+    let x2 = 0i32 # If you don't have a value but want to give it a type.
+    let y = &x # Pointers are automatically 64-bits unless type-overrided
+    let y2 = *i32 # This is the type-overrided pointer by default pointing to null
+    const z = 100.00 # Automatically float64
+    const i = 200.00f32
+
+    let sample_list = i32[] # Automatically allocated on the stack
+    let sample_list = i64[..200] # Fixed-size list of 200 zeroed i64 elements
+    let sample_list = new i32[] # Initialized list onto heap
+    let sample_list2 = i32[]
+
+    let sample_string = "Some string"
+    let sample_string = string # This is just a formality, normally will be instantiated to an empty string if used like this.
+    
+    # The "numeric" type is a class wrapper that encompasses the int8-128, uint8-128, float32-64(double), and byte.
+    # Developers may create their own class wrapper for custom types and store multiple types of structures in their lists.
+    # ie custom_type[] or all["string", 204, 20984.0f32, 20984.0f64, null]
+    let sample_generic_list = numeric[]
+    
+    let sample_map = mapof numeric:string [
+        1000: "something else",
+    ]
+
+    let sample_set = numeric[
+        1, 2, 3, 4, 5, 10, 3000, 2000, 2000, 3000, 283494.0f32, 999920348.0f64
+    ]
+
+    # Optional semi-colons:
+    system.print("This is a revised test Clyth program!");
+    system.print(`Test formatted string {x}`)
+    return 0
+}

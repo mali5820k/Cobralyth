@@ -1,0 +1,12 @@
+
+# A sample function declaration
+# return type declarations are optional
+func test_function() i64 {
+    # Test scope
+    let x = 10
+    return x
+}
+
+func test_function2(i32 value, f32 value2) i64 {
+    return value + value2
+}

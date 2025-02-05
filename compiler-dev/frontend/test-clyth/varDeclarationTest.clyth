@@ -1,19 +1,21 @@
-let x : int32 = 10;
-let x: int64 = 10;
-let x = 10;
-const x = 10;
-const x : int32 = 10;
-const x: int64 = 10;
+# As a note, all default variable types are 64-bits unless type-overridden.
+# The same applies to pointers, all are 64-bit pointers unless the element being pointed to is not 64-bit.
+# ie: 10i32 is 32-bit integer vs 10 which is 64-bit integer
+#     const ptr = *i8 is 8-bit pointer to an 8-bit integer vs let x = 10; const ptr = &x where ptr is a 64-bit pointer to 64-bit integer variable x
+
+let x = 10i32;
+let x1 = 10;
+let x2 = 10i64;
+const x3 = 10;
+const x4 = 10i32;
+const x5 = 10i64;
 
 let y = 100;
-const y;
-let y;
+const y2 = &y;
+let y3 = &y2;
+const y4 = *i64
 
-const i: float32 = 200.00f;
-const j: float64 = 200.00d;
-const j: float32;
-const k: float64;
-
-function test_function () {
-    return 0;
-}
+const i = 200.00f32;
+const j = 200.00;
+const j = f32;
+const k = f64;

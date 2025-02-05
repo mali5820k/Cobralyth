@@ -31,7 +31,7 @@ A Compiled language that is inspired from C++ runtime performance and Python's s
       fmt.Printf("%f", myVal) // This should print out 100
     }
     
-    func val1(int a, int b) int {
+    func val1(a int, b int) int {
       if (a > 5) {
         return 0;
       }
@@ -39,7 +39,7 @@ A Compiled language that is inspired from C++ runtime performance and Python's s
       return val2(a, b);
     }
     
-    func val2(int a, int b) float32 {
+    func val2(a int, b int) float32 {
       if (a == 2) {
         return (math.pow(a, b)* 0.75)
       }

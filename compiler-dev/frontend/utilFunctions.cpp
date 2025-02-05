@@ -1,20 +1,40 @@
 #include "common.hpp"
 
+/**
+ * Returns true or false if file path exists.
+ * @param file_name path containing name of file
+ * @returns bool
+ */
 bool file_exists(std::string file_name) {
     std::filesystem::path file_path(file_name);
     return std::filesystem::exists(file_path);
 }
 
+/**
+ * Reads all lines from withing a given file's name if it exists.
+ * @param file_name path containing name of file
+ * @returns std::vector<std::string> with scanned lines or an empty vector if invalid.
+ */
 std::vector<std::string> read_lines(std::string file_name) {
+    std::vector<std::string> scanned_lines;
     if (!file_exists(file_name)) {
         std::println("\nERROR: File path {} does NOT exist\n", file_name);
-        std::exit(-1);
+        return scanned_lines;
     }
     std::ifstream file(file_name);
-    std::vector<std::string> scanned_lines;
+    std::string current_line;
+    while (std::getline(file, current_line)) {
+        scanned_lines.push_back(current_line);
+    }
     return scanned_lines;
 }
 
+/**
+ * Splits a given string via delimitter.
+ * @param input_string The string to split via delimitter
+ * @param delimitter The delimitter string pattern to split by
+ * @return std::vector<std::string> vectors of strings
+ */
 std::vector<std::string> split(std::string input_string, std::string delimitter) {
     bool search_exhausted = false;
     std::vector<std::string> split_vector;

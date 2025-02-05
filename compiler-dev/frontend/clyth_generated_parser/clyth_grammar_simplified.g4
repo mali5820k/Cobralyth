@@ -1,13 +1,12 @@
-grammar clyth_grammar;
+grammar clyth_grammar_simplified;
 
 // Parser Section:
 program: expression* | EOF
         ;
-expression: var_declaration
+expression: importStatement
+            | varDeclaration
             | functionDeclaration
             | objectDeclaration
-            | functionCall
-            | methodCall
             | collectionInstantiation
             | objectInstantiation
             | returnStatement
@@ -37,33 +36,46 @@ binaryExpression: subExpression AND subExpression
                 | subExpression '//' subExpression
                 ;
 
-subExpression: functionCall | BOOLEAN_TYPES | IDENTIFIER | LITERAL;
+subExpression: functionCall
+             | BOOLEAN_TYPES
+             | IDENTIFIER
+             | LITERAL
+             ;
 
-variable_assignment: IDENTIFIER '=' expression;
-variable_ftransfer: IDENTIFIER '=' expression'.ftransfer';
-variable_transfer: IDENTIFIER '=' expression'.transfer';
-variable_copy: IDENTIFIER '=' expression'.copy';
+importStatement: 'import' STRING_LITERAL;
 
-var_declaration: VAR_DECLARATION_KEYWORDS IDENTIFIER '=' (LITERAL | LITERAL NUMERIC_TYPES| expression) ';'?
-                | VAR_DECLARATION_KEYWORDS IDENTIFIER '=' TYPE ';'?
-                | VAR_DECLARATION_KEYWORDS IDENTIFIER '=' '*'TYPE ';'?
-                | VAR_DECLARATION_KEYWORDS IDENTIFIER '=' '&'(IDENTIFIER) ';'?
+variableAssignment: IDENTIFIER '=' expression;
+variableFTransfer: IDENTIFIER '=' expression'.ftransfer';
+variableTransfer: IDENTIFIER '=' expression'.transfer';
+variableCopy: IDENTIFIER '=' expression'.copy';
+
+varDeclaration:  VAR_DECLARATION_KEYWORDS IDENTIFIER '=' 'new'? (LITERAL | LITERAL NUMERIC_TYPES| expression) ';'?
+                | VAR_DECLARATION_KEYWORDS IDENTIFIER '=' 'new'? TYPE ';'?
+                | VAR_DECLARATION_KEYWORDS IDENTIFIER '=' 'new'? objectInstantiation
+                | VAR_DECLARATION_KEYWORDS IDENTIFIER '=' 'new'? '*'TYPE ';'?
+                | VAR_DECLARATION_KEYWORDS IDENTIFIER '=' 'new'? '&'(IDENTIFIER) ';'?
                 ;
 
 functionDeclaration: FUNC_KEYWORD IDENTIFIER '(' ((TYPE IDENTIFIER ','?)*?) ')' TYPE '{' expression*? '}';
-functionCall: IDENTIFIER '(' (IDENTIFIER+) ')';
-methodCall: IDENTIFIER '.' IDENTIFIER '(' (IDENTIFIER+) ')';
+functionCall: IDENTIFIER '(' (IDENTIFIER | LITERAL)*? ')';
+methodCall: IDENTIFIER '.' functionCall;
 objectDeclaration: OBJ_DECLARATION_KEYWORDS IDENTIFIER '(' (IDENTIFIER+) ')';
 collectionInstantiation: listInstantiation
                         | mapInstantiation
                         | setInstantiation
                         ;
-listInstantiation: TYPE '[' ((LITERAL | IDENTIFIER | objectDeclaration | functionCall)','?)*? ']';
+listInstantiation: TYPE '[' ((LITERAL | IDENTIFIER | objectDeclaration | functionCall)','?)*? ']'
+                 | TYPE '[' ((NUMERIC_LITERAL | IDENTIFIER | functionCall)*?'..'(NUMERIC_LITERAL | IDENTIFIER | functionCall)) ']'
+                 ;
 mapInstantiation: 'mapof' TYPE ':' TYPE '[' ((LITERAL | IDENTIFIER | objectDeclaration | functionCall )':'(LITERAL | IDENTIFIER | objectDeclaration | functionCall )','?)*? ']';
 setInstantiation: 'setof' TYPE '[' ((LITERAL | IDENTIFIER | objectDeclaration | functionCall)','?)*? ']';
 
 objectInstantiation: TYPE|IDENTIFIER '(' (LITERAL ','? | IDENTIFIER ','?)*? ')';
 returnStatement : RETURN expression;
+
+listIndex: IDENTIFIER'['(NUMERIC_LITERAL | IDENTIFIER | functionCall)']';
+mapIndex: IDENTIFIER'['(LITERAL | IDENTIFIER | functionCall)']';
+setIndex: IDENTIFIER'['(LITERAL | IDENTIFIER | functionCall)']';
 
 // Lexer Section:
 SINGLE_LINE_COMMENT : '#' ~[\r\n]* -> skip;
@@ -78,10 +90,10 @@ OBJ_DECLARATION_KEYWORDS: 'class'
                         ;
 LITERAL: STRING_LITERAL | NUMERIC_LITERAL;
 
-NUMERIC_LITERAL:  [0-9]+
-                | [0-9]+NUMERIC_TYPES
-                | [0-9]+'.'[0-9]+NUMERIC_TYPES
+NUMERIC_LITERAL: [0-9]+NUMERIC_TYPES?
+                | [0-9]+'.'[0-9]+('f32' | 'f64')?
                 ;
+
 FORMATTED_STRING_LITERAL: '`' .*? '`';
 STRING_LITERAL: '"' .*? '"' | FORMATTED_STRING_LITERAL;
 
