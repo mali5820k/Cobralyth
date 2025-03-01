@@ -1,13 +1,37 @@
-let sample_list = i32[]
-let sample_generic_list = numeric[]
-let sample_map = mapof numeric:string [
+int32[] sample_list = i32[]
+
+numeric[] sample_generic_list;
+
+numeric:string sample_map = {
     1 : "something",
     2 : "something else",
     1000: "something elser",
-]
-let sample_set = setof numeric[
+}
+
+numeric[] sample_set = (
     1, 2, 3, 4, 5, 10, 3000, 2000, 2000, 3000
-]
-let sample_set = setof numeric[
-    1, 2, 3, 4, 5, 10, 3000, 2000, 2000, 3000, 283494.0f32, 999920348.0f64
-]
+)
+
+class MyClass from [ParentClass, SomeInterface]{
+    // all class members are private unless declared public or protected
+    auto name;
+    protected int64 data;
+    public MyClass(auto name) {
+        this.name = name;
+        this.data = name.length();
+    }
+
+    public interfaceMethod() {
+        print("Hello")
+    }
+}
+
+interface MyInterface {
+    public interfaceMethod();
+}
+
+struct MyStruct {
+    int64 value;
+    float64 value2;
+    auto value3;
+}

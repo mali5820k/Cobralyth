@@ -3,19 +3,40 @@
 # ie: 10i32 is 32-bit integer vs 10 which is 64-bit integer
 #     const ptr = *i8 is 8-bit pointer to an 8-bit integer vs let x = 10; const ptr = &x where ptr is a 64-bit pointer to 64-bit integer variable x
 
-let x = 10i32;
-let x1 = 10;
-let x2 = 10i64;
-const x3 = 10;
-const x4 = 10i32;
-const x5 = 10i64;
+
+int8 a = 0;
+int16 b = 1;
+int32 c = 10;
+int64 d = 100;
+int e = 1000; // defaults to int64
+uint8 f = 200;
+uint16 g = 10020;
+uint32 h = 9090;
+uint64 i = 90809809;
+
+float32 l = 10;
+float64 m = 100;
+float o = 10890;
+double p = 50;
+
+string myString = "";
+string someString; // same as ""
+char aChar = ""; // can be single or double quotes;
+char anotherChar = '';
+
+auto x = 10i32;
+auto x1 = 10;
+auto x2 = 10i64;
+const auto x3 = 10;
+const auto x4 = 10i32;
+const auto x5 = 10i64;
 
 let y = 100;
-const y2 = &y;
-let y3 = &y2;
-const y4 = *i64
+const ref<auto> y2 = &y;
+ref<auto> y3 = &y2;
+const ref<auto> y4;
 
-const i = 200.00f32;
-const j = 200.00;
-const j = f32;
-const k = f64;
+const auto i = 200.00f32;
+const auto j = 200.00;
+const float j;
+const double k;
