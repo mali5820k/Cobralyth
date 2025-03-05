@@ -31,3 +31,4 @@ compiler-dev/frontend/clythcpp
 *.tokens
 /compiler-dev/frontend/clyth_generated_parser/.antlr
 compiler-dev/frontend/clythcpp
+compiler-dev/frontend/clythcpp
