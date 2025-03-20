@@ -9,5 +9,6 @@
 #include <print>
 #include <cstdlib>
 #include <map>
+#include <stdexcept>
 #include "utilFunctions.hpp"
 #endif
