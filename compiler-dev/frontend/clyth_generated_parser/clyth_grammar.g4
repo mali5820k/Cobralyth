@@ -27,15 +27,17 @@ binary_statements: sub_expression '*' sub_expression
                  | IDENTIFIER '+=' sub_expression
                  | IDENTIFIER '-=' sub_expression
                  ;
-var_declaration: var_declaration_keywords IDENTIFIER ('=' (LITERAL | IDENTIFIER | obj_instantiation))? ';'?;
-ref_declaration: 'ref' (IDENTIFIER | VARIABLE_TYPES)'>' IDENTIFIER ('=' '&'IDENTIFIER)? ';'?;
+var_declaration: VAR_DECLARATION_KEYWORDS IDENTIFIER ('=' (LITERAL | IDENTIFIER | obj_instantiation))? ';'?;
+ref_declaration: 'ref' '<'(IDENTIFIER | VARIABLE_TYPES)'>' IDENTIFIER ('=' '&'IDENTIFIER)? ';'?;
 obj_declaration: 'struct' IDENTIFIER scope ';'?
                 | 'class' IDENTIFIER '['(class_inherited_list)']' scope;
 obj_instantiation: 'new'? IDENTIFIER'('(paramaters_list)?')';
-// function_declaration: (var_declaration_keywords | IDENTIFIER) IDENTIFIER '('function_parameters_list')' scope;
-function_declaration: (VARIABLE_TYPES | AUTO | IDENTIFIER) IDENTIFIER '('function_parameters_list*?')' scope;
+function_declaration: (VAR_DECLARATION_KEYWORDS | IDENTIFIER) IDENTIFIER '('function_parameters_list')' scope;
+// function_declaration: (var_declaration_keywords | IDENTIFIER) IDENTIFIER '('function_parameters_list*?')' scope;
 scope: '{' expression*? '}';
-var_declaration_keywords: CONST? (AUTO| VARIABLE_TYPES);
+VAR_DECLARATION_KEYWORDS: 'const'? 'auto'
+                        | 'const'? VARIABLE_TYPES
+                        ;
 paramaters_list: parameter parameter_tail*?;
 parameter: IDENTIFIER | LITERAL;
 parameter_tail: ',' parameter;
@@ -50,6 +52,20 @@ identifier_tail: ',' IDENTIFIER;
 SINGLE_LINE_COMMENT : '//' ~[\r\n]* -> skip;
 MULTI_LINE_COMMENT: '/*'.*? '*/' -> skip;
 
+OBJ_DECLARATION_KEYWORDS: 'class'
+                        | 'struct'
+                        ;
+
+
+
+LITERAL: STRING_LITERAL | NUMERIC_LITERAL;
+
+NUMERIC_LITERAL: [0-9]+POSTFIX_LITERAL_TYPE?
+                | [0-9]+'.'[0-9]+POSTFIX_LITERAL_TYPE?
+                ;
+FORMATTED_STRING_LITERAL: '`' .*? '`';
+STRING_LITERAL: '"' .*? '"' | FORMATTED_STRING_LITERAL;
+
 TYPE: VARIABLE_TYPES | GENERIC_TYPES;
 
 GENERIC_TYPES: 'numeric'
@@ -57,9 +73,6 @@ GENERIC_TYPES: 'numeric'
              | 'object'
              | 'primitive'
              ;
-CONST: 'const';
-AUTO: 'auto';
-REF: 'ref';
 
 VARIABLE_TYPES : 'uint8'
                | 'uint16'
@@ -79,7 +92,6 @@ VARIABLE_TYPES : 'uint8'
                | 'char'
                | 'bool'
                | 'void'
-               | IDENTIFIER
                ;
 
 POSTFIX_LITERAL_TYPE  : 'i8'
@@ -94,29 +106,7 @@ POSTFIX_LITERAL_TYPE  : 'i8'
                       | 'f64'
                       ;
 
-BOOLEAN_VALUE : 'true' | 'false';
-OBJ_DECLARATION_KEYWORDS: 'class'
-                        | 'struct'
-                        ;
-
-
-
-LITERAL: STRING_LITERAL | NUMERIC_LITERAL;
-
-NUMERIC_LITERAL: [0-9]+POSTFIX_LITERAL_TYPE?
-                | [0-9]+'.'[0-9]+POSTFIX_LITERAL_TYPE?
-                ;
-FORMATTED_STRING_LITERAL: '`' .*? '`';
-STRING_LITERAL: '"' .*? '"' | FORMATTED_STRING_LITERAL;
-
-// Comparison operators:
-LESS_THAN: '<';
-LESS_THAN_EQUAL: '<=';
-GREATER_THAN: '>';
-GREATER_THAN_EQUAL: '>=';
-EQUAL_EQUAL: '==';
-NOT_EQUAL: '!=';
-EQUAL: '=';
+BOOLEAN_TYPES : 'true' | 'false';
 
 NOT : '!'
     | 'not';
@@ -134,6 +124,6 @@ BIT_AND : '&';
 BIT_NAND : '~&';
 RETURN : 'return';
 
-IDENTIFIER: [a-zA-Z_]+[a-zA-Z_0-9]*?;
+IDENTIFIER: [a-zA-Z_]+[a-zA-Z_0-9]?;
 
 WS: [ \r\n\t]+ -> skip;
