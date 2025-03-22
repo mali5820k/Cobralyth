@@ -1,7 +1,7 @@
 #include "common.hpp"
 #include "cxxopts/cxxopts.hpp"
 #include "scanner.hpp"
-//#include "lexer.hpp"
+#include "lexer.hpp"
 //#include "parser.hpp"
 
 int main(int argc, char** argv) {
@@ -53,7 +53,7 @@ int main(int argc, char** argv) {
         }
 
         if (!flag_provided) {
-            throw std::invalid_argument("Invalid program arguments, please run with -h flag for sample usage.");
+            throw std::runtime_error("Invalid program arguments, please run with -h flag for sample usage.");
         }
 
         // Get the main-file provided by the user:
@@ -70,12 +70,11 @@ int main(int argc, char** argv) {
         }
 
         std::println("Compiling {}\n", main_file.c_str());
-        Scanner file_scanner = Scanner();
-        file_scanner.readFile(main_file);
         
-        for (auto &line : file_scanner.getContents()) {
-            std::println("{}", line.c_str());
-        }
+
+        // Now to lex this result:
+        Lexer lexer = Lexer();
+        lexer.lexFile((std::string)main_file);
     }
 
     return 0;

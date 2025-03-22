@@ -10,5 +10,6 @@
 #include <cstdlib>
 #include <map>
 #include <stdexcept>
+#include <memory>
 #include "utilFunctions.hpp"
 #endif
