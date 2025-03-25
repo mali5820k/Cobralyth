@@ -1,5 +1,6 @@
 #include "lexer.hpp"
 
+// Lexer Class methods:
 Lexer::Lexer() {}
 Lexer::~Lexer() {}
 
@@ -43,3 +44,29 @@ std::string Lexer::toString() {
     return token_string;
 }
 
+// LexerTreeNode Class methods:
+LexerTreeNode::LexerTreeNode() {}
+
+LexerTreeNode::~LexerTreeNode() {}
+
+bool LexerTreeNode::hasNeighbor(std::string target_letter) {
+    return true;
+}
+
+LexerTreeNode* LexerTreeNode::getNext(std::string target_letter) {
+    return NULL; // Null pointer for now
+}
+
+std::string LexerTreeNode::toString() {
+    return std::string("Sample string");
+}
+
+// LexerTreeHead
+LexerTreeHead::LexerTreeHead() {}
+LexerTreeHead::~LexerTreeHead() {}
+bool LexerTreeHead::hasNeighbor(std::string target_letter) {
+    return true;
+}
+bool LexerTreeHead::insertLexerTreeNode(LexerTreeNode new_node_entry) {
+    return true;
+}

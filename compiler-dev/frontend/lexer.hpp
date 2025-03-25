@@ -5,18 +5,22 @@
 // Tree/Trie - same purpose of branching keywords.
 class LexerTreeNode {
 public:
-    std::string current_letter;
-    std::map<std::string, LexerTreeNode> neighbors;
     LexerTreeNode();
     ~LexerTreeNode();
+    std::string current_letter;
+    std::map<std::string, LexerTreeNode> neighbors;
     std::unique_ptr<LexerTreeNode> createNewNode(std::string character);
     bool hasNeighbor(std::string target_letter);
     LexerTreeNode* getNext(std::string target_letter);
     
     std::string toString();
+private:
 };
+
 class LexerTreeHead {
 public:
+    LexerTreeHead();
+    ~LexerTreeHead();
     bool hasNeighbor(std::string target_letter);
     std::unique_ptr<LexerTreeNode> getNext(std::string target_letter);
     bool insertLexerTreeNode(LexerTreeNode new_node_entry);
