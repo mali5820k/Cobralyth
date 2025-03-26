@@ -14,8 +14,6 @@ bool Lexer::lexFile(std::string file_name) {
         return false;
     }
 
-    // Execute this separately;
-    // this->lexImportedFiles();
     return true;
 }
 

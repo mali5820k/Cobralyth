@@ -74,7 +74,8 @@ int main(int argc, char** argv) {
 
         // Now to lex this result:
         Lexer lexer = Lexer();
-        lexer.lexFile((std::string)main_file);
+        lexer.lexFile(main_file.c_str());
+        std::println("Current Lexer's contents: {}",lexer.toString());
     }
 
     return 0;

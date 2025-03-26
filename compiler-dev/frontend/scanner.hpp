@@ -4,7 +4,6 @@
 
 // Utility class for reading files for tokenization:
 class Scanner {
-
 public:
     Scanner();
     ~Scanner();

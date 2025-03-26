@@ -1,4 +1,5 @@
-#include<vector>
+#include <vector>
+#include <string>
 #include "token.hpp"
 #include "scanner.hpp"
 
@@ -42,9 +43,9 @@ private:
     std::vector<Token> lexImportedFile(std::string file_name); // Threadable;
 
     std::vector<Token> tokens_list;
-    std::unique_ptr<LexerTreeNode> keywords_tree;
-    std::unique_ptr<LexerTreeNode> symbols_tree;
-    std::unique_ptr<Scanner> file_scanner;
+    std::unique_ptr<LexerTreeNode> keywords_tree = std::make_unique<LexerTreeNode>();
+    std::unique_ptr<LexerTreeNode> symbols_tree = std::make_unique<LexerTreeNode>();
+    std::unique_ptr<Scanner> file_scanner = std::make_unique<Scanner>();
     std::map<std::string, bool> import_files_tracker;
     std::vector<std::string> lexer_error_string;
 };
