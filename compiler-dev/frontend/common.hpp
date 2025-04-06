@@ -12,4 +12,5 @@
 #include <stdexcept>
 #include <memory>
 #include "utilFunctions.hpp"
+#include "simdjson/simdjson.h"
 #endif

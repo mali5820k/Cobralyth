@@ -5,7 +5,6 @@
 //#include "parser.hpp"
 
 int main(int argc, char** argv) {
-    
     // Metadata and generate commandline flags:
     std::string compiler_version("Cobralyth Compiler CPP: Version 1.0.0");
     cxxopts::Options options("clythcpp", compiler_version.c_str());
@@ -71,7 +70,6 @@ int main(int argc, char** argv) {
 
         std::println("Compiling {}\n", main_file.c_str());
         
-
         // Now to lex this result:
         Lexer lexer = Lexer();
         lexer.lexFile(main_file.c_str());
