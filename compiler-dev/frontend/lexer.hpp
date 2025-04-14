@@ -15,8 +15,11 @@ public:
     bool addSymbols();
 
 private:
-    std::vector<Token> lexImportedFiles();
-    std::vector<Token> lexImportedFile(std::string file_name); // Threadable;
+    void lexString();
+    void lexNumeric();
+    void lexVariable();
+    void lexExpression();
+    void lexStatement();
 
     std::vector<Token> tokens_list;
     std::map<std::string, TokenType> keywords_lookup_map;

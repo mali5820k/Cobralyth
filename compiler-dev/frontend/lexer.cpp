@@ -23,39 +23,41 @@ bool Lexer::lexFile(std::string file_name) {
 bool Lexer::lexInput(std::vector<std::string> file_contents) {
     std::string current_input_string = "";
     bool in_string = false;
-    int j = 0;
 
-    Token last_valid_token = Token(current_input_string, NULL_);
-    for (int i = 0; i < file_contents.size(); i++) {
-        // Strings:
-        std::vector<std::string> current_line; // todo: split current line by white-spaces if not enclosed by string quotes.
-        if (file_contents[i][j] == char("\"") || file_contents[i][j] == char("'") && !in_string) {
-            std::string quotes_type = "\"";
-            quotes_type = file_contents[i][j];
-            in_string = true;
-            // Consume string until next double-quotes in current line - ignoring escape characters;
-            while (j + 1 < file_contents.size()) {
-                if (!(file_contents[i][j+1] == char("\"") && file_contents[i][j] != char("\\"))) {
-                    current_input_string += file_contents[i][j];
-                    j++;
-                    continue;
-                } else {
-                    break;
-                }
-            }
-            current_input_string += file_contents[i];
-            this->tokens_list.push_back(Token(current_input_string, STRING));
-            in_string = false;
-            current_input_string = "";
-        } else if (this->keywords_lookup_map.find(current_input_string) != this->keywords_lookup_map.end()) {
-            last_valid_token = Token(current_input_string, this->keywords_lookup_map[current_input_string.c_str()]);
-        } else if (this->symbols_lookup_map.find(current_input_string) != this->symbols_lookup_map.end()) {
-            last_valid_token = Token(current_input_string, this->keywords_lookup_map[current_input_string.c_str()]);
-        } else {
+    for (int i, j = 0; i < file_contents.size(); i++) {
+        char currentChar = file_contents[i][j];
+        switch () {
 
         }
     }
+
     return true;
+}
+
+void Lexer::lexString() {
+
+}
+
+TokenType getTokenType(std::string input_string) {
+    if (input_string.length() < 0) {
+        return UNDEFINED;
+    }
+    // This is a numeric type;
+    if (std::isdigit(input_string[0])) {
+        
+    }
+    for (int i = 0; i < input_string.length(); i++) {
+        if (std::isdigit[i]) {
+
+        }
+    }
+    if (std::isalpha(input_string.c_str()) && !std::isdigit(input_string[0])) {
+
+    } else if (std::isalnum(input_string) && !std::isdigit(input_string[0])) {
+        // this is an identifier;
+    }
+
+    return IDENTIFIER;
 }
 
 bool Lexer::addKeywords() {
