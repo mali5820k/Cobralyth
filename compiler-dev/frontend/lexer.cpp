@@ -1,4 +1,5 @@
 #include "lexer.hpp"
+#include "trie.hpp"
 
 // Lexer Class methods:
 Lexer::Lexer() {
@@ -26,8 +27,21 @@ bool Lexer::lexInput(std::vector<std::string> file_contents) {
 
     for (int i, j = 0; i < file_contents.size(); i++) {
         char currentChar = file_contents[i][j];
-        switch () {
+        switch (currentChar) {
+            /**
+             * For strings, " and ' tokens:
+             */
+            case '"': {
 
+            }
+            case '\'': {
+
+            }
+
+            /**
+             * For numeric literals, ints and float types;
+             */
+            case 
         }
     }
 
