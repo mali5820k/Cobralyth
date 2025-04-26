@@ -4,7 +4,7 @@
 
 class TrieEntry {
 public:
-    TrieEntry();
+    TrieEntry(char character, TokenType token_type);
     ~TrieEntry();
     bool addNeighbor(char character, TrieEntry *neighbor_entry);
     std::vector<char> getNeighbors();

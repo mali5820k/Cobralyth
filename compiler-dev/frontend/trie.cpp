@@ -21,13 +21,31 @@ TrieHead::~TrieHead() {}
 
 bool TrieHead::createTrie(std::vector<std::string, TokenType> reserved_words) {
     for (const auto &[str, value] : reserved_words) {
+        if (!str[0]) {
+            return false;
+        }
+
         TrieEntry *last_entry;
-        for (int i = 0; i < str.length(); i++) {
-            last_entry = this->trie_structure.find(str[i]);
-            if (last_entry != this->trie_structure.end()) {
-                // Then get the next neighbor to search for str[i]
-                continue;
+        last_entry = this->trie_structure.find(str[0]);
+
+        if (last_entry == this->trie_structure.end()) {
+            // Then loop through the remainder of the string and
+            // create a new Trie Node;
+            this->trie_structure.emplace(str[0], TrieEntry(str[0], UNDEFINED));
+            last_entry = this->tri_structure.get(str[0]);
+            for (int i = 1; i < str.length(); i++) {
+                last_entry->neighbors_map.emplace(str[i], TokenEntry(str[i], UNDEFINED));
+                if (last_entry->getNeighbor(str[i] != last_entry->neibors_map.end())) {
+                    last_entry = last_entry->getNeighbor(str[i]);
+                }
             }
+            if (last_entry->token_type != value) {
+                last_entry->token_type = value;
+            }
+            return true;
+        }
+        for (int i = 0; i < str.length(); i++) {
+            
             TrieEntry *new_entry = new TrieEntry(str[i])
 
             if (i == str.length() -1) {
