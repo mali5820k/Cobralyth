@@ -1,7 +1,7 @@
-# As a note, all default variable types are 64-bits unless type-overridden.
-# The same applies to pointers, all are 64-bit pointers unless the element being pointed to is not 64-bit.
-# ie: 10i32 is 32-bit integer vs 10 which is 64-bit integer
-#     const ptr = *i8 is 8-bit pointer to an 8-bit integer vs let x = 10; const ptr = &x where ptr is a 64-bit pointer to 64-bit integer variable x
+// As a note, all default variable types are 64-bits unless type-overridden.
+// The same applies to pointers, all are 64-bit pointers unless the element being pointed to is not 64-bit.
+// ie: 10i32 is 32-bit integer vs 10 which is 64-bit integer
+//     const ptr = *i8 is 8-bit pointer to an 8-bit integer vs let x = 10; const ptr = &x where ptr is a 64-bit pointer to 64-bit integer variable x
 
 
 int8 a = 0;
@@ -31,7 +31,7 @@ const auto x3 = 10;
 const auto x4 = 10i32;
 const auto x5 = 10i64;
 
-let y = 100;
+auto y = 100;
 const ref<auto> y2 = &y;
 ref<auto> y3 = &y2;
 const ref<auto> y4;

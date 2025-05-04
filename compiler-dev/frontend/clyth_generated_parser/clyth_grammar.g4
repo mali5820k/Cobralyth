@@ -4,53 +4,66 @@ grammar clyth_grammar;
 program : expression* | EOF
         ;
 expression : var_declaration
+           | function_declaration
            | ref_declaration
            | obj_declaration
-           | function_declaration
-        //    | function_call
+           | return_statement
+           | control_flow_statements
+           | function_call
         //    | class_method_call
-        //    | binary_statements
+           | binary_statements
            ;
 
-sub_expression : IDENTIFIER
-               | LITERAL
-            //    | function_call
-            //    | class_method_call
-               ;
+subexpression : function_call
+        //    | class_method_call
+           | IDENTIFIER
+           | LITERAL
+           ;
 
-binary_statements: sub_expression '*' sub_expression
-                 | sub_expression '/' sub_expression
-                 | sub_expression '+' sub_expression
-                 | sub_expression '-' sub_expression
-                 | IDENTIFIER '*=' sub_expression
-                 | IDENTIFIER '/=' sub_expression
-                 | IDENTIFIER '+=' sub_expression
-                 | IDENTIFIER '-=' sub_expression
+binary_statements: subexpression '*' (subexpression | binary_statements)
+                 | subexpression'/' (subexpression | binary_statements)
+                 | subexpression '+' (subexpression | binary_statements)
+                 | subexpression '-' (subexpression | binary_statements)
+                 | subexpression '*=' (subexpression | binary_statements)
+                 | subexpression '/=' (subexpression | binary_statements)
+                 | subexpression '+=' (subexpression | binary_statements)
+                 | subexpression '-=' (subexpression | binary_statements)
                  ;
-var_declaration: VAR_DECLARATION_KEYWORDS IDENTIFIER ('=' (LITERAL | IDENTIFIER | obj_instantiation))? ';'?;
-ref_declaration: 'ref' '<'(IDENTIFIER | VARIABLE_TYPES)'>' IDENTIFIER ('=' '&'IDENTIFIER)? ';'?;
+                 
+var_declaration:  'const'? (TYPE | IDENTIFIER) IDENTIFIER ('=' LITERAL | IDENTIFIER | obj_declaration)? ';'?;
+ref_declaration: 'const'? 'ref' '<'(TYPE | IDENTIFIER)'>' IDENTIFIER '=' '&'IDENTIFIER ';'?;
 obj_declaration: 'struct' IDENTIFIER scope ';'?
                 | 'class' IDENTIFIER '['(class_inherited_list)']' scope;
 obj_instantiation: 'new'? IDENTIFIER'('(paramaters_list)?')';
-function_declaration: (VAR_DECLARATION_KEYWORDS | IDENTIFIER) IDENTIFIER '('function_parameters_list')' scope;
-// function_declaration: (var_declaration_keywords | IDENTIFIER) IDENTIFIER '('function_parameters_list*?')' scope;
+function_declaration: 'async'? (TYPE | IDENTIFIER) IDENTIFIER'('function_parameters_list?')' scope;
+function_call: IDENTIFIER'('function_parameters_list?')' ';'?;
+return_statement: RETURN (expression*? | LITERAL | IDENTIFIER) ';'?;
+control_flow_statements: if_expression | else_expression;
+if_expression: 'if' '('expression | LITERAL | IDENTIFIER')' scope
+             | 'if' (expression | LITERAL | IDENTIFIER) scope;
+else_expression: 'else' scope # else_expression_only
+                | 'else' if_expression # else_if_expression
+                ;
 scope: '{' expression*? '}';
-VAR_DECLARATION_KEYWORDS: 'const'? 'auto'
-                        | 'const'? VARIABLE_TYPES
-                        ;
+
 paramaters_list: parameter parameter_tail*?;
 parameter: IDENTIFIER | LITERAL;
 parameter_tail: ',' parameter;
 
 function_parameters_list: function_parameter function_parameter_tail*?;
-function_parameter: (TYPE | VARIABLE_TYPES | IDENTIFIER) IDENTIFIER;
+function_parameter: 'const'? (TYPE | IDENTIFIER | expression) IDENTIFIER # nonref_parameter
+                  | 'const'? 'ref' '<'(TYPE | IDENTIFIER)'>' IDENTIFIER # ref_parameter
+                  ; 
 function_parameter_tail: ',' function_parameter;
 class_inherited_list: IDENTIFIER identifier_tail*?;
 identifier_tail: ',' IDENTIFIER;
 
 // Lexer Section:
+FUNC_MODIFIERS: 'async';
+
 SINGLE_LINE_COMMENT : '//' ~[\r\n]* -> skip;
 MULTI_LINE_COMMENT: '/*'.*? '*/' -> skip;
+INTERNAL_MACRO : '#' [\r\n]*;
 
 OBJ_DECLARATION_KEYWORDS: 'class'
                         | 'struct'
@@ -64,7 +77,9 @@ NUMERIC_LITERAL: [0-9]+POSTFIX_LITERAL_TYPE?
                 | [0-9]+'.'[0-9]+POSTFIX_LITERAL_TYPE?
                 ;
 FORMATTED_STRING_LITERAL: '`' .*? '`';
-STRING_LITERAL: '"' .*? '"' | FORMATTED_STRING_LITERAL;
+STRING_LITERAL: '"' .*? '"'
+              | '\'' .*? '\''
+              | FORMATTED_STRING_LITERAL;
 
 TYPE: VARIABLE_TYPES | GENERIC_TYPES;
 
@@ -92,6 +107,7 @@ VARIABLE_TYPES : 'uint8'
                | 'char'
                | 'bool'
                | 'void'
+               | 'auto'
                ;
 
 POSTFIX_LITERAL_TYPE  : 'i8'
