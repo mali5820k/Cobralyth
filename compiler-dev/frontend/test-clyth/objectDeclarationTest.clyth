@@ -1,4 +1,4 @@
-int32[] sample_list = i32[]
+int32[] sample_list = []
 
 numeric[] sample_generic_list;
 
@@ -19,15 +19,17 @@ class MyClass from [ParentClass, SomeInterface]{
     public MyClass(auto name) {
         this.name = name;
         this.data = name.length();
+        int x = 10;
+        x *= 200;
     }
 
-    public interfaceMethod() {
+    public void interfaceMethod() {
         print("Hello")
     }
 }
 
 interface MyInterface {
-    public interfaceMethod();
+    public void interfaceMethod();
 }
 
 struct MyStruct {
