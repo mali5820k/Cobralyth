@@ -1,57 +1,88 @@
 grammar clyth_grammar;
 
 // Parser Section:
-program : expression* | EOF
+program : statement* | EOF
         ;
-expression : var_declaration
-           | function_declaration
-           | ref_declaration
-           | obj_declaration
-           | return_statement
-           | control_flow_statements
-           | function_call
-        //    | class_method_call
-           | binary_statements
+expressions: expression
+           | binary_expression
+           | unary_expression
            ;
 
-subexpression : function_call
-        //    | class_method_call
-           | IDENTIFIER
-           | LITERAL
-           ;
+expression: function_call
+          | '('expression')'
+          | unary_expression
+          | IDENTIFIER
+          | LITERAL
+          ;
 
-binary_statements: subexpression '*' (subexpression | binary_statements)
-                 | subexpression'/' (subexpression | binary_statements)
-                 | subexpression '+' (subexpression | binary_statements)
-                 | subexpression '-' (subexpression | binary_statements)
-                 | subexpression '*=' (subexpression | binary_statements)
-                 | subexpression '/=' (subexpression | binary_statements)
-                 | subexpression '+=' (subexpression | binary_statements)
-                 | subexpression '-=' (subexpression | binary_statements)
+statement : var_declaration
+          | ref_declaration
+          | obj_declaration
+          | function_declaration
+          | function_call
+          | if_statement
+          | else_statement
+          | return_statement
+          | variable_assignment
+          | reference_assignment
+          ;
+unary_expression: '&'expression
+                | '-'expression
+                | NOT expression
+                | BIT_NOT expression
+                ;
+
+binary_expression: expression '>' binary_expression
+                 | expression '<' binary_expression
+                 | expression '>=' binary_expression
+                 | expression '<=' binary_expression
+                 | expression '==' binary_expression
+                 | expression '!=' binary_expression
+                 | expression '+' binary_expression
+                 | expression '-' binary_expression
+                 | expression '/' binary_expression
+                 | expression '*' binary_expression
+                 | expression '>' expression
+                 | expression '<' expression
+                 | expression '>=' expression
+                 | expression '<=' expression
+                 | expression '==' expression
+                 | expression '!=' expression
+                 | expression '-' expression
+                 | expression '+' expression
+                 | expression '/' expression
+                 | expression '*' expression
                  ;
-                 
+
+variable_assignment: IDENTIFIER '=' expressions ';'?
+                   | IDENTIFIER '*=' expressions ';'?
+                   | IDENTIFIER '/=' expressions ';'?
+                   | IDENTIFIER '+=' expressions ';'?
+                   | IDENTIFIER '-=' expressions ';'?
+                   ;
 var_declaration:  'const'? (TYPE | IDENTIFIER) IDENTIFIER ('=' LITERAL | IDENTIFIER | obj_declaration)? ';'?;
-ref_declaration: 'const'? 'ref' '<'(TYPE | IDENTIFIER)'>' IDENTIFIER '=' '&'IDENTIFIER ';'?;
+ref_declaration: 'const'? 'ref' '<'(TYPE | IDENTIFIER)'>' (reference_assignment | IDENTIFIER) ';'?;
+reference_assignment: IDENTIFIER '=' '&'IDENTIFIER;
 obj_declaration: 'struct' IDENTIFIER scope ';'?
                 | 'class' IDENTIFIER '['(class_inherited_list)']' scope;
-obj_instantiation: 'new'? IDENTIFIER'('(paramaters_list)?')';
+obj_instantiation: 'new'? IDENTIFIER'('(parameters_list)?')';
 function_declaration: 'async'? (TYPE | IDENTIFIER) IDENTIFIER'('function_parameters_list?')' scope;
-function_call: IDENTIFIER'('function_parameters_list?')' ';'?;
-return_statement: RETURN (expression*? | LITERAL | IDENTIFIER) ';'?;
-control_flow_statements: if_expression | else_expression;
-if_expression: 'if' '('expression | LITERAL | IDENTIFIER')' scope
-             | 'if' (expression | LITERAL | IDENTIFIER) scope;
-else_expression: 'else' scope # else_expression_only
-                | 'else' if_expression # else_if_expression
-                ;
-scope: '{' expression*? '}';
+function_call: IDENTIFIER'('parameters_list?')' ';'?;
+return_statement: RETURN expressions*? ';'?;
+control_flow_statements: if_statement | else_statement;
+if_statement: 'if' '('expressions*?')' scope else_statement?
+             | 'if' expressions*? scope else_statement?;
+else_statement: 'else' scope # else_statement_only
+              | 'else' if_statement # else_if_statement
+              ;
+scope: '{' statement*? '}';
 
-paramaters_list: parameter parameter_tail*?;
-parameter: IDENTIFIER | LITERAL;
+parameters_list: parameter parameter_tail*?;
+parameter: expressions;
 parameter_tail: ',' parameter;
 
 function_parameters_list: function_parameter function_parameter_tail*?;
-function_parameter: 'const'? (TYPE | IDENTIFIER | expression) IDENTIFIER # nonref_parameter
+function_parameter: 'const'? (TYPE | IDENTIFIER) IDENTIFIER # nonref_parameter
                   | 'const'? 'ref' '<'(TYPE | IDENTIFIER)'>' IDENTIFIER # ref_parameter
                   ; 
 function_parameter_tail: ',' function_parameter;
@@ -71,7 +102,8 @@ OBJ_DECLARATION_KEYWORDS: 'class'
 
 
 
-LITERAL: STRING_LITERAL | NUMERIC_LITERAL;
+LITERAL: STRING_LITERAL | NUMERIC_LITERAL | BOOLEAN_LITERAL;
+BOOLEAN_LITERAL : 'true' | 'false';
 
 NUMERIC_LITERAL: [0-9]+POSTFIX_LITERAL_TYPE?
                 | [0-9]+'.'[0-9]+POSTFIX_LITERAL_TYPE?
@@ -122,12 +154,12 @@ POSTFIX_LITERAL_TYPE  : 'i8'
                       | 'f64'
                       ;
 
-BOOLEAN_TYPES : 'true' | 'false';
-
 NOT : '!'
-    | 'not';
+    | 'not'
+    ;
 OR : '||'
-    | 'or';
+    | 'or'
+    ;
 AND : '&&'
     | 'and'
     ;
