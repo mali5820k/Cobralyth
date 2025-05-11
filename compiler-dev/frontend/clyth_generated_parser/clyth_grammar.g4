@@ -29,6 +29,7 @@ statement : var_declaration
           | return_statement
           | var_assignment
           | reference_assignment
+          | internal_macro
           ;
 unary_expression: '&'expression
                 | '-'expression
@@ -177,11 +178,12 @@ function_parameter_tail: ',' function_parameter;
 
 class_inherited_list: IDENTIFIER identifier_tail*?;
 identifier_tail: ',' IDENTIFIER;
+internal_macro: INTERNAL_MACRO_BODY ';'?;
 
 // Lexer Section:
 SINGLE_LINE_COMMENT : '//' ~[\r\n]* -> skip;
 MULTI_LINE_COMMENT: '/*'.*? '*/' -> skip;
-INTERNAL_MACRO : '#' ~[\r\n]*;
+INTERNAL_MACRO_BODY : '#' (~[\r\n;]*);
 
 OBJ_DECLARATION_KEYWORDS: 'class'
                         | 'struct'

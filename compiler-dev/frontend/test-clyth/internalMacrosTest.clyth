@@ -1,0 +1,10 @@
+#include "SomeFile";
+#include "SomeFile2"
+
+if true {
+    #register GarbageCollectorClass internal.tracingGC;
+    ref<int64> x;
+    int64 y = 10;
+    x = &y;
+    print(`X is: ${x}; Y is: ${y}`)
+}
