@@ -6,6 +6,7 @@ program : statement* | EOF
 expressions: expression
            | binary_expression
            | unary_expression
+           | postfix_expression
            ;
 
 expression: method_call
@@ -24,17 +25,24 @@ statement : var_declaration
           | function_declaration
           | method_call
           | function_call
-          | if_statement
-          | else_statement
+          | control_flow_statements
           | return_statement
           | var_assignment
           | reference_assignment
           ;
 unary_expression: '&'expression
                 | '-'expression
-                | NOT expression
-                | BIT_NOT expression
+                | '!' expression
+                | '~' expression
                 ;
+postfix_expression: expression'++'
+                  | expression'--'
+                  | expression '*=' expression
+                  | expression '/=' expression
+                  | expression '+=' expression
+                  | expression '-=' expression
+                  | expression '%=' expression
+                  ;
 
 binary_expression: expression '>' binary_expression
                  | expression '<' binary_expression
@@ -46,6 +54,8 @@ binary_expression: expression '>' binary_expression
                  | expression '-' binary_expression
                  | expression '/' binary_expression
                  | expression '*' binary_expression
+                 | expression '||' binary_expression
+                 | expression '&&' binary_expression
                  | expression '>' expression
                  | expression '<' expression
                  | expression '>=' expression
@@ -56,6 +66,8 @@ binary_expression: expression '>' binary_expression
                  | expression '+' expression
                  | expression '/' expression
                  | expression '*' expression
+                 | expression '||' expression
+                 | expression '&&' expression
                  ;
 
 var_assignment: IDENTIFIER '=' expressions ';'? # variable_assignment
@@ -94,26 +106,63 @@ elements_tail: ',' element | ',';
 
 ref_declaration: 'const'? 'ref' '<'(TYPE | IDENTIFIER)'>' (reference_assignment | IDENTIFIER) ';'?;
 reference_assignment: IDENTIFIER '=' '&'IDENTIFIER;
+
 obj_declaration: 'struct' IDENTIFIER scope ';'? # struct_declaration
                 | 'class' IDENTIFIER ('from' '['(class_inherited_list)']')? scope # class_declaration
                 | 'interface' IDENTIFIER ('from' '['(class_inherited_list)']')? scope # interface_declaration
                 ;
-obj_instantiation: 'new'? IDENTIFIER'('(parameters_list)?')';
-function_declaration: 'async'? (TYPE | IDENTIFIER) IDENTIFIER'('function_parameters_list?')' scope
+obj_instantiation: 'new'? IDENTIFIER'('(parameters_list)')'
+                 | 'new'? IDENTIFIER'()'
+                 ;
+
+function_declaration: 'async'? (TYPE | IDENTIFIER) IDENTIFIER'('function_parameters_list')' scope # function_declaration_params
+                    | 'async'? (TYPE | IDENTIFIER) IDENTIFIER'()' scope # function_declaration_no_params
                     ;
-method_declaration: ('public' | 'private' | 'protected')? 'async'? (TYPE | IDENTIFIER) IDENTIFIER'('function_parameters_list?')' scope # class_method_declaration
-                    | ('public' | 'private' | 'protected')? IDENTIFIER'('function_parameters_list?')' scope # class_constructor_declaration
-                    | ('public' | 'private' | 'protected')? (TYPE | IDENTIFIER)'('function_parameters_list?')' ';'? # interface_method_declaration
+function_call: IDENTIFIER'('parameters_list')' ';'?
+             | IDENTIFIER'()' ';'?
+             ;
+
+method_declaration: ('public' | 'private' | 'protected')? 'async'? (TYPE | IDENTIFIER) IDENTIFIER'('function_parameters_list?')' scope # class_method_declaration_params
+                    | ('public' | 'private' | 'protected')? 'async'? (TYPE | IDENTIFIER) IDENTIFIER'()' scope # class_method_declaration_no_params
+                    | ('public' | 'private' | 'protected')? IDENTIFIER '('function_parameters_list?')' scope # class_constructor_declaration_params
+                    | ('public' | 'private' | 'protected')? IDENTIFIER '()' scope # class_constructor_declaration_no_params
+                    | ('public' | 'private' | 'protected')? (TYPE | IDENTIFIER) IDENTIFIER '('function_parameters_list')' ';'? # interface_method_declaration_params
+                    | ('public' | 'private' | 'protected')? (TYPE | IDENTIFIER) IDENTIFIER '()' ';'? # interface_method_declaration_no_params
                     ;
-function_call: IDENTIFIER'('parameters_list?')' ';'?;
-method_call: IDENTIFIER'.'IDENTIFIER'('parameters_list?')' ';'?;
-return_statement: RETURN expressions*? ';'?;
-control_flow_statements: if_statement | else_statement;
+method_call: IDENTIFIER'.'IDENTIFIER '('parameters_list')' ';'?
+           | IDENTIFIER'.'IDENTIFIER '()' ';'?
+           ;
+
+return_statement: 'return' expressions*? ';'?;
+control_flow_statements: if_statement else_statement?
+                       | for_statement
+                       | foreach_statement
+                       | while_statement
+                       | 'break' ';'?
+                       | 'continue' ';'?
+                       ;
 if_statement: 'if' '('expressions*?')' scope else_statement?
              | 'if' expressions*? scope else_statement?;
 else_statement: 'else' scope # else_statement_only
               | 'else' if_statement # else_if_statement
               ;
+for_statement: 'for' '('var_declaration';' binary_expression';' postfix_expression')' scope
+             | 'for' var_declaration';' binary_expression';' postfix_expression scope
+             | 'for' '('var_assignment';' binary_expression';' postfix_expression')' scope 
+             | 'for' var_assignment';' binary_expression';' postfix_expression scope
+             | 'for' '('';' binary_expression';' postfix_expression ')' scope
+             | 'for' ';' binary_expression';' postfix_expression';' scope
+             | 'for' '('';'';'')' scope
+             | 'for' ';'';' scope
+             | 'for' scope
+             ;
+foreach_statement: ('for'|'foreach') '('((TYPE | IDENTIFIER) IDENTIFIER (',' (TYPE | IDENTIFIER)? IDENTIFIER)?) 'in' expression')' scope
+                 | ('for' | 'foreach') ((TYPE | IDENTIFIER) IDENTIFIER (',' (TYPE | IDENTIFIER)? IDENTIFIER)?) 'in' expression scope
+                 ;
+
+while_statement: 'while' '('expressions')' scope
+               | 'while' expressions scope
+               ;
 scope: '{' statement*? '}';
 
 parameters_list: parameter parameter_tail*?;
@@ -123,17 +172,16 @@ parameter_tail: ',' parameter;
 function_parameters_list: function_parameter function_parameter_tail*?;
 function_parameter: 'const'? (TYPE | IDENTIFIER) IDENTIFIER # nonref_parameter
                   | 'const'? 'ref' '<'(TYPE | IDENTIFIER)'>' IDENTIFIER # ref_parameter
-                  ; 
+                  ;
 function_parameter_tail: ',' function_parameter;
+
 class_inherited_list: IDENTIFIER identifier_tail*?;
 identifier_tail: ',' IDENTIFIER;
 
 // Lexer Section:
-FUNC_MODIFIERS: 'async';
-
 SINGLE_LINE_COMMENT : '//' ~[\r\n]* -> skip;
 MULTI_LINE_COMMENT: '/*'.*? '*/' -> skip;
-INTERNAL_MACRO : '#' [\r\n]*;
+INTERNAL_MACRO : '#' ~[\r\n]*;
 
 OBJ_DECLARATION_KEYWORDS: 'class'
                         | 'struct'
@@ -192,24 +240,6 @@ POSTFIX_LITERAL_TYPE  : 'i8'
                       | 'f32'
                       | 'f64'
                       ;
-
-NOT : '!'
-    | 'not'
-    ;
-OR : '||'
-    | 'or'
-    ;
-AND : '&&'
-    | 'and'
-    ;
-
-BIT_NOT : '~';
-BIT_OR : '|';
-BIT_XOR : '^';
-BIT_NOR : '~|';
-BIT_AND : '&';
-BIT_NAND : '~&';
-RETURN : 'return';
 
 IDENTIFIER: [a-zA-Z_]+[a-zA-Z_0-9]?;
 

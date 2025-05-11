@@ -12,7 +12,11 @@ numeric[] sample_set = (
     1, 2, 3, 4, 5, 10, 3000, 2000, 2000, 3000
 )
 
-class MyClass from [ParentClass, SomeInterface]{
+interface MyInterface {
+    public void interfaceMethod();
+}
+
+class MyClass from [ParentClass, MyInterface]{
     // all class members are private unless declared public or protected
     auto name;
     protected int64 data;
@@ -26,10 +30,6 @@ class MyClass from [ParentClass, SomeInterface]{
     public void interfaceMethod() {
         print("Hello")
     }
-}
-
-interface MyInterface {
-    public void interfaceMethod();
 }
 
 struct MyStruct {
