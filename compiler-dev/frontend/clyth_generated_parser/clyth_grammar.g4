@@ -195,9 +195,9 @@ BOOLEAN_LITERAL : 'true' | 'false';
 NUMERIC_LITERAL: [0-9]+POSTFIX_LITERAL_TYPE?
                 | [0-9]+'.'[0-9]+POSTFIX_LITERAL_TYPE?
                 ;
-FORMATTED_STRING_LITERAL: '`' .*? '`';
-STRING_LITERAL: '"' .*? '"'
-              | '\'' .*? '\''
+FORMATTED_STRING_LITERAL: '`' ('\\'. | ~[`\n\r\t] )*?   '`';
+STRING_LITERAL: '"' ('\\'. | ~["\n\r\t] )*? '"'
+              | '\'' ('\\'. | ~['\n\r\t] )*? '\''
               | FORMATTED_STRING_LITERAL;
 
 TYPE: VARIABLE_TYPES | GENERIC_TYPES;

@@ -95,7 +95,9 @@ for int x, string y in testMap {
 
 // while-loop:
 while (i >= 0) {
-    // print("something else?\n\n\n\t\"\n")
+    print("1something else?\n\n\n\t\"\n")
+    print('2something else?\n\n\n\t\'\n')
+    print(`3something else?\n\n\n\t\`\n`)
     break;
 }
 while i >= 0 {
