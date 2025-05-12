@@ -37,3 +37,6 @@ struct MyStruct {
     float64 value2;
     auto value3;
 }
+
+auto myStruct = snew MyStruct();
+auto myStructHeap = new myStruct(); // under the hood, this is a smart-pointer

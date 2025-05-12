@@ -1,6 +1,6 @@
 #include "internal.fileio"; // can import internal modules
 #include "otherFile.clyth"; // can import files
-#include "otherFile2.clyth" // can import files
+#include 'otherFile2.clyth' // can import files
 
 /**
  * Test program

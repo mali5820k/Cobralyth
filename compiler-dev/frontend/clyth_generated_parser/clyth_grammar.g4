@@ -14,8 +14,9 @@ expression: method_call
           | '('expression')'
           | unary_expression
           | var_dereference
+          | literal
           | IDENTIFIER
-          | LITERAL
+          | indexed_expression
           ;
 
 statement : var_declaration
@@ -83,11 +84,12 @@ var_assignment: IDENTIFIER '=' expressions ';'? # variable_assignment
                 | IDENTIFIER'.'IDENTIFIER '-=' expressions ';'? # class_member_minus_equals_assignment
                 ;
 var_dereference : IDENTIFIER'.'IDENTIFIER;
-var_declaration:  ('public' | 'private' | 'protected')? 'const'? (TYPE | IDENTIFIER) IDENTIFIER ('=' LITERAL | IDENTIFIER | obj_instantiation)? ';'? # variable_declaration
+var_declaration:  ('public' | 'private' | 'protected')? 'const'? (TYPE | IDENTIFIER) IDENTIFIER ('=' (literal | IDENTIFIER | obj_instantiation))? ';'? # variable_declaration
                |  ('public' | 'private' | 'protected')? 'const'? (TYPE | IDENTIFIER)'[]' IDENTIFIER ('=' (list_elements | set_elements))? ';'? # dynamic_array_declaration
-               |  ('public' | 'private' | 'protected')? 'const'? (TYPE | IDENTIFIER)'['(NUMERIC_LITERAL | IDENTIFIER)']' IDENTIFIER ('=' (LITERAL | IDENTIFIER | obj_declaration | list_elements | set_elements))? ';'? # static_array_declaration
+               |  ('public' | 'private' | 'protected')? 'const'? (TYPE | IDENTIFIER)'['(NUMERIC_LITERAL | IDENTIFIER)']' IDENTIFIER ('=' (literal | IDENTIFIER | obj_declaration | list_elements | set_elements))? ';'? # static_array_declaration
                |  ('public' | 'private' | 'protected')? 'const'? (TYPE | IDENTIFIER)':'(TYPE | IDENTIFIER) IDENTIFIER ('=' map_elements)? ';'? # map_declaration
                ;
+
 list_elements: '[' elements_list? ']'
              | '[]'
              ;
@@ -102,7 +104,7 @@ map_element: element ':' element;
 map_elements_tail: ',' map_element | ',';
 
 elements_list: element elements_tail*?;
-element: LITERAL | IDENTIFIER | obj_instantiation | list_elements | set_elements;
+element: literal | IDENTIFIER | obj_instantiation | list_elements | set_elements;
 elements_tail: ',' element | ',';
 
 ref_declaration: 'const'? 'ref' '<'(TYPE | IDENTIFIER)'>' (reference_assignment | IDENTIFIER) ';'?;
@@ -112,10 +114,13 @@ obj_declaration: 'struct' IDENTIFIER scope ';'? # struct_declaration
                 | 'class' IDENTIFIER ('from' '['(class_inherited_list)']')? scope # class_declaration
                 | 'interface' IDENTIFIER ('from' '['(class_inherited_list)']')? scope # interface_declaration
                 ;
-obj_instantiation: 'new'? IDENTIFIER'('(parameters_list)')'
-                 | 'new'? IDENTIFIER'()'
+obj_instantiation: 'new' IDENTIFIER'('(parameters_list)')' ';'? #heap_obj_allocation_params
+                 | 'new' IDENTIFIER'()' ';'? #heap_obj_allocation_no_params
+                 | 'snew' IDENTIFIER'('(parameters_list)')' ';'? #stack__obj_allocation_params
+                 | 'snew' IDENTIFIER'()' ';'? #stack_obj_allocation_no_params
                  ;
-
+indexed_expression: (var_dereference | IDENTIFIER) '['(IDENTIFIER | NUMERIC_LITERAL)']' ';'?
+                  ;
 function_declaration: 'async'? (TYPE | IDENTIFIER) IDENTIFIER'('function_parameters_list')' scope # function_declaration_params
                     | 'async'? (TYPE | IDENTIFIER) IDENTIFIER'()' scope # function_declaration_no_params
                     ;
@@ -123,9 +128,9 @@ function_call: IDENTIFIER'('parameters_list')' ';'?
              | IDENTIFIER'()' ';'?
              ;
 
-method_declaration: ('public' | 'private' | 'protected')? 'async'? (TYPE | IDENTIFIER) IDENTIFIER'('function_parameters_list?')' scope # class_method_declaration_params
+method_declaration: ('public' | 'private' | 'protected')? 'async'? (TYPE | IDENTIFIER) IDENTIFIER'('function_parameters_list')' scope # class_method_declaration_params
                     | ('public' | 'private' | 'protected')? 'async'? (TYPE | IDENTIFIER) IDENTIFIER'()' scope # class_method_declaration_no_params
-                    | ('public' | 'private' | 'protected')? IDENTIFIER '('function_parameters_list?')' scope # class_constructor_declaration_params
+                    | ('public' | 'private' | 'protected')? IDENTIFIER '('function_parameters_list')' scope # class_constructor_declaration_params
                     | ('public' | 'private' | 'protected')? IDENTIFIER '()' scope # class_constructor_declaration_no_params
                     | ('public' | 'private' | 'protected')? (TYPE | IDENTIFIER) IDENTIFIER '('function_parameters_list')' ';'? # interface_method_declaration_params
                     | ('public' | 'private' | 'protected')? (TYPE | IDENTIFIER) IDENTIFIER '()' ';'? # interface_method_declaration_no_params
@@ -172,35 +177,38 @@ parameter_tail: ',' parameter;
 
 function_parameters_list: function_parameter function_parameter_tail*?;
 function_parameter: 'const'? (TYPE | IDENTIFIER) IDENTIFIER # nonref_parameter
+                  | 'const'? (TYPE | IDENTIFIER)'[]' IDENTIFIER # nonref_parameter_array
                   | 'const'? 'ref' '<'(TYPE | IDENTIFIER)'>' IDENTIFIER # ref_parameter
+                  | 'const'? 'ref' '<'(TYPE | IDENTIFIER)'[]''>' IDENTIFIER # ref_parameter_array
+                  | 'const'? 'ref' '<'(TYPE | IDENTIFIER)'>''[]' IDENTIFIER # ref_array
                   ;
 function_parameter_tail: ',' function_parameter;
 
 class_inherited_list: IDENTIFIER identifier_tail*?;
 identifier_tail: ',' IDENTIFIER;
-internal_macro: INTERNAL_MACRO_BODY ';'?;
+internal_macro: '#include' STRING_LITERAL ';'? #include_macro
+              | '#register' IDENTIFIER (IDENTIFIER | var_dereference) ';'? #register_macro
+              ;
+literal: STRING_LITERAL | NUMERIC_LITERAL | BOOLEAN_LITERAL;
 
 // Lexer Section:
 SINGLE_LINE_COMMENT : '//' ~[\r\n]* -> skip;
 MULTI_LINE_COMMENT: '/*'.*? '*/' -> skip;
-INTERNAL_MACRO_BODY : '#' (~[\r\n;]*);
 
 OBJ_DECLARATION_KEYWORDS: 'class'
                         | 'struct'
                         ;
 
+STRING_LITERAL: '"' ('\\'. | ~["\n\r\t] )*? '"'
+              | '\'' ('\\'. | ~['\n\r\t] )*? '\''
+              | '`' ('\\'. | ~[`\n\r\t] )*? '`'
+              ;
 
-
-LITERAL: STRING_LITERAL | NUMERIC_LITERAL | BOOLEAN_LITERAL;
 BOOLEAN_LITERAL : 'true' | 'false';
 
 NUMERIC_LITERAL: [0-9]+POSTFIX_LITERAL_TYPE?
                 | [0-9]+'.'[0-9]+POSTFIX_LITERAL_TYPE?
                 ;
-FORMATTED_STRING_LITERAL: '`' ('\\'. | ~[`\n\r\t] )*?   '`';
-STRING_LITERAL: '"' ('\\'. | ~["\n\r\t] )*? '"'
-              | '\'' ('\\'. | ~['\n\r\t] )*? '\''
-              | FORMATTED_STRING_LITERAL;
 
 TYPE: VARIABLE_TYPES | GENERIC_TYPES;
 
