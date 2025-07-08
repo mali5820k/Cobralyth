@@ -1,1 +1,0 @@
-/usr/bin/clang++ -std=c++23 -stdlib=libc++ CMakeFiles/clyth_compiler_bin.dir/lexer.cpp.o CMakeFiles/clyth_compiler_bin.dir/scanner.cpp.o CMakeFiles/clyth_compiler_bin.dir/token.cpp.o CMakeFiles/clyth_compiler_bin.dir/utilFunctions.cpp.o CMakeFiles/clyth_compiler_bin.dir/main.cpp.o -o clyth_compiler_bin

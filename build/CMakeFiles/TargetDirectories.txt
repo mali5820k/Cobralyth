@@ -1,5 +1,0 @@
-/home/dragoneye/Desktop/Github Projects/Cobralyth/build/CMakeFiles/edit_cache.dir
-/home/dragoneye/Desktop/Github Projects/Cobralyth/build/CMakeFiles/rebuild_cache.dir
-/home/dragoneye/Desktop/Github Projects/Cobralyth/build/src/CMakeFiles/clyth_compiler_bin.dir
-/home/dragoneye/Desktop/Github Projects/Cobralyth/build/src/CMakeFiles/edit_cache.dir
-/home/dragoneye/Desktop/Github Projects/Cobralyth/build/src/CMakeFiles/rebuild_cache.dir
