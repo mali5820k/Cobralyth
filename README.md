@@ -2,6 +2,10 @@
 A Compiled language that is inspired from C++ runtime performance and Python's scripting properties, as well as various syntax inspirations from C#, JavaScript, TypeScript, Java, and Kotlin.
 
 ## Current state:
+This C++ frontend approach is being put on hold/archived.
+I simply want to prototype this frontend more rapidly without concern of the project collapsing inwards whenever an implementation update is made and get onto bootstrapping Clyth with itself and I keep finding myself re-writing the compiler's frontend and designing utility functions that I very well could just spend the same amount of time prototyping more with a higher-level programming language.
+If at any point I want to come back to this, I will and update accordingly. For now, I'm leaving this here to show efforts were made and why I left this branch as it is now.
+
 - Frontend is being constructed with C++ and a Pratt parser implementation.
 - Backend will be C++ for runtime features, statically linking with libc++ from LLVM.
 - Additional backend option targetted is MLIR for GPU agnostic programming.
