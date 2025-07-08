@@ -1,9 +1,6 @@
 #include "internal.fileio"; // can import internal modules
 #include "otherFile.clyth"; // can import files
-<<<<<<< Updated upstream
-=======
 #include 'otherFile2.clyth' // can import files
->>>>>>> Stashed changes
 
 /**
  * Test program

@@ -12,5 +12,9 @@
 #include <stdexcept>
 #include <memory>
 #include "utilFunctions.hpp"
+<<<<<<< Updated upstream:compiler-dev/frontend/common.hpp
 #include "simdjson/simdjson.h"
 #endif
+=======
+#endif
+>>>>>>> Stashed changes:compiler-src/src/common.hpp
