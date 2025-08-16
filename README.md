@@ -105,7 +105,7 @@ In short Clyth is:
     ```
   - The libc++ library will be leveraged to provide features to achieve general-purpose programming support -
   (this is subject to change if linking against libc++ becomes cumbersome enough to warrant a C runtime instead).
-  - Memory management via [MECC](#mecc) - Clyth will offer a manually-managed runtime by default with an opt-in automated, managed memory model.
+  - Memory management via [MECC](#mecc-overview) - Clyth will offer a manually-managed runtime by default with an opt-in automated, managed memory model.
   - Concurrency:
     - Threads will be implemented in a similar manner to how C does, however, the final implementation will favor intuitiveness and take inspiration from Go's goroutines - yet different in the execution and scheduling of threads.
     ```cpp
@@ -185,7 +185,7 @@ In short Clyth is:
 
   - Multiple options have been explored in great planning and are listed here to showcase how the memory-management of Clyth has evolved. 
   However - the Clyth language will adopt the MECC model as an opt-in memory-management model to allow system level programmers the flexibility of picking between manual memory management and an opt-in non-blocking, high-performance, and a fixed minimal-overhead memory management model.
-  If you're interested in reading into the other options that were explored, you can find them [here](./MemoryMangement.md/#additional-memory-management-options-explored).
+  If you're interested in reading into the other options that were explored, you can find them [here](./MemoryManagement.md/#additional-memory-management-options-explored).
     
 ## Author's Note, Acknowledgements, and Legal comments:
 - Upon completing the C-based Lox Programming language implementation from Bob (Robert) Nystrom's "Crafting Interpreters" book, I set out to construct my own programming language from what I had learned then and have learned thus far in my own free time, doing research into programming language design and construction of AOT, JIT compilers, and interpreters. For reference, this project is not a continuation of Nystrom's work, nor is it a continuation of my past work that was derived from his book - this project is my own from-scratch implementation for a language that I am designing from the ground up.
