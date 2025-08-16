@@ -1,73 +1,51 @@
-#include "internal.fileio"; // can import internal modules
-#include "otherFile.clyth"; // can import files
-#include 'otherFile2.clyth' // can import files
+struct TestObj {
+   index: int64,
+   max: int64,
+   payload: string,
+   callback_functions: function[].
+   _counter: int64 // this is private/hidden except to methods inside this struct, indicated by the '_' in the beginning. It's enforced at the compiler-level but at runtime this field is accessible since it's part of the struct
+   
+   // DEFAULT methods that must exist and don't need to specify the return-type - as they're automatically returning a TestObj instance - as this will be compiled out as if you wrote a separate struct and had functions in a specific C header/code file to use for that particular struct-type with a 'self' or struct reference. This resolves the grievance of C++ classes where in the separate implementation file you'd have to scope/namespace your class that you're defining the method bodies for - which is annoying and cumbersome. This way, it's lean and elegant in a single file and specific methods are IMPLIED by the compiler.
+   constructor() {}
+   destructor() {}
+   clone() {}
+   deep_clone() {}
 
-/**
- * Test program
- * @returns: int32 the return code
- */
- int32 main(string args[]) {
-    // Optional garbage collector defined for entire scope:
-    #register GarbageCollectorClass internal.tracingGC;
+   // Any additional functions/methods are just written like regular functions too but return types must be specified now.
 
-    string x1 = "somestring \n\n\tisverywacky \'\" string continues"
-    int64 x = 10 // Default integer literal type is int64
-    auto x2 = 0i32; // int32 cast
-    ref<auto> y = &x // Pointers are automatically 64-bits unless type-overrided
-    ref<int32> y2;
-    y2 = &x2;
-    const auto z = 100.00 // float64/double
-    const auto i = 200.00f32 // overridden value type to float32
+   // This below is an example of using structs for parameters and a good use of showing a function pointer/reference is supposed to be passed into this method to call back to. The structure of the function is hidden and it's intentional, so you have to document the function structure(s) being called-back to as a comment above the function/method for other developers to know how to use your callback.
+   bool register_callback(function callback_function, optional args{}) {
+      if (this.index > 1000) {
+         this.callback_functions.append(callback_function, args) // Second field is always required for the args needed for this function. You don't have to specify them if no args are needed as an empty struct/null will be inserted instead.
+      } else {
+         this.callback_functions.append(callback_function) // no args;
+      }
+      return true
+   }
+   // If you want to implement an interface - simply include it here:
+  include(interface_drawable, interface_collection, interface_equivalent)
+  bool draw() {}
+  
+  // Like Java - an iterator for has_next and current iterator call to get next instance of TestObj for very niche cases where you are making something that Clyth doesn't provide you for your looping schemes. Essentially, loops will call into your has_next and iter calls to check if there is a next-iteration for another element before calling iter to retrieve that next element and incrementing internally. The counter for iter will be included by the compiler from the interface import statement, that way you only need to worry about the function calls and not the primitives or fields associated with the interface. Perhaps IDE's could add them here for more convenience and developer ease-of-use.
+  bool has_next() {}
+  TestObj iter() {}
+  
+  // With more IDE and compiler tooling - this can simply be added into this struct for convenience. Ultimately - this could be stored as type-info for reflection at runtime for things like - TestObj my_instance = new TestObj(0, 1, "string"); bool test = my_instance is interface_drawable; // the interface tags in the struct would be compared to this drawable as a string for true or false at runtime or even at compile-time if the struct is visible to the compiler in src-form.
+}
 
-    int32[] sample_list; // Automatically allocated on the stack
-    int64[200] sample_list; // Fixed-size list of 200 zeroed i64 elements
-    int32[] sample_list = new int32[] // Allocated on the heap
-    
-    // The "numeric" type is a class wrapper that encompasses the int8-128, uint8-128, float32-64(double).
-    auto[] sample_generic_list = []
-    
-    numeric:string sample_map = {
-        1000: "something else",
-    }
+bool callback_function (TestObj instance) {
+   if instance is drawable {
+      printf("Drawable instance - can draw component!")
+      return true
+   }
+      return false
+}
 
-    numeric[] sample_set = (
-        1, 2, 3, 3, 4, 5, 5, 10, 3000, 2000, 2000, 3000, 283494.0f32, 999920348.0f64
-    )
-
-    for (auto element in sample_set) {
-        print("An element:", element)
-    }
-    
-    for (auto index in sample_set.length) {
-        print("An element:", sample_set[index])
-    }
-
-    for (auto i = 0; i < sample_set.length; i++) {
-        print("An element:", sample_set[i])
-    }
-
-    // If this is a list or set, then the {} mapping will always correspond to index, value
-    // And if it's a map, then the map's key-value pairs are iterated through instead.
-    for (auto {index:element} in sample_set) {
-        print("An element:", element, "At index:", index)
-    }
-
-    for (auto element in sample_set) {
-        print("An element:", element)
-    }
-
-    // Optional semi-colons:
-    print("This is a revised test Clyth program!");
-    print(`Test formatted string ${x}`)
-
-    {
-        #register GarbageCollectorClass inherit; // Inherits GC scheme from parent scope (if there is one)
-        {
-            #register GarbageCollectorClass internal.ec; // optimized GC for Clyth (EC system)
-            {
-                // No register directive used here, thus manual memory management occurs in this scope.
-            }
-        }
-    }
-    return 0
- }
+int main (string args[]) {
+   TestObj myObj = new TestObj({0, 100, "something"})
+   callback_function(myObj)
+   callback_function(myObj.clone())
+   myObj.index = 100000;
+   myObj.register_callback(callback_function, { instance: myObj.clone() }) // an optional args list in JSON/struct form.
+   return 0
+}

@@ -1,42 +1,53 @@
 int32[] sample_list = []
 
-numeric[] sample_generic_list;
+numeric[] sample_generic_numeric_list;
 
-numeric:string sample_map = {
+map[numeric:string] sample_map = {
     1 : "something",
     2 : "something else",
     1000: "something elser",
 }
 
-numeric[] sample_set = (
+set[int] sample_set = (
     1, 2, 3, 4, 5, 10, 3000, 2000, 2000, 3000
 )
 
 interface MyInterface {
-    public void interfaceMethod();
+    void interfaceMethod();
 }
 
-class MyClass from [ParentClass, MyInterface]{
-    // all class members are private unless declared public or protected
+struct My_struct: MECC, MyInterface {
+    // all struct members are private unless declared public or protected
     auto name;
-    protected int64 data;
-    public MyClass(auto name) {
+    _int64 data;
+    constructor(auto name) {
         this.name = name;
         this.data = name.length();
         int x = 10;
         x *= 200;
     }
+    destructor() {}
+    clone() {}
+    deep_clone() {}
 
-    public void interfaceMethod() {
+    void interface_method() {
         print("Hello")
     }
+
+    _void private_method() {}
 }
 
-struct MyStruct {
+struct My_struct2 {
     int64 value;
     float64 value2;
     auto value3;
 }
 
-auto myStruct = snew MyStruct();
-auto myStructHeap = new myStruct(); // under the hood, this is a smart-pointer
+int main(string[] args) {
+    // NOTE: Can't malloc or free a MECC controlled struct.
+    auto my_struct_manual_heap = malloc(My_struct2()); 
+    auto my_struct_stack = My_struct2(); // struct on stack
+    auto my_struct_mecc_heap = new My_struct(); // MECC managed
+    auto my_struct_mecc_stack = My_struct(); // MECC managed but on stack instead;
+    free(myStruct)
+}
