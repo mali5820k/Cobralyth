@@ -1,0 +1,28 @@
+int8 a = 0;
+int16 b = 1;
+int32 c = 10;
+int64 d = 100;
+int e = 1000; // defaults to int64
+uint8 f = 200;
+uint16 g = 10020;
+uint32 h = 9090;
+uint64 i = 90809809;
+
+float32 l = 10;
+float64 m = 100;
+float o = 10890;
+double p = 50;
+
+string myString = "";
+string someString; // same as ""
+char aChar = ""; // can be single or double quotes;
+char anotherChar = '';
+
+auto x = 10;
+auto x1 = 10.00;
+auto x2 = 10.000000000000000;
+const auto x3 = cast(int32, 10);
+const auto x4 = cast(int64, 10);
+const auto x5 = cast(int8, 10);
+
+auto y = 100;

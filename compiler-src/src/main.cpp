@@ -1,8 +1,10 @@
 #include "common.hpp"
 #include "cxxopts/cxxopts.hpp"
+#include "scanner.hpp"
+#include "lexer.hpp"
+//#include "parser.hpp"
 
 int main(int argc, char** argv) {
-    
     // Metadata and generate commandline flags:
     std::string compiler_version("Cobralyth Compiler CPP: Version 1.0.0");
     cxxopts::Options options("clythcpp", compiler_version.c_str());
@@ -18,30 +20,39 @@ int main(int argc, char** argv) {
     try {
         auto result = options.parse(argc, argv);
         bool debug_mode = false;
+        bool flag_provided = false;
         std::string program_entrypoint;
-        
 
         if (result.count("help")) {
             std::println("{}\n", options.help().c_str());
+            flag_provided = true;
         }
 
         // Debug-mode check:
         if (result.count("debug")) {
             debug_mode = true;
+            flag_provided = true;
         }
 
         if (result.count("output")) {
             output_binary_name = result["output"].as<std::string>();
+            flag_provided = true;
         }
 
         // Get the path to the file being compiled:
         if (result.count("compile")) {
             program_entrypoint = result["compile"].as<std::string>();
+            flag_provided = true;
         }
 
         // Version flag check:
         if (result.count("version")) {
             std::println("{}\n", compiler_version);
+            flag_provided = true;
+        }
+
+        if (!flag_provided) {
+            throw std::runtime_error("Invalid program arguments, please run with -h flag for sample usage.");
         }
 
         // Get the main-file provided by the user:
@@ -58,6 +69,11 @@ int main(int argc, char** argv) {
         }
 
         std::println("Compiling {}\n", main_file.c_str());
+        
+        // Now to lex this result:
+        Lexer lexer = Lexer();
+        lexer.lexFile(main_file.c_str());
+        std::println("Current Lexer's contents: {}",lexer.toString());
     }
 
     return 0;

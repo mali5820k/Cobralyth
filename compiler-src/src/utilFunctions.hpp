@@ -3,8 +3,8 @@
 #include <string>
 #include <vector>
 
-bool file_exists(std::string file_path);
-std::vector<std::string> read_lines(std::string file_name);
+bool fileExists(std::string file_path);
+std::vector<std::string> readLines(std::string file_name);
 std::vector<std::string> split(std::string, std::string);
 
 #endif

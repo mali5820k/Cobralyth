@@ -1,0 +1,23 @@
+
+// A sample function declaration
+// return type declarations are optional
+int64 test_function() {
+    // Test scope
+    int x = 10
+    return x
+}
+
+int64 test_function2(int32 value, float32 value2) {
+    return value + value2
+}
+
+int function_chain(auto value1, auto value2) {
+    return test_function() + value + test_function2(test_function(), 1000) * value2
+}
+
+bool function_as_first_class_citizen(ref<function_chain> function_callback, int64 value) {
+    if (function_callback(value, value*2) > 10000) {
+        return true
+    }
+    return false
+}
