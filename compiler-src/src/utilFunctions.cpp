@@ -18,7 +18,7 @@ bool fileExists(std::string file_name) {
 std::vector<std::string> readLines(std::string file_name) {
     std::vector<std::string> scanned_lines;
     if (!fileExists(file_name)) {
-        std::println("\nERROR: File path {} does NOT exist\n", file_name);
+        printf("\nERROR: File path %s does NOT exist\n", file_name.c_str());
         return scanned_lines;
     }
     std::ifstream file(file_name);
@@ -42,17 +42,17 @@ std::vector<std::string> split(std::string input_string, std::string delimitter)
     std::size_t last_start = 0;
     std::string substring_value(input_string);
     while (!search_exhausted) {
-        std::println("Now searching at index {}\n", last_start);
+        printf("Now searching at index %zu\n", last_start);
         substring_found = input_string.find(delimitter, last_start);
-        std::println("Substring found at: {}", substring_found);
+        printf("Substring found at: %zu", substring_found);
         if (substring_found == std::string::npos) {
             search_exhausted = true;
             substring_value = input_string.substr(last_start, input_string.length()-last_start);
         } else {
             substring_value = input_string.substr(last_start, substring_found-last_start);
         }
-        std::println("Substring length should be: {}", substring_found - last_start);
-        std::println("Adding substring: {}", substring_value);
+        printf("Substring length should be: %zu", substring_found - last_start);
+        printf("Adding substring: %s", substring_value.c_str());
         split_vector.emplace_back(substring_value);
         last_start = substring_found + delimitter.length();
         if (last_start >= input_string.length()) {

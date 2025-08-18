@@ -24,8 +24,9 @@ int main(int argc, char** argv) {
         std::string program_entrypoint;
 
         if (result.count("help")) {
-            std::println("{}\n", options.help().c_str());
+            printf("%s\n", options.help().c_str());
             flag_provided = true;
+            return 0;
         }
 
         // Debug-mode check:
@@ -34,6 +35,7 @@ int main(int argc, char** argv) {
             flag_provided = true;
         }
 
+        // Output binary name check:
         if (result.count("output")) {
             output_binary_name = result["output"].as<std::string>();
             flag_provided = true;
@@ -47,7 +49,7 @@ int main(int argc, char** argv) {
 
         // Version flag check:
         if (result.count("version")) {
-            std::println("{}\n", compiler_version);
+            printf("%s\n", compiler_version.c_str());
             flag_provided = true;
         }
 
@@ -58,22 +60,22 @@ int main(int argc, char** argv) {
         // Get the main-file provided by the user:
         main_file = program_entrypoint;
     } catch(std::exception& e) {
-        std::println("ERROR occurred: {}\nExiting compilation\n", e.what());
+        printf("ERROR occurred: %s\nExiting compilation\n", e.what());
         return 1;
     }
 
     if (std::filesystem::exists(main_file)) {
         if (main_file.extension() != std::string(".clyth")) {
-            std::println("ERROR: Ensure the main program file contains the '.clyth' file extension.\nExiting...");
+            printf("ERROR: Ensure the main program file contains the '.clyth' file extension.\nExiting...");
             return 1;
         }
 
-        std::println("Compiling {}\n", main_file.c_str());
+        printf("Compiling %s\n", main_file.c_str());
         
         // Now to lex this result:
         Lexer lexer = Lexer();
         lexer.lexFile(main_file.c_str());
-        std::println("Current Lexer's contents: {}",lexer.toString());
+        printf("Current Lexer's contents: %s",lexer.toString().c_str());
     }
 
     return 0;

@@ -33,6 +33,6 @@ std::string Scanner::toString() {
 }
 
 void Scanner::printOutput() {
-    std::println("{}", this->toString());
+    printf("%s", this->toString().c_str());
 }
 
