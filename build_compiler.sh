@@ -20,8 +20,14 @@ fi
 
 dnf list --installed libcxx
 LIBCPP=$?
+dnf list --installed libcxx-devel
+LIBCPP_DEV=$?
 if [[ $LIBCPP != 0 ]]; then
     printf "Missing libcxx (libc++) install!\n"
+    MISSING=1
+fi
+if [[ $LIBCPP_DEV != 0 ]]; then
+    printf "Missing libcxx-devel (libc++-devel) install!\n"
     MISSING=1
 fi
 
@@ -37,6 +43,8 @@ if [[ $MISSING == 1 ]]; then
     printf "Please install LLVM, LLVM-dev, and mentioned missing packages for build to continue.\nExiting...\n"
     exit -1
 fi
+
+export LLVM_LIBC_PATH=$(pwd)/llvm-libc/
 
 CMAKE_LISTS_FILE_PATH=../compiler-src/CMakeLists.txt
 mkdir -p build/
