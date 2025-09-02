@@ -1,5 +1,6 @@
-add_executable(
+target_sources(
 	clyth_compiler_bin
+	PRIVATE
 	common.hpp
 	cxxopts/cxxopts.hpp
 	lexer.hpp
@@ -12,5 +13,3 @@ add_executable(
 	utilFunctions.cpp
 	main.cpp
 )
-
-
