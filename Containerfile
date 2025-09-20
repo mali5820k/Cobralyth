@@ -20,8 +20,8 @@ RUN rm -rf build/ && \
 
 WORKDIR /home/libs_build/llvm-project
 RUN rm -rf build/ && mkdir -p build && \
-    cmake -G Ninja -S runtimes -B build -DLLVM_ENABLE_RUNTIMES="libcxx;libcxxabi;libunwind" -DLIBCXX_HAS_MUSL_LIBC=On -DCMAKE_INSTALL_PREFIX=../llvm-libc++_build/ -DCMAKE_CXX_COMPILER="/usr/bin/clang++" -DCMAKE_C_COMPILER="/usr/bin/clang" && \
-    ninja -C build cxx cxxabi unwind && \
-    ninja -C build install-cxx install-cxxabi install-unwind
+    cmake -S llvm -B build -DCMAKE_BUILD_TYPE=Release -DLLVM_ENABLE_PROJECTS="clang" -DLLVM_ENABLE_RUNTIMES="libcxx;libcxxabi;libunwind" -DLIBCXX_HAS_MUSL_LIBC=On -DCMAKE_CXX_COMPILER="/usr/bin/clang++" -DCMAKE_C_COMPILER="/usr/bin/clang" -DLLVM_ENABLE_ASSERTIONS=ON -DLLVM_ENABLE_EH=ON -DLLVM_ENABLE_RTTI=ON&& \
+    cmake --build build -j8 && \
+    cmake --install build/ --prefix ../llvm_build/
 
 ENTRYPOINT ["/bin/bash"]

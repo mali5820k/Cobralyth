@@ -69,22 +69,26 @@ wait $(jobs -p)
 $CONTAINER_SYSTEM pull alpine
 $CONTAINER_SYSTEM image prune -f
 
-if [[ $PODMAN == 0 ]]; then
+if [[ ! -d llvm-libc++_build || ! -d musl_libc_build ]]; then
+    if [[ $PODMAN == 0 ]]; then
     $CONTAINER_SYSTEM build -f $CUR_DIR/Containerfile --tag clyth_alpine_container:1.0 -v $CUR_DIR/libs_build/:/home/libs_build/:Z --format docker
-else
-    $CONTAINER_SYSTEM build -f $CUR_DIR/Containerfile --tag clyth_alpine_container:1.0 -v $CUR_DIR/libs_build/:/home/libs_build/:Z
-fi
+    else
+        $CONTAINER_SYSTEM build -f $CUR_DIR/Containerfile --tag clyth_alpine_container:1.0 -v $CUR_DIR/libs_build/:/home/libs_build/:Z
+    fi
 
-if [[ $? != 0 ]]; then
-    printf "Error occurred during podman build call - exiting\n"
+    if [[ $? != 0 ]]; then
+        printf "Error occurred during podman build call - exiting\n"
+        $CONTAINER_SYSTEM image prune -f
+        exit 1
+    fi
+    $CONTAINER_SYSTEM rmi localhost/clyth_alpine_container:1.0
+    $CONTAINER_SYSTEM container prune --force
     $CONTAINER_SYSTEM image prune -f
-    exit 1
 fi
-$CONTAINER_SYSTEM rmi localhost/clyth_alpine_container:1.0
-$CONTAINER_SYSTEM container prune --force
-$CONTAINER_SYSTEM image prune -f
 
 cd $CUR_DIR
 CMAKE_LISTS_FILE_PATH=./compiler-src/
 rm -rf build/
 cmake -S $CMAKE_LISTS_FILE_PATH -Bbuild
+cd build/
+make
