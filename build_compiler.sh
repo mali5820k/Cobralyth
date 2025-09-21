@@ -26,19 +26,12 @@ if [[ $MAKE != 0 ]]; then
     MISSING=1
 fi
 
-CONTAINER_SYSTEM=podman
 podman --version
-PODMAN=$?
+podman=$?
 
-if [[ $PODMAN != 0 ]]; then
-    printf "Missing podman installation\nLooking instead for Docker installation to continue..."
-
-    if [[ $DOCKER != 0 ]]; then
-        printf "Missing docker installation!\n"
-        MISSING=1
-    else
-        CONTAINER_SYSTEM=docker
-    fi
+if [[ $podman != 0 ]]; then
+    printf "Missing podman installation!"
+    MISSING=1
 fi
 
 # Exit out if packages are missing, since the script is NOT meant to install them for you.
@@ -66,27 +59,24 @@ if [[ ! -d llvm-project ]]; then
 fi
 wait $(jobs -p)
 
-$CONTAINER_SYSTEM pull alpine
-$CONTAINER_SYSTEM image prune -f
+cd $CUR_DIR
+podman pull alpine
+podman image prune -f
 
 if [[ ! -d llvm-libc++_build || ! -d musl_libc_build ]]; then
-    if [[ $PODMAN == 0 ]]; then
-    $CONTAINER_SYSTEM build -f $CUR_DIR/Containerfile --tag clyth_alpine_container:1.0 -v $CUR_DIR/libs_build/:/home/libs_build/:Z --format docker
-    else
-        $CONTAINER_SYSTEM build -f $CUR_DIR/Containerfile --tag clyth_alpine_container:1.0 -v $CUR_DIR/libs_build/:/home/libs_build/:Z
-    fi
+    printf "\nFound podman container runtime - executing container build...\n"
+    podman build -f $CUR_DIR/Containerfile --tag clyth_alpine_container:1.0 -v $CUR_DIR/libs_build/:/home/libs_build/:Z --format docker 
 
     if [[ $? != 0 ]]; then
         printf "Error occurred during podman build call - exiting\n"
-        $CONTAINER_SYSTEM image prune -f
+        podman image prune -f
         exit 1
     fi
-    $CONTAINER_SYSTEM rmi localhost/clyth_alpine_container:1.0
-    $CONTAINER_SYSTEM container prune --force
-    $CONTAINER_SYSTEM image prune -f
+    podman rmi localhost/clyth_alpine_container:1.0
+    podman container prune --force
+    podman image prune -f
 fi
 
-cd $CUR_DIR
 CMAKE_LISTS_FILE_PATH=./compiler-src/
 rm -rf build/
 cmake -S $CMAKE_LISTS_FILE_PATH -Bbuild

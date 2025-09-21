@@ -1,8 +1,7 @@
-FROM alpine:latest as bash_base
+FROM alpine:latest
 RUN apk update
 RUN apk add --no-cache cmake make git llvm20 llvm20-dev ninja clang bash
 
-FROM bash_base as final_build_layer
 SHELL ["/bin/bash", "-c"]
 WORKDIR /home/libs_build/musl
 RUN rm -rf build/ && \
@@ -20,8 +19,7 @@ RUN rm -rf build/ && \
 
 WORKDIR /home/libs_build/llvm-project
 RUN rm -rf build/ && mkdir -p build && \
-    cmake -S llvm -B build -DCMAKE_BUILD_TYPE=Release -DLLVM_ENABLE_PROJECTS="clang" -DLLVM_ENABLE_RUNTIMES="libcxx;libcxxabi;libunwind" -DLIBCXX_HAS_MUSL_LIBC=ON -DCMAKE_CXX_COMPILER="/usr/bin/clang++" -DCMAKE_C_COMPILER="/usr/bin/clang" -DLLVM_ENABLE_ASSERTIONS=ON -DLLVM_ENABLE_EH=ON -DLLVM_ENABLE_RTTI=ON && \
-    cmake --build build -j8 && \
+    cmake -S llvm -B build -DCMAKE_BUILD_TYPE=Release -DLLVM_ENABLE_EH=ON -DLLVM_ENABLE_RTTI=ON -DLLVM_ENABLE_ASSERTIONS=ON  -DLLVM_ENABLE_PROJECTS="clang" -DLLVM_ENABLE_RUNTIMES="libcxx;libcxxabi;libunwind" -DLIBCXX_HAS_MUSL_LIBC=ON -DCMAKE_CXX_COMPILER="/usr/bin/clang++" -DCMAKE_C_COMPILER="/usr/bin/clang" -DLIBCXXABI_USE_LLVM_UNWINDER=YES -DLIBCXX_STATICALLY_LINK_ABI_IN_STATIC_LIBRARY=ON -DLIBCXXABI_STATICALLY_LINK_UNWINDER_IN_STATIC_LIBRARY=ON -DLIBCXX_ENABLE_EXCEPTIONS=ON -DLIBCXXABI_ENABLE_EXCEPTIONS=ON && \
+    cmake --build build -j20 && \
     cmake --install build/ --prefix ../llvm_build/
-
 ENTRYPOINT ["/bin/bash"]
