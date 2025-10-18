@@ -46,37 +46,20 @@ mkdir -p libs_build/
 cd libs_build/
 
 if [[ ! -d musl ]]; then 
-    # Clone and build musl libc to use as the libc-of-choice for building LLVM's libc++
-    (
-        git clone https://git.musl-libc.org/git/musl
-    ) &
+    # Clone and build musl libc to use as the libc-of-choice for static linkage for clyth's runtime libraries.
+    git clone https://git.musl-libc.org/git/musl
 fi
-if [[ ! -d llvm-project ]]; then
-    # Clone and build LLVM libc++ in the background while building musl lib
-    (
-        git clone https://github.com/llvm/llvm-project.git
-    ) &
-fi
-wait $(jobs -p)
 
-cd $CUR_DIR
-# podman pull alpine
-podman pull muslcc/x86_64:x86_64-linux-musl
-podman image prune -f
+cd musl/
+rm -rf build/
+chmod +x configure
 
-if [[ ! -d llvm-libc++_build || ! -d musl_libc_build ]]; then
-    printf "\nFound podman container runtime - executing container build...\n"
-    podman build -f $CUR_DIR/Containerfile --tag clyth_alpine_container:1.0 -v $CUR_DIR/libs_build/:/home/libs_build/:Z --format docker 
+# Configure to build musl to a local directory:
+./configure --prefix=../musl_libc_build/ --enable-optimize --disable-shared
+make
+make install
 
-    if [[ $? != 0 ]]; then
-        printf "Error occurred during podman build call - exiting\n"
-        podman image prune -f
-        exit 1
-    fi
-    podman rmi localhost/clyth_alpine_container:1.0
-    podman container prune --force
-    podman image prune -f
-fi
+# Now use the built musl-libc for static compiles via clang:
 
 CMAKE_LISTS_FILE_PATH=./compiler-src/
 rm -rf build/
