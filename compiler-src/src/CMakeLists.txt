@@ -1,6 +1,5 @@
 target_sources(
-	clyth_compiler_bin
-	PRIVATE
+	clyth_compiler_bin PUBLIC
 	common.hpp
 	cxxopts/cxxopts.hpp
 	lexer.hpp
