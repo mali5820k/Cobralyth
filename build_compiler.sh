@@ -48,8 +48,6 @@ fi
 
 # The overarching-goal of the below from-source builds is to 
 # provide an out-of-the-box solution that's self-contained for current and future static linkages for Clyth.
-
-
 CMAKE_LISTS_FILE_PATH=./compiler-backend/
 rm -rf build/
 cmake -S $CMAKE_LISTS_FILE_PATH -Bbuild -DCMAKE_C_COMPILER="zig cc" -DCMAKE_CXX_COMPILER="zig c++"

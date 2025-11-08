@@ -7,10 +7,10 @@ set(CMAKE_C_LINKER_DEPFILE_SUPPORTED FALSE)
 set(CMAKE_CXX_LINKER_DEPFILE_SUPPORTED FALSE)
 
 project(
-    clyth_compiler_bin
+    clyth_backend_compiler_bin
     VERSION 1.0.0
     LANGUAGES CXX
 )
 
-add_executable(clyth_compiler_bin)
+add_executable(clyth_backend_compiler_bin)
 add_subdirectory(src)

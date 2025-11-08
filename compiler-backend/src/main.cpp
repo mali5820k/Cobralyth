@@ -7,7 +7,7 @@
 
 int main(int argc, char** argv) {
     // Metadata and generate commandline flags:
-    std::string compiler_version("Cobralyth Compiler CPP: Version 1.0.0");
+    std::string compiler_version("Cobralyth Backend (JSON to LLVM IR) Compiler CPP: Version 1.0.0");
     cxxopts::Options options("clythcpp", compiler_version.c_str());
     std::filesystem::path main_file;
     std::string output_binary_name = std::string("main.bin");
