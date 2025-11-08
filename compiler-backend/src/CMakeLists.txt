@@ -2,13 +2,7 @@ target_sources(
 	clyth_compiler_bin PUBLIC
 	common.hpp
 	cxxopts/cxxopts.hpp
-	lexer.hpp
-	scanner.hpp
-	token.hpp
 	utilFunctions.hpp
-	lexer.cpp
-	scanner.cpp
-	token.cpp
 	utilFunctions.cpp
 	main.cpp
 )

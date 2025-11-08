@@ -1,7 +1,8 @@
 #include "common.hpp"
 #include "cxxopts/cxxopts.hpp"
 #include "scanner.hpp"
-#include "lexer.hpp"
+#include "json.hpp"
+
 //#include "parser.hpp"
 
 int main(int argc, char** argv) {
@@ -9,11 +10,12 @@ int main(int argc, char** argv) {
     std::string compiler_version("Cobralyth Compiler CPP: Version 1.0.0");
     cxxopts::Options options("clythcpp", compiler_version.c_str());
     std::filesystem::path main_file;
-    std::string output_binary_name = std::string("clyth_program.bin");
+    std::string output_binary_name = std::string("main.bin");
+    std::string default_program_json_file_name = std::string("main.json");
     options.add_options()
     ("d,debug", "Debug Mode enabled flag", cxxopts::value<bool>()->default_value("false"))
-    ("c,compile", "Program Entrypoint", cxxopts::value<std::string>()->default_value("main.clyth"))
-    ("o,output", "Output Binary Name", cxxopts::value<std::string>()->default_value("clyth_program.bin"))
+    ("c,compile", "Program JSON Instructions file", cxxopts::value<std::string>()->default_value(default_program_json_file_name))
+    ("o,output", "Output Binary Name", cxxopts::value<std::string>()->default_value(output_binary_name))
     ("v,version", "Version of compiler", cxxopts::value<bool>()->default_value("false"))
     ("h,help", "Display supported commands", cxxopts::value<bool>()->default_value("false"))
     ;
@@ -64,19 +66,15 @@ int main(int argc, char** argv) {
         return 1;
     }
 
-    if (std::filesystem::exists(main_file)) {
-        if (main_file.extension() != std::string(".clyth")) {
-            printf("ERROR: Ensure the main program file contains the '.clyth' file extension.\nExiting...");
-            return 1;
-        }
-
-        printf("Compiling %s\n", main_file.c_str());
-        
-        // Now to lex this result:
-        Lexer lexer = Lexer();
-        lexer.lexFile(main_file.c_str());
-        printf("Current Lexer's contents: %s",lexer.toString().c_str());
+    if (!std::filesystem::exists(main_file)) {
+        printf("ERROR: Ensure the main program json file\nExiting...");
+        return 1;
     }
+
+    printf("Proceeding with compile for: %s\n", main_file.c_str());
+    
+    // The AST from the main.json file is expected to be linearized - if it's not, the codegen will have unintended or unknown behavior once it's mapped to LLVM IR.
+
 
     return 0;
 }
