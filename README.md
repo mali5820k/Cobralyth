@@ -8,6 +8,14 @@ In short Clyth is:
   * High-level language ergonomics
   * LLVM IR
 
+You will find the project split into three sub-projects - All sub-projects fall under the MIT license specified in the repo:
+  * compiler-frontend
+    - This is a Typescript frontend, specifically chosen to allow for a flexible frontend experience to produce a linearized AST in json form for the backend to consume.
+  * compiler-backend
+    - A C++ project backend, specifically responsible for consuming the linearized AST from the compiler-frontend and producing LLVM IR and final binary statically linked against the clyth-runtime.
+  * clyth-runtime
+    - A C project that provides external libraries and Musl-libc to provide standalone binaries with permissive licenses. A C runtime was chosen to avoid the name-mangling issues encountered with C++ (LLVM libc++) when calling functions from within generated LLVM IR.
+
 ## Project Goals:
 ### Primary Goals:
 - Solving the loss of information of length and size with arrays when passed as function arguments.
@@ -103,8 +111,7 @@ In short Clyth is:
       return 0
     }
     ```
-  - The libc++ library will be leveraged to provide features to achieve general-purpose programming support -
-  (this is subject to change if linking against libc++ becomes cumbersome enough to warrant a C runtime instead).
+  - The Musl-libc library (in conjunction with external C libraries mentioned in the external libraries readme file under the clyth-runtime project folder) will be leveraged to provide features to achieve general-purpose programming support.
   - Memory management via [MECC](#mecc-overview) - Clyth will offer a manually-managed runtime by default with an opt-in automated, managed memory model.
   - Concurrency:
     - Threads will be implemented in a similar manner to how C does, however, the final implementation will favor intuitiveness and take inspiration from Go's goroutines - yet different in the execution and scheduling of threads.
@@ -190,10 +197,9 @@ In short Clyth is:
 ## Author's Note, Acknowledgements, and Legal comments:
 - Upon completing the C-based Lox Programming language implementation from Bob (Robert) Nystrom's "Crafting Interpreters" book, I set out to construct my own programming language from what I had learned then and have learned thus far in my own free time, doing research into programming language design and construction of AOT, JIT compilers, and interpreters. For reference, this project is not a continuation of Nystrom's work, nor is it a continuation of my past work that was derived from his book - this project is my own from-scratch implementation for a language that I am designing from the ground up.
 - After considerable thought, I decided to steer away from my previous design decisions to use Go, CIL bytecode, Java bytecode, C, and C++ for my compiler's output language targets. As this is a passion project of mine, the main reason to develop Clyth is to simplify developer-experience for those who love C programming for it's simplicity but need a modernized implementation to fix the pitfalls of C related to it being too barebones, yet to not compromise on performance when garbage collection is used while providing features that are found in higher-level languages.
-- For the sake of ease-of-distribution the LLVM-libc library is included in this repo (for x86 arch) as there's not an easy way to install it via a package manager (that I know of) as of 08/17/2025. The byproduct of this is Clyth can have llvm-libc bundled with the repo and not require recompilation from source for developers that may want to use Clyth. As this project matures, a compiler-installation script could be made to build llvm-libc and expose it for C/C++ compilation at a later time - for now it is included in the repo and the respective license is included in the [EXTERNAL_LIBRARIES_LICENSES.md](./EXTERNAL_LIBRARIES_LICENSES.md) file. This at least allows this repo to be a semi-self-contained one where supporting libraries are bundled together.
+- Zig compiler(s) toolchain is leveraged by the project to have cross-platform standalone binaries, specifically used for linking against musl-libc and llvm's libc++ libraries without any glibc or gnu libstdc++ implementations being used. This is primarily done for license preferences and avoiding GPL or LGPL licensing from impacting the distribution of binaries when statically linked. This is mentioned in the [EXTERNAL_LIBRARIES_LICENSES.md](./EXTERNAL_LIBRARIES_LICENSES.md) file for the compiler-backend and clyth-runtime projects which leverage the static-linkage capabilities.
 - This project is free from AI generated code - this is my own work as it's a passion-project of mine.
 - The project has undergone redesigns and this is the approach that I've landed on to stick with until Clyth itself is bootstrappable.
-- Additionally, any open-source libraries included in this project are mentioned in the 'EXTERNAL_LIBRARIES_LICENSES.md" file for due-diligence to the best of my ability.
 - I had to delete the old repository for the sake of cleaning up the entire project. This is now the latest project with the files carrying over from the previous repo version that was deleted. The license was originally from 2022, so that was the only adjustment I made in this repo's license to revert it back to 2022 from 2023.
 
 - I'm in no way assuming trademark of the name "Cobralyth" as it's an open-source project of mine and personally, I think trademarking programming language names is ridiculous as it's a language name, but I'm not a lawyer and this is my statement to anyone it may pertain to that my intention for using "Cobralyth" as a name is strictly for the sake of naming my project and not to infringe on trademarks or cause legal conflicts, and I assume no legal responsibility in the case this name is used elsewhere.
