@@ -10,7 +10,7 @@ In short Clyth is:
 
 You will find the project split into three sub-projects - All sub-projects fall under the MIT license specified in the repo:
   * compiler-frontend
-    - This is a Typescript frontend, specifically chosen to allow for a flexible frontend experience to produce a linearized AST in json form for the backend to consume.
+    - This is a Typescript frontend ran with Deno 2, specifically chosen to allow for a flexible frontend experience to produce a linearized AST in json form for the backend to consume.
   * compiler-backend
     - A C++ project backend, specifically responsible for consuming the linearized AST from the compiler-frontend and producing LLVM IR and final binary statically linked against the clyth-runtime.
   * clyth-runtime
