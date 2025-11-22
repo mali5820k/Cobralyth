@@ -15,7 +15,7 @@ int function_chain(auto value1, auto value2) {
     return test_function() + value + test_function2(test_function(), 1000) * value2
 }
 
-bool function_as_first_class_citizen(ref<function_chain> function_callback, int64 value) {
+bool function_as_first_class_citizen(function function_callback, int64 value) {
     if (function_callback(value, value*2) > 10000) {
         return true
     }

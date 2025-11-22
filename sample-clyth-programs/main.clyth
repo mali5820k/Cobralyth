@@ -1,9 +1,9 @@
 struct TestObj {
-   index: int64,
-   max: int64,
-   payload: string,
-   callback_functions: function[].
-   _counter: int64 // this is private/hidden except to methods inside this struct, indicated by the '_' in the beginning. It's enforced at the compiler-level but at runtime this field is accessible since it's part of the struct
+   int64 index
+   int64 max
+   string payload,
+   function[] callback_functions.
+   int64 _counter // this is private/hidden except to methods inside this struct, indicated by the '_' in the beginning. It's enforced at the compiler-level but at runtime this field is accessible since it's part of the struct
    
    // DEFAULT methods that must exist and don't need to specify the return-type - as they're automatically returning a TestObj instance - as this will be compiled out as if you wrote a separate struct and had functions in a specific C header/code file to use for that particular struct-type with a 'self' or struct reference. This resolves the grievance of C++ classes where in the separate implementation file you'd have to scope/namespace your class that you're defining the method bodies for - which is annoying and cumbersome. This way, it's lean and elegant in a single file and specific methods are IMPLIED by the compiler.
    constructor() {}

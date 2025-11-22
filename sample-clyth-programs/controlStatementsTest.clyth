@@ -78,7 +78,7 @@ for {
     print("something")
 }
 
-map[int:string] testMap = { 1: "10", 200: "something_else"}
+int:string testMap = {1: "10", 200: "something_else"}
 
 foreach (int x, string y in testMap) {
     print(`Key: ${x}, Value: ${y}\n\n`)

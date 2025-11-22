@@ -28,20 +28,22 @@ async function main(args: string[]) {
 
     if (compiler_flags.v) {
         console.log(`${release_info_file.Name} ${release_info_file.Version}`)
+        Deno.exit(0)
     }
 
-    // console.log("Current flags used:", compiler_flags)
+    if (compiler_flags.h || compiler_flags.help) {
+        console.log("Sample usage:\n\tdeno run Main.ts -c main.clyth -o output.bin\n\n\t-h or --help for printing supported flags (this)\n\t-v or --version for vompiler version information\n\t-c for specifying main clyth program source code file (file containing main function)\n\t-o for specifying the output binary name\n")
+        Deno.exit(0)
+    }
     if (!compiler_flags.c) {
-        console.log("ERROR: Must provide a -c flag and Clyth code-file to begin compilation!")
+        console.log("ERROR: Must provide a -c flag and Clyth code-file to begin compilation!\nUsage: deno run Main.ts -c main.clyth -o output.bin\n\nFor help use the '-h' or '--help' flags.\n")
         Deno.exit(2)
     }
-    const file_contents = await readFile(compiler_flags.c)
-    console.log(file_contents)
     
     // Read in a file and lex it line-by-line:
-    const lexer = new Lexer(file_contents)
-    console.log(`Lexer tokens: ${lexer.tokenize_string()}`)
-
+    const lexer = new Lexer(compiler_flags.c)
+    console.log(`Lexer tokens: ${await lexer.tokenize_file()}`)
+    console.log(`Completed Lexing of file - ending program...\n`)
 }
 
 main(Deno.args)
