@@ -23,3 +23,25 @@ float x1 = 10.00;
 float x2 = 10.000000000000000;
 
 int y = 100;
+
+// This is a comment to be ignored
+/**
+ * This is a comment-block to be ignored
+ */
+if (true) {
+    int8 myValue = 239;
+} else if (false) {
+    int16 myValue = 200;
+} else {
+    float64 myFloat = 100000.000823f32;
+}
+
+for (;;) {
+    // This is inside of a for-loop
+}
+for (int64 i = 10; true;) {
+    // This is inside of a for-loop
+    if (true) {
+        
+    }
+}

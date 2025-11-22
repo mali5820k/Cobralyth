@@ -1,7 +1,9 @@
-import { Lexer, Token, TokenType } from "./Lexer.ts"
 import { parseArgs } from "jsr:@std/cli/parse-args"
 import { exists } from "jsr:@std/fs/exists";
 import release_info_file from "./release_info.json" with { type: "json" }
+import { CharStream, CommonTokenStream } from "npm:antlr4"
+import CobralythLexer from './CobralythLexer.ts'
+import CobralythParser from './CobralythParser.ts'
 
 async function readFile(file_path: string) {
     try {
@@ -19,7 +21,7 @@ async function readFile(file_path: string) {
     }
 }
 
-async function main(args: string[]) {
+function main(args: string[]) {
     // Parse arguments:
     const compiler_flags = parseArgs(args, {
         boolean: ["h","help", "v", "version"],
@@ -40,10 +42,7 @@ async function main(args: string[]) {
         Deno.exit(2)
     }
     
-    // Read in a file and lex it line-by-line:
-    const lexer = new Lexer(compiler_flags.c)
-    console.log(`Lexer tokens: ${await lexer.tokenize_file()}`)
-    console.log(`Completed Lexing of file - ending program...\n`)
+    
 }
 
 main(Deno.args)
