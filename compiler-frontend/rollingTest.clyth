@@ -45,3 +45,17 @@ for (int64 i = 10; true;) {
         
     }
 }
+int i = 0;
+for (i = 10; true;) {
+    // This is inside of a for-loop
+    if (true) {
+        
+    }
+}
+
+while (i < 10) {
+    if (true) {
+        printf("This is an infinite loop unless i is incremented")
+        i++
+    }
+}
