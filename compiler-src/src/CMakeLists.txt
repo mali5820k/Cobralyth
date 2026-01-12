@@ -1,11 +1,14 @@
 target_sources(
-	clyth_backend_compiler_bin PUBLIC
+	clyth_compiler_bin PUBLIC
 	common.hpp
 	cxxopts/cxxopts.hpp
-	json.hpp
+	lexer.hpp
 	scanner.hpp
+	token.hpp
 	utilFunctions.hpp
-	utilFunctions.cpp
+	lexer.cpp
 	scanner.cpp
+	token.cpp
+	utilFunctions.cpp
 	main.cpp
 )

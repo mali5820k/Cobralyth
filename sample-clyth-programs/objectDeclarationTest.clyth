@@ -1,16 +1,14 @@
 int32[] sample_list = []
 
-numeric[] sample_generic_numeric_list;
-
-map[numeric:string] sample_map = {
+numeric:string sample_map = {
     1 : "something",
     2 : "something else",
     1000: "something elser",
 }
 
-set[int] sample_set = (
+int() sample_set = {
     1, 2, 3, 4, 5, 10, 3000, 2000, 2000, 3000
-)
+}
 
 interface MyInterface {
     void interfaceMethod();

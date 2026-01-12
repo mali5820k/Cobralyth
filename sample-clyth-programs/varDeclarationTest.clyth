@@ -18,11 +18,8 @@ string someString; // same as ""
 char aChar = ""; // can be single or double quotes;
 char anotherChar = '';
 
-auto x = 10;
-auto x1 = 10.00;
-auto x2 = 10.000000000000000;
-const auto x3 = cast(int32, 10);
-const auto x4 = cast(int64, 10);
-const auto x5 = cast(int8, 10);
+int x = 10;
+float x1 = 10.00;
+float x2 = 10.000000000000000;
 
-auto y = 100;
+int y = 100;

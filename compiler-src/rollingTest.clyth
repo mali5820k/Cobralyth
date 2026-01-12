@@ -1,0 +1,61 @@
+int8 a = 0;
+int16 b = 1;
+int32 c = 10;
+int64 d = 100;
+int e = 1000; // defaults to int64
+uint8 f = 200;
+uint16 g = 10020;
+uint32 h = 9090;
+uint64 i = 90809809;
+
+float32 l = 10;
+float64 m = 100;
+float o = 10890;
+double p = 50;
+
+string myString = "";
+string someString; // same as ""
+char aChar = ""; // can be single or double quotes;
+char anotherChar = '';
+
+int x = 10;
+float x1 = 10.00;
+float x2 = 10.000000000000000;
+
+int y = 100;
+
+// This is a comment to be ignored
+/**
+ * This is a comment-block to be ignored
+ */
+if (true) {
+    int8 myValue = 239;
+} else if (false) {
+    int16 myValue = 200;
+} else {
+    float64 myFloat = 100000.000823f32;
+}
+
+for (;;) {
+    // This is inside of a for-loop
+}
+for (int64 i = 10; true;) {
+    // This is inside of a for-loop
+    if (true) {
+        
+    }
+}
+int i = 0;
+for (i = 10; true;) {
+    // This is inside of a for-loop
+    if (true) {
+        
+    }
+}
+
+while (i < 10) {
+    if (true) {
+        printf("This is an infinite loop unless i is incremented")
+        i++
+    }
+}
