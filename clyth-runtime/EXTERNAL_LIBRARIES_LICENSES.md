@@ -1,4 +1,4 @@
-# These are licenses for libraries included in the clyth-backend project files
+# These are licenses for libraries included in the clyth runtime project files
 
 # Musl-libc
 # MIT license:

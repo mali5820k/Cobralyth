@@ -1,0 +1,110 @@
+struct TestObj {
+   int64 index
+   int64 max
+   string payload
+   function[] callback_functions
+   int64 _counter // this is private/hidden except to methods inside this struct, indicated by the '_' in the beginning. It's enforced at the compiler-level but at runtime this field is accessible since it's part of the struct
+   
+   constructor() {}
+
+   // Any additional functions/methods are just written like regular functions too but return types must be specified now.
+
+   // This below is an example of using structs for parameters and a good use of showing a function pointer/reference is supposed to be passed into this method to call back to. The structure of the function is hidden and it's intentional, so you have to document the function structure(s) being called-back to as a comment above the function/method for other developers to know how to use your callback.
+   bool register_callback(function callback_function, optional args{}) {
+      if (this.index > 1000) {
+         this.callback_functions.append(callback_function, args) // Second field is always required for the args needed for this function. You don't have to specify them if no args are needed as an empty struct/null will be inserted instead.
+      } else {
+         this.callback_functions.append(callback_function) // no args;
+      }
+      return true
+   }
+   // If you want to implement an interface - simply include it here:
+  include(interface_drawable, interface_collection, interface_equivalent)
+  bool draw() {}
+  
+  // Like Java - an iterator for has_next and current iterator call to get next instance of TestObj for very niche cases where you are making something that Clyth doesn't provide you for your looping schemes. Essentially, loops will call into your has_next and iter calls to check if there is a next-iteration for another element before calling iter to retrieve that next element and incrementing internally. The counter for iter will be included by the compiler from the interface import statement, that way you only need to worry about the function calls and not the primitives or fields associated with the interface. Perhaps IDE's could add them here for more convenience and developer ease-of-use.
+  bool has_next() {}
+  TestObj iter() {}
+  
+  // With more IDE and compiler tooling - this can simply be added into this struct for convenience. Ultimately - this could be stored as type-info for reflection at runtime for things like - TestObj my_instance = new TestObj(0, 1, "string"); bool test = my_instance is interface_drawable; // the interface tags in the struct would be compared to this drawable as a string for true or false at runtime or even at compile-time if the struct is visible to the compiler in src-form.
+}
+
+bool callback_function (TestObj instance) {
+   if instance is drawable {
+      printf("Drawable instance - can draw component!")
+      return true
+   }
+      return false
+}
+
+int main (string args[]) {
+   TestObj myObj = new TestObj({0, 100, "something"}) // default to global arena;
+   callback_function(myObj)
+   callback_function(myObj.clone())
+   myObj.index = 100000;
+   myObj.register_callback(callback_function, { instance: myObj.clone() }) // an optional args list in JSON/struct form.
+
+   int8 a = 0;
+int16 b = 1;
+int32 c = 10;
+int64 d = 100;
+int e = 1000; // defaults to int64
+uint8 f = 200;
+uint16 g = 10020;
+uint32 h = 9090;
+uint64 i = 90809809;
+
+float32 l = 10;
+float64 m = 100;
+float o = 10890;
+double p = 50;
+
+string myString = "";
+string someString; // same as ""
+char aChar = ""; // can be single or double quotes;
+char anotherChar = '';
+
+int x = 10;
+float x1 = 10.00;
+float x2 = 10.000000000000000;
+
+int y = 100;
+
+// This is a comment to be ignored
+/**
+ * This is a comment-block to be ignored
+ */
+if (true) {
+    int8 myValue = 239;
+} else if (false) {
+    int16 myValue = 200;
+} else {
+    float64 myFloat = 100000.000823f32;
+}
+
+for (;;) {
+    // This is inside of a for-loop
+}
+for (int64 i = 10; true;) {
+    // This is inside of a for-loop
+    if (true) {
+        
+    }
+}
+int i = 0;
+for (i = 10; true;) {
+    // This is inside of a for-loop
+    if (true) {
+        
+    }
+}
+
+while (i < 10) {
+    if (true) {
+        printf("This is an infinite loop unless i is incremented")
+        i++
+    }
+}
+
+   return 0
+}

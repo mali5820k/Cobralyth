@@ -19,3 +19,4 @@ compiler-dev/frontend/.vscode/settings.json
 /build
 /libs_build
 /compiler-frontend/.antlr
+/build-compiler

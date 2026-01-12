@@ -1,0 +1,37 @@
+#ifndef TOKEN_HPP
+#define TOKEN_HPP
+#include "common.hpp"
+
+enum TokenType {
+    IF, ELSE, TRY, CATCH, SWITCH, CASE, DEFAULT, FOR, WHILE,
+    BREAK, CONTINUE, RETURN,
+    LEFT_PAREN, RIGHT_PAREN,
+    LEFT_BRACK, RIGHT_BRACK,
+    LEFT_CURLY, RIGHT_CURLY,
+    DOT, COMMA, SEMICOLON, COLON, DOUBLE_QUOTE, SINGLE_QUOTE,
+    STAR, STAR_EQUALS, STAR_STAR, FORWARDS_SLASH, BACKWARDS_SLASH,
+    PLUS, PLUS_PLUS, MINUS, MINUS_MINUS,
+    MODULO, MODULO_EQUALS, SLASH_EQUALS, EQUAL, EQUAL_EQUAL,
+    GREATER_THAN, LESS_THAN, GREATER_EQUAL, LESSER_EQUAL,
+    NOT, NOT_EQUAL, 
+
+    AND, OR, BIT_AND, BIT_OR, BIT_XOR, BIT_NOT,
+    AUTO, CONST, NULL_,
+    NEW, FREE, POUND,
+    INT8, INT16, INT32, INT64,
+    UINT8, UINT16, UINT32, UINT64,
+    FLOAT32, FLOAT64,
+    CHAR, STRING, IDENTIFIER, UNDEFINED
+};
+
+class Token {
+public:
+    std::string value;
+    TokenType type;
+
+    std::string toString();
+    Token(std::string value, TokenType type);
+    ~Token();
+};
+
+#endif
