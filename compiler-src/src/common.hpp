@@ -11,4 +11,12 @@
 #include <stdexcept>
 #include <memory>
 #include "utilFunctions.hpp"
+#include <fmt/format.h>
+#include <fmt/compile.h>
+#include <fmt/chrono.h>
+#include <fmt/ranges.h>
+#include <fmt/printf.h>
+#include <fmt/color.h>
+#include <fmt/std.h>
+#include <fmt/os.h>
 #endif

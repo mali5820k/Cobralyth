@@ -46,6 +46,11 @@ if [[ $MISSING == 1 ]]; then
     exit -1
 fi
 
+# Clone fmt library:
+if [[ ! -d $CUR_DIR/compiler-src/fmt ]]; then
+    git clone https://github.com/fmtlib/fmt.git $CUR_DIR/compiler-src/fmt
+fi
+
 # The overarching-goal of the below from-source builds is to 
 # provide an out-of-the-box solution that's self-contained for current and future static linkages for Clyth.
 CMAKE_LISTS_FILE_PATH=$CUR_DIR/compiler-src/
@@ -53,11 +58,4 @@ COMPILER_BUILD_PATH=$CUR_DIR/build-compiler/
 rm -rf $COMPILER_BUILD_PATH
 cmake -S $CMAKE_LISTS_FILE_PATH -B${COMPILER_BUILD_PATH} -DCMAKE_C_COMPILER="zig cc" -DCMAKE_CXX_COMPILER="zig c++"
 cd $COMPILER_BUILD_PATH
-make
-
-CMAKE_LISTS_FILE_PATH=$CUR_DIR/clyth-runtime/
-CLYTH_RUNTIME_PATH=$CUR_DIR/build-runtime/
-rm -rf $CLYTH_RUNTIME_PATH
-cmake -S $CMAKE_LISTS_FILE_PATH -B${CLYTH_RUNTIME_PATH} -DCMAKE_C_COMPILER="zig cc" -DCMAKE_CXX_COMPILER="zig c++"
-cd $CLYTH_RUNTIME_PATH
 make

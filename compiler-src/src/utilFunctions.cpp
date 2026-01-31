@@ -5,7 +5,7 @@
  * @param file_name path containing name of file
  * @returns bool
  */
-bool fileExists(std::string file_name) {
+bool file_exists(std::string file_name) {
     std::filesystem::path file_path(file_name);
     return std::filesystem::exists(file_path);
 }
@@ -15,9 +15,9 @@ bool fileExists(std::string file_name) {
  * @param file_name path containing name of file
  * @returns std::vector<std::string> with scanned lines or an empty vector if invalid.
  */
-std::vector<std::string> readLines(std::string file_name) {
+std::vector<std::string> read_lines(std::string file_name) {
     std::vector<std::string> scanned_lines;
-    if (!fileExists(file_name)) {
+    if (!file_exists(file_name)) {
         printf("\nERROR: File path %s does NOT exist\n", file_name.c_str());
         return scanned_lines;
     }
