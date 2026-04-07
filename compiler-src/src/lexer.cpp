@@ -25,8 +25,9 @@ bool Lexer::lex_input(std::vector<std::string> file_contents) {
     std::string current_input_string = "";
     bool in_string = false;
     fmt::println("Starting lex_input...");
+    // Loop through all the lines in a file:
     while (this->current_line_idx < file_contents.size()) {
-        fmt::println("The current-Char is: {}", this->current_character());
+        fmt::println("The current-Char is: '{}'; current_line_idx is: {}; file-contents size is: {}", this->current_character(), this->current_line_idx, file_contents.size());
         switch (this->current_character()[0]) {
             /**
              * For strings using double-quotes and backticks, and characters with single-quotes:
@@ -77,23 +78,34 @@ std::string Lexer::look_ahead() {
 }
 
 std::string Lexer::current_character() {
-    std::string character = fmt::format("{}", this->file_scanner.get_contents()[this->current_line_idx][this->current_char_idx]);
+    std::vector<std::string> scanner_contents = this->file_scanner.get_contents();
+    std::string line_entry = scanner_contents[this->current_line_idx];
+    if (this->current_char_idx >= line_entry.length()) {
+        return "\0";
+    }
+    std::string character = fmt::format("{}", line_entry[this->current_char_idx]);
     return character;
 }
 
 std::string Lexer::consume_character() {
     std::string character = this->current_character();
-    fmt::println("Consuming the current character - checking if can move to next char...");
-    if (this->file_scanner.get_contents()[this->current_line_idx].length() > this->current_char_idx) {
-        fmt::println("Moving to next-char in line: {}", this->current_char_idx+1);
-        this->current_line_idx += 1;
+    auto string_vector_of_lines = this->file_scanner.get_contents();
+    auto max_lines = string_vector_of_lines.size();
+    auto current_line_length = string_vector_of_lines[this->current_line_idx].length();
+    fmt::println("Consumed the current character: '{}'", this->current_character());
+    if (current_line_length > this->current_char_idx) {
+        this->current_char_idx += 1;
+        return character;
     } else {
-        fmt::println("Moving to next-line: {}", this->current_line_idx+1);
-        this->current_line_idx += 1;
-        this->current_char_idx = 0;
+        if (max_lines > this->current_line_idx + 1) {
+            this->current_line_idx += 1;
+            this->current_char_idx = 0;
+            return character;
+        }
+        // Otherwise, we're simply out of lines:
+        this->current_line_idx = max_lines;
+        return "\0";
     }
-    fmt::println("Consumed character: {}", character);
-    return character;
 }
 
 /**
@@ -111,11 +123,11 @@ std::string Lexer::to_string() {
 void Lexer::lex_string() {
     fmt::println("Parsing a string...");
     std::string string_value = this->consume_character();
-    while (this->current_character() != "\"") {
-
+    while (true) {
         std::string consumed_char = this->consume_character();
-        if (consumed_char != "\0") {
+        if ((consumed_char == "\"" && consumed_char != "\\\"") || consumed_char != "\0") {
             string_value += consumed_char;
+            fmt::println("Current string_character is: {} at current_char_idx: {}", consumed_char, this->current_char_idx);
         } else {
             break;
         }

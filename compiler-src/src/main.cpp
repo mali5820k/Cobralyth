@@ -74,7 +74,7 @@ int main(int argc, char** argv) {
         
         // Now to lex this result:
         Lexer lexer = Lexer();
-        lexer.lex_file(main_file.c_str());
+        lexer.lex_file(main_file);
         printf("Current Lexer's contents: %s",lexer.to_string().c_str());
     }
 
