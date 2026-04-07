@@ -8,10 +8,11 @@ The project is evolving and the Readme may be updated to reflect the latest desi
 ## About Clyth:
 Clyth is an ahead-of-time (AOT) compiled language that aims to be an opinionated iteration of C that improves memory-management experience for developers without the runtime overhead associated with common garbage collection implementations. It takes major inspiration from C++ runtime performance and syntax inspired by scripting languages to reduce cognitive load on developers with improved ergonomics. The Managed Entanglement with Container-based Collections (MECC) system is designed to automatically transform developer code into single-ownership compliant code with pre-determined lifetimes for memory collection at compile-time, enabling performance comparable to Rust's borrow-checker and C++ RAII smart-pointers or arena based schemas in terms of runtime CPU performance without the cognitive burden on developers for adapting to a new paradigm of programming and without the tracing overhead common in garbage collected languages like Golang.
 
-In short Clyth is:
-  * Ahead Of Time (AOT) compiled
-  * [MECC](#mecc-overview)
-  * Pass-by-reference
+In short Clyth is a C-family systems programming language with the performance characteristics of Rust without the cognitive burden of adhering to a borrow-checker like Rust requires.
+A quick list of features Clyth are:
+  * Ahead Of Time (AOT) compiled programs (binaries)
+  * [MECC](#mecc-overview) which places Clyth in the 'no runtime garbage collection' group of languages such as Rust with it's borrow-checker.
+  * Pass-by-reference for objects and pass-by-value for primitive constant values.
   * High-level language ergonomics
   * LLVM IR
 
@@ -27,27 +28,26 @@ You will find the project split into sub-projects that all fall under the main M
 - Solving the loss of information of length and size with arrays when passed as function arguments.
 - Default data-structures (dynamic lists, maps, and sets).
 - Simplifying dereferencing symbols (right-arrow vs dot operator) to just the dot operator.
-- [MECC](#mecc-overview), a non-blocking memory-management model with automatic single-ownership enforcement for memory reclamation to prevent cyclic references.
+- [MECC](#mecc-overview), a non-blocking memory-management model with automatic single-ownership enforcement for memory reclamation, done at compile time to prevent cyclic references conflicting with memory reclamation at runtime.
 
 ### Future Aspirations:
 - Documentation and design visualizations will be made at a later date as a solid release of Clyth is made.
-- Package manager for Clyth
+- Package manager and build-system for Clyth
   - An out-of-the-box solution that can work offline or online.
   - Assisting license management on compilation - any licenses used by imported packages (MIT or BSD for instance) will be compiled into the binary and a separate licenses file to aid developers to automate compliance with those licenses. Note - license compliance ultimately falls onto the developer and any automation failures or mistakes must be checked by the developer for correct and proper compliance.
 - JSON support
 - GUI support
 - Websockets and Webserver backend support
-- Package and build system that can work locally instead of always requiring an online connection.
 - Support for IoT devices and other embedded architectures, such as running on a raspberry pi
-- OpenCL and CUDA support
-- MLIR support for GPUs (this needs further research)
+- Potential OpenCL, ROCm and/or CUDA support (depending on which approach reaches the widest compatability)
+- MLIR support for GPUs (this needs further research alongside the other GPU supporting options)
 - Cross platform compilation to WASM using a non-browser runtime (i.e., wasmer)
 
 ## The Current Runtime Specification (subject to change as project evolves):
   - Pass-by-reference is used by default.
     This is done to reduce calling complexity by allowing the programmer to simply call functions and make pass-by-value an explicitly opt-in operation - with the exception being primitive values like ints, floats, doubles, and chars being pass-by-value by default.
 
-  - No function overloading is supported. This is to prevent Java-like code-expansion, which often results in more complexity in large codebases. If you need function-overloading, leverage structs or generics (in the future) and update the functions accordingly.
+  - No function overloading is supported. This is to prevent Java-like code-expansion, which often results in more complexity in large codebases. If you need function-overloading, leverage structs, or generics (in the future) and update the functions accordingly.
   For example, functions can receive a struct that resembles JavaScript-like objects with a variable corresponding to a value. This is subject to change if the ergonomics for writing generic code are hindered greatly.
     ```cpp
     int test_function (Obj1 object1, int64 value2, bool optional=false) {
@@ -143,7 +143,7 @@ You will find the project split into sub-projects that all fall under the main M
     - Eliminates tracing, marking + sweeping, and pausing (stop-the-world) that typical tracing garbage collectors suffer from.
     - Eliminates cyclic references by enforcing single-ownership semantics and weak-pointer references for object references and containers (lists/vectors, maps, etc) by default.
     - The cognitive load of memory-management is lifted away from the programmer and managed by the compiler - therefore semantics for strong versus weak references are managed by the compiler at compilation.
-    All container objects hold references to these wrappers but only on a move/assignment operation - by themselves, they're empty, and no duplicate wrappers will exist for a referenced object as move operations will be done by the compiler to ensure single references after unnecessary aliases are removed (see below for alias cleanup example).
+    All object references are de-duplicated by the compiler in a scope to ensure single-ownership references after unnecessary aliases are removed (see below for alias cleanup example).
     - All objects and containers (lists, arrays, linked-lists, maps, and sets) ownership semantics follows this simple set of rules:
     1. Containers will have priority over individual variable reference objects when ownership is being established - unless the individual variable reference is global alongside the collection it's competing with.
     ```cpp
