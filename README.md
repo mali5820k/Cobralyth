@@ -143,7 +143,7 @@ You will find the project split into sub-projects that all fall under the main M
     - Eliminates tracing, marking + sweeping, and pausing (stop-the-world) that typical tracing garbage collectors suffer from.
     - Eliminates cyclic references by enforcing single-ownership semantics and weak-pointer references for object references and containers (lists/vectors, maps, etc) by default.
     - The cognitive load of memory-management is lifted away from the programmer and managed by the compiler - therefore semantics for strong versus weak references are managed by the compiler at compilation.
-    All object references are de-duplicated by the compiler in a scope to ensure single-ownership references after unnecessary aliases are removed (see below for alias cleanup example).
+    All object references are de-duplicated by the compiler in a scope to ensure only single-ownership references remain after unnecessary aliases are removed (see below for alias cleanup example).
     - All objects and containers (lists, arrays, linked-lists, maps, and sets) ownership semantics follows this simple set of rules:
     1. Containers will have priority over individual variable reference objects when ownership is being established - unless the individual variable reference is global alongside the collection it's competing with.
     ```cpp
