@@ -144,13 +144,6 @@ You will find the project split into sub-projects that all fall under the main M
     - Eliminates cyclic references by enforcing single-ownership semantics and weak-pointer references for object references and containers (lists/vectors, maps, etc) by default.
     - The cognitive load of memory-management is lifted away from the programmer and managed by the compiler - therefore semantics for strong versus weak references are managed by the compiler at compilation.
     All container objects hold references to these wrappers but only on a move/assignment operation - by themselves, they're empty, and no duplicate wrappers will exist for a referenced object as move operations will be done by the compiler to ensure single references after unnecessary aliases are removed (see below for alias cleanup example).
-    ```cpp
-    // NOTE: This is not exposed in Clyth, this is an implicit set of metadata built into the language itself.
-    struct ExampleWrapperVisualization<T> {
-      bool owns_reference,
-      generic<T> reference_to_obj
-    }
-    ```
     - All objects and containers (lists, arrays, linked-lists, maps, and sets) ownership semantics follows this simple set of rules:
     1. Containers will have priority over individual variable reference objects when ownership is being established - unless the individual variable reference is global alongside the collection it's competing with.
     ```cpp
