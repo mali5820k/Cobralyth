@@ -143,7 +143,6 @@ You will find the project split into sub-projects that all fall under the main M
     - Eliminates tracing, marking + sweeping, and pausing (stop-the-world) that typical tracing garbage collectors suffer from.
     - Eliminates cyclic references by enforcing single-ownership semantics and weak-pointer references for object references and containers (lists/vectors, maps, etc) by default.
     - The cognitive load of memory-management is lifted away from the programmer and managed by the compiler - therefore semantics for strong versus weak references are managed by the compiler at compilation.
-    - No naked pointers - each reference is wrapped in a smart-pointer-esque wrapper where a bit signifies if the wrapper owns the reference being pointed to or not. These are what get passed around and NOT raw references.
     All container objects hold references to these wrappers but only on a move/assignment operation - by themselves, they're empty, and no duplicate wrappers will exist for a referenced object as move operations will be done by the compiler to ensure single references after unnecessary aliases are removed (see below for alias cleanup example).
     ```cpp
     // NOTE: This is not exposed in Clyth, this is an implicit set of metadata built into the language itself.
