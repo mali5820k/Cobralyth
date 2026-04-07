@@ -1,26 +1,25 @@
 # Cobralyth, Clyth for short
 
 ## Current Status:
-Clyth is currently being transitioned from an Antlr4 frontend implementation to a C++ and Pratt Parser implementation for future development flexibility and eventually performance.
+The Clyth frontend is currently being explored between an Antlr4 frontend implementation and a C++ Pratt Parser implementation. This decision may swing in favor of Antlr4 if project time and effort exceeds the benefits of maintaining a custom parser.
 
 The project is evolving and the Readme may be updated to reflect the latest design decisions.
 
 ## About Clyth:
-Clyth is an ahead-of-time (AOT) compiled language that aims to be an opinionated iteration of C that improves memory-management experience for developers without the runtime overhead associated with common garbage collection implementations. It takes major inspiration from C++ runtime performance and syntax inspired by scripting languages to reduce cognitive load on developers with improved ergonomics. The Managed Entanglement for Collapsable Collection [MECC](#mecc-overview) memory management system is designed to embed arena-oriented-programming (AOP) into the base language, enabling performance comparable to C++ RAII smart-pointers or arena based schemas in terms of runtime CPU performance without the tracing overhead common in garbage collected languages like Golang.
+Clyth is an ahead-of-time (AOT) compiled language that aims to be an opinionated iteration of C that improves memory-management experience for developers without the runtime overhead associated with common garbage collection implementations. It takes major inspiration from C++ runtime performance and syntax inspired by scripting languages to reduce cognitive load on developers with improved ergonomics. The Managed Entanglement with Container-based Collections (MECC) system is designed to automatically transform developer code into single-ownership compliant code with pre-determined lifetimes for memory collection at compile-time, enabling performance comparable to Rust's borrow-checker and C++ RAII smart-pointers or arena based schemas in terms of runtime CPU performance without the cognitive burden on developers for adapting to a new paradigm of programming and without the tracing overhead common in garbage collected languages like Golang.
 
 In short Clyth is:
   * Ahead Of Time (AOT) compiled
-  * Arena Oriented Programming (AOP)
-  * MECC (no stop-the-world collector, no tracing overhead)
+  * [MECC](#mecc-overview)
   * Pass-by-reference
   * High-level language ergonomics
   * LLVM IR
 
-You will find the project split into three sub-projects - All sub-projects fall under the MIT license specified in the repo:
+You will find the project split into sub-projects that all fall under the main MIT license specified in the repo:
   * compiler-src
-    - A C++ project, specifically responsible for consuming the linearized AST from the compiler-frontend and producing LLVM IR and final binary statically linked against the clyth-runtime
+    - A C++ project, specifically responsible for generating and consuming an AST and producing a binary from LLVM IR to statically link against the clyth-runtime
   * clyth-runtime
-    - A C project that provides external libraries leveraging Musl-libc to provide standalone binaries with permissive licenses. A C runtime was chosen to avoid the name-mangling issues encountered with C++ (LLVM libc++) when calling functions from within generated LLVM IR.
+    - The language's standard library to provide file-io, multi-threading, common datastructures, and more as the project grows in maturity.
   As with all projects - the directory structure may change as the project evolves.
 
 ## Goals and Aspirations:
@@ -28,7 +27,7 @@ You will find the project split into three sub-projects - All sub-projects fall 
 - Solving the loss of information of length and size with arrays when passed as function arguments.
 - Default data-structures (dynamic lists, maps, and sets).
 - Simplifying dereferencing symbols (right-arrow vs dot operator) to just the dot operator.
-- [MECC](#mecc-overview), a non-blocking memory-management model with automatic single-ownership enforcement for memory reclamation to prevent cyclic references in memory-arenas.
+- [MECC](#mecc-overview), a non-blocking memory-management model with automatic single-ownership enforcement for memory reclamation to prevent cyclic references.
 
 ### Future Aspirations:
 - Documentation and design visualizations will be made at a later date as a solid release of Clyth is made.
@@ -117,7 +116,6 @@ You will find the project split into three sub-projects - All sub-projects fall 
       return 0
     }
     ```
-  - The Musl-libc library (in conjunction with external C libraries mentioned in the external libraries readme file under the clyth-runtime project folder) will be leveraged to provide features to achieve general-purpose programming support.
   - Memory management via [MECC](#mecc-overview)
   - Concurrency:
     - Threads will be implemented in a similar manner to how C does, however, the final implementation will favor intuitiveness and take inspiration from Go's goroutines - yet different in the execution and scheduling of threads.
@@ -140,19 +138,103 @@ You will find the project split into three sub-projects - All sub-projects fall 
 
 - ### Memory Management:
   #### MECC Overview:
-  - Managed Entanglement for Collapsable Collection (MECC) Architecture for non-pausing ownership-based memory collection.
-  - Conceptually consider MECC as compile time static-analysis to ensure resources are freed in a deterministic fashion without burdening the user with borrow-checker semantics and learning curve. The compiler aims to do the heavy-lifting and keep the experience as close as possible to writing C-like code.
-    - Eliminates tracing, marking, and pausing (stop-the-world) that typical tracing garbage collectors suffer from.
-    - Eliminates cyclic references by enforcing single-ownership with arena promotions and weak-pointer like behavior for containers (lists/vectors, maps, etc) by default.
-    - A scope is a memory-arena by default, which ensures all heap allocations are made to a default location if an alternative arena isn't defined for allocations.
-    - A memory-arena can be promoted and bound to a parent's memory-arena. This is especially leveraged in Clyth to perform escape analysis on returned elements and promote them to the arena of the calling scope (i.e., main method arena is the parent arena for any function called directly from the main function's scope).
-    - A memory-arena may grow in size to accommodate additional allocations. This is managed via arena.add(object) calls and can be optional as the compiler will do this step unless the programmer chooses another arena to promote or allocate values into.
-    - Binding is the action of making an arena from a different parent-scope to be bound to the same lifetime. As an example, threads of different arenas may maintain different parent scopes. The inspiration of this is to allow cases where a developer may wish to allocate an arena and preserve it for different stages of a program.
-    - Unmounting is the action of 'freeing' memory. The unmount() calls are injected by the compiler after function-call boundaries, end of scopes, and at unmount(object) calls which are entirely optional and are written by the programmer if memory is no longer needed and can be freed earlier than MECC's unmount events. A note - MECC doesn't pause for freeing memory, these instructions are akin to calling 'free' in C or 'delete' in C++.
-    - Transitive dependencies occur when a returned object references other heap-allocated objects from the same scope. The compiler (MECC) will ensure those transitive dependencies are within the same memory arena as the returned object by promoting to the parent-arena at compile time. On deallocation, the transitive dependencies are also freed as they share the same memory-arena.
-    - Ownership limitation of containers (lists/vectors, maps, etc) due to MECC - CONTAINERS DO NOT own elements unless they're value-types (primitives). Any heap-referenced or allocated objects are not owned by containers, instead the pointers within the container (which point to objects on the heap) are owned and unmounting a container simply frees the reference-pointers and the container itself NOT the elements referenced by those pointers. This preserves ownership of elements by arena and avoids cases where two or more containers refer to the same object and one container gets deallocated, effectively causing dangling pointer references to non-existent memory everywhere else.
-    Conceptually, you may consider containers emulating 'weak-pointer references'.
-    
+  - Managed Entanglement with Container-based Collections (MECC) Architecture for non-pausing ownership-based memory collection.
+  - Conceptually consider MECC as a compile time static-analysis and structuring memory management for runtime to ensure resources are freed in a deterministic fashion without burdening the user with borrow-checker semantics and learning curve. The compiler aims to do the heavy-lifting and keep the experience as close as possible to writing C-like code.
+    - Eliminates tracing, marking + sweeping, and pausing (stop-the-world) that typical tracing garbage collectors suffer from.
+    - Eliminates cyclic references by enforcing single-ownership semantics and weak-pointer references for object references and containers (lists/vectors, maps, etc) by default.
+    - The cognitive load of memory-management is lifted away from the programmer and managed by the compiler - therefore semantics for strong versus weak references are managed by the compiler at compilation.
+    All container objects hold references to these wrappers but only on a move/assignment operation - by themselves, they're empty, and no duplicate wrappers will exist for a referenced object as move operations will be done by the compiler to ensure single references after unnecessary aliases are removed (see below for alias cleanup example).
+    ```cpp
+    // NOTE: This is not exposed in Clyth, this is an implicit set of metadata built into the language itself.
+    struct ExampleWrapperVisualization<T> {
+      bool owns_reference,
+      generic<T> reference_to_obj
+    }
+    ```
+    - All objects and containers (lists, arrays, linked-lists, maps, and sets) ownership semantics follows this simple set of rules:
+    1. Containers will have priority over individual variable reference objects when ownership is being established - unless the individual variable reference is global alongside the collection it's competing with.
+    ```cpp
+    struct TestObj {
+      int32 value;
+    }
+    TestObj[] a_global_obj_ref = []
+    TestObj my_global_obj
+
+    void testFunc() {
+      TestObj my_local_obj = new TestObj();
+      a_global_obj_ref.push(my_local_obj) // Ownership of the TestObj reference now goes to a_global_obj_ref, even though my_local_obj was assigned it first.
+    }
+
+    void testFunc2() {
+      my_global_obj = new TestObj();
+      a_global_obj_ref.push(my_global_obj) // Ownership of the TestObj reference DOES NOT CHANGE since my_global_obj is global and there's no point in transferring ownership between two identical lifetime containers/variables.
+    }
+
+    int32 main(string[] args) {
+      testFunc() // Global container competing with local variable
+      testFunc2() // Global variable competing with global container
+    }
+    ```
+    2. Globally declared variables and containers have the highest precedence for obtaining ownership of objects when assigned to them.
+    ```cpp
+    struct TestObj {
+      int32 value;
+    }
+    let a_global_obj_ref = []
+    void testFunc() {
+      TestObj my_local_obj = new TestObj();
+      a_global_obj_ref.push(my_local_obj) // Ownership of the TestObj reference now goes to a_global_obj_ref, even though my_local_obj was assigned it first.
+    }
+
+    int32 main(string[] args) {
+      testFunc()
+    }
+    ```
+    3. If no global variable or container is in the current scope, the function/method parameter variables and containers will take precedence for ownership on a first-come first-serve basis.
+    ```cpp
+    struct TestObj {
+      int32 value;
+    }
+    void testFunc(TestObj[] param_container) {
+      TestObj my_local_obj = new TestObj();
+      param_container.push(my_local_obj) // Ownership of the TestObj reference now goes to a_global_obj_ref, even though my_local_obj was assigned it first.
+    }
+
+    int32 main(string[] args) {
+      testFunc()
+    }
+    ```
+    4. Lastly, non-parameter variables and containers have the lowest precedence for obtaining ownership of objects, so if none of their assignments are re-assigned to higher-priority variables or containers, they are owners of their assigned data references.
+    ```cpp
+      struct TestObj {
+        int32 value;
+      }
+      void testFunc() {
+        TestObj my_local_obj = new TestObj();
+      }
+
+      int32 main(string[] args) {
+        testFunc()
+      }
+    ```
+    - Cleanup of containers and variables is done at the end of a scope - if lifetimes persist beyond a scope, they will continue to exist.
+    - Any aliases in the same scope to the same reference will be cleaned up by the compiler at compile-time. This removes unnecessary aliases and clutter in the final produced code.
+    ie: source-code:
+    ```cpp
+    int32 main(string[] args) {
+      let alias1 = args;
+      let alias2 = alias1;
+      let alias3 = alias2;
+
+      printf(`Alias cleanup for args: ${alias3}`)
+    }
+    ```
+    transforms into:
+    ```cpp
+    int32 main(string[] args) {
+      printf(`Alias cleanup for args: ${args}`)
+    }
+    ```
 ## Acknowledgements and Legal comments:
 - Zig compiler(s) toolchain is leveraged by the project to have cross-platform standalone binaries, specifically used for linking against musl-libc and llvm's libc++ libraries without any glibc or gnu libstdc++ implementations being used. This is primarily done for license preferences and avoiding GPL or LGPL licensing from impacting the distribution of binaries when statically linked. This is mentioned in the [EXTERNAL_LIBRARIES_LICENSES.md](./compiler-src/EXTERNAL_LIBRARIES_LICENSES.md) file for the compiler-backend and clyth-runtime projects which leverage the static-linkage capabilities.
 - This project is free from AI generated code - this is my own work as it's a passion-project of mine.

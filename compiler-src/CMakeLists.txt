@@ -12,4 +12,6 @@ project(
 )
 
 add_executable(clyth_compiler_bin)
+add_subdirectory(fmt)
+target_link_libraries(clyth_compiler_bin fmt::fmt)
 add_subdirectory(src)

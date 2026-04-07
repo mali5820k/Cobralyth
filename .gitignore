@@ -20,3 +20,4 @@ compiler-dev/frontend/.vscode/settings.json
 /libs_build
 /compiler-frontend/.antlr
 /build-compiler
+/compiler-src/fmt

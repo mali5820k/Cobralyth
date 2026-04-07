@@ -2,7 +2,7 @@
 #define TOKEN_HPP
 #include "common.hpp"
 
-enum TokenType {
+enum class TokenType {
     IF, ELSE, TRY, CATCH, SWITCH, CASE, DEFAULT, FOR, WHILE,
     BREAK, CONTINUE, RETURN,
     LEFT_PAREN, RIGHT_PAREN,
@@ -28,9 +28,11 @@ class Token {
 public:
     std::string value;
     TokenType type;
+    int64_t line_number = 0;
+    std::string file_name = "";
 
-    std::string toString();
-    Token(std::string value, TokenType type);
+    std::string to_string();
+    Token(std::string value, TokenType type, std::string file_name, int64_t line_number);
     ~Token();
 };
 
