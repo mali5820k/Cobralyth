@@ -25,7 +25,7 @@ You will find the project split into sub-projects that all fall under the main M
 
 ## Goals and Aspirations:
 ### Primary Goals:
-- Solving the loss of information of length and size with arrays when passed as function arguments.
+- Solving the loss of length and size information with arrays when passed as function arguments.
 - Default data-structures (dynamic lists, maps, and sets).
 - Simplifying dereferencing symbols (right-arrow vs dot operator) to just the dot operator.
 - [MECC](#mecc-overview), a non-blocking memory-management model with automatic single-ownership enforcement for memory reclamation, done at compile time to prevent cyclic references conflicting with memory reclamation at runtime.
@@ -44,10 +44,10 @@ You will find the project split into sub-projects that all fall under the main M
 - Cross platform compilation to WASM using a non-browser runtime (i.e., wasmer)
 
 ## The Current Runtime Specification (subject to change as project evolves):
-  - Pass-by-reference is used by default.
-    This is done to reduce calling complexity by allowing the programmer to simply call functions and make pass-by-value an explicitly opt-in operation - with the exception being primitive values like ints, floats, doubles, and chars being pass-by-value by default.
+  - Pass-by-reference is used by default for objects, where pass-by-value is used for primitive constants like ints and floats.
+    This is done to reduce calling complexity by allowing the programmer to simply call functions without needing a reassignment operation for updating objects and variables.
 
-  - No function overloading is supported. This is to prevent Java-like code-expansion, which often results in more complexity in large codebases. If you need function-overloading, leverage structs, or generics (in the future) and update the functions accordingly.
+  - No function overloading is supported. This is deliberate to prevent Java-like code-expansion, which often results in more complexity in large codebases. If you need function-overloading, leverage structs, or generics (targetted in the future) and update the functions accordingly.
   For example, functions can receive a struct that resembles JavaScript-like objects with a variable corresponding to a value. This is subject to change if the ergonomics for writing generic code are hindered greatly.
     ```cpp
     int test_function (Obj1 object1, int64 value2, bool optional=false) {
@@ -70,8 +70,6 @@ You will find the project split into sub-projects that all fall under the main M
       // All other functions enclosed in struct definitions must declare their return types.
       constructor() {}
       destructor() {}
-      clone() {}
-      deep_clone() {}
     }
     ```
   - Functions will be first-class citizens, supported like any other custom or primitive type via the 'function' type. The main goal is to remove the verbosity involved with C-style function-pointers entirely and allow dynamic arguments and return-types leveraging structs and arrays - ultimately feeling more like Typescript or Javascript in this regard while maintaining the high-readability and predictability of systems-programming.
@@ -84,9 +82,7 @@ You will find the project split into sub-projects that all fall under the main M
 
       constructor() {}
       destructor() {}
-      clone() {}
-      deep_clone() {}
-
+      
       void register_callback_function(function myFunc, args {}=null) {
         this.last_callback_function = myFunc
         this.last_callback_function.args = args
@@ -190,7 +186,7 @@ You will find the project split into sub-projects that all fall under the main M
     }
     void testFunc(TestObj[] param_container) {
       TestObj my_local_obj = new TestObj();
-      param_container.push(my_local_obj) // Ownership of the TestObj reference now goes to a_global_obj_ref, even though my_local_obj was assigned it first.
+      param_container.push(my_local_obj) // Ownership of the TestObj reference now goes to param_container, even though my_local_obj was assigned it first.
     }
 
     int32 main(string[] args) {
