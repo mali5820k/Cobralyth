@@ -40,9 +40,28 @@ if [[ $LLVM != 0 ]]; then
     MISSING=1
 fi
 
+dnf list pip --installed
+PIP=$?
+if [[ $PIP != 0 ]]; then
+    printf "Missing pip install!\n"
+    MISSING=1
+fi
+
+pip show antlr4-tools
+ANTLR4_TOOLS=$?
+if [[ $PIP != 0 ]]; then
+    printf "Missing antlr4-tools install!\n"
+    MISSING=1
+else
+    local VERSION=4.13.2
+    printf "Antlr4-tools is installed - running antlr4 to get $VERSION installed...\n"
+    antlr4 -v $VERSION
+    printf "\nCompleted Antlr4 setup\n"
+fi
+
 # Exit out if packages are missing, since the script is NOT meant to install them for you.
 if [[ $MISSING == 1 ]]; then
-    printf "Please install llvm, llvm-devel, and mentioned missing packages for build to continue.\nExiting...\n"
+    printf "Please install llvm, llvm-devel, and any mentioned missing packages for build to continue.\nExiting...\n"
     exit -1
 fi
 
