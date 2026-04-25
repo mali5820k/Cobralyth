@@ -13,5 +13,7 @@ project(
 
 add_executable(clyth_compiler_bin)
 add_subdirectory(fmt)
-target_link_libraries(clyth_compiler_bin fmt::fmt)
+target_include_directories(clyth_compiler_bin PUBLIC ${CMAKE_SOURCE_DIR}/../antlr4-cpp-runtime-lib/usr/local/include/antlr4-runtime/)
+target_link_libraries(  clyth_compiler_bin fmt::fmt
+                        ${CMAKE_SOURCE_DIR}/../antlr4-cpp-runtime-lib/usr/local/lib64/libantlr4-runtime.a)
 add_subdirectory(src)

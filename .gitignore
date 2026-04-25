@@ -21,3 +21,5 @@ compiler-dev/frontend/.vscode/settings.json
 /compiler-frontend/.antlr
 /build-compiler
 /compiler-src/fmt
+/antlr4-cpp-runtime-lib
+/antlr4-cpp-runtime-src/build

@@ -40,7 +40,7 @@ if [[ $LLVM != 0 ]]; then
     MISSING=1
 fi
 
-dnf list pip --installed
+dnf list python3-pip --installed
 PIP=$?
 if [[ $PIP != 0 ]]; then
     printf "Missing pip install!\n"
@@ -49,7 +49,7 @@ fi
 
 pip show antlr4-tools
 ANTLR4_TOOLS=$?
-if [[ $PIP != 0 ]]; then
+if [[ $ANTLR4_TOOLS != 0 ]]; then
     printf "Missing antlr4-tools install!\n"
     MISSING=1
 else
@@ -72,9 +72,30 @@ fi
 
 # The overarching-goal of the below from-source builds is to 
 # provide an out-of-the-box solution that's self-contained for current and future static linkages for Clyth.
+
+# Adding the current directory to the path so zig-c.sh and zig-c++.sh can be called;
+export PATH=$PATH:$CUR_DIR/
+
+# Build the antlr4-cpp-runtime-src project:
+if [[ ! -d $CUR_DIR/antlr4-cpp-runtime-lib/usr/local/include/ ]]; then
+    rm -rf $CUR_DIR/antlr4-cpp-runtime-lib/
+    mkdir -p $CUR_DIR/antlr4-cpp-runtime-lib/
+    cd $CUR_DIR/antlr4-cpp-runtime-src/
+    rm -rf build/ run/
+    mkdir build && mkdir run && cd build
+    cmake .. -DCMAKE_C_COMPILER="zig-c.sh" -DCMAKE_CXX_COMPILER="zig-c++.sh"
+    make
+    DESTDIR=$CUR_DIR/antlr4-cpp-runtime-lib/ make install
+    printf "\nFinished building Antlr4 C++ runtime\n"
+else
+    printf "\nAntlr4 C++ runtime already built\nSkipping rebuild..."
+fi
+# Bulid the Clyth Compiler:
+printf "\nStarting Clyth Compiler build...\n"
 CMAKE_LISTS_FILE_PATH=$CUR_DIR/compiler-src/
 COMPILER_BUILD_PATH=$CUR_DIR/build-compiler/
 rm -rf $COMPILER_BUILD_PATH
-cmake -S $CMAKE_LISTS_FILE_PATH -B${COMPILER_BUILD_PATH} -DCMAKE_C_COMPILER="zig cc" -DCMAKE_CXX_COMPILER="zig c++"
+cmake -S $CMAKE_LISTS_FILE_PATH -B${COMPILER_BUILD_PATH} -DCMAKE_C_COMPILER="zig-c.sh" -DCMAKE_CXX_COMPILER="zig-c++.sh"
 cd $COMPILER_BUILD_PATH
 make
+printf "\nFinished building Clyth compiler\n"

@@ -1,13 +1,11 @@
 #!/bin/bash
 GRAMMAR_FILE=$1
-GRAMMAR_RULE=$2
-MODE=$3
-INPUT_FILE=$4
+GRAMMAR_RULE="program"
+MODE=$2
+INPUT_FILE=$3
 
 if [[ $MODE != "-gui" ]] && [[ $MODE != '-tree' ]]; then
-echo $MODE
-    printf "\nERROR, mode should either be -gui or -tree.\nExiting...\n"
-    exit 1
+    MODE="-gui"
 fi
 
 antlr4-parse $GRAMMAR_FILE $GRAMMAR_RULE $MODE $INPUT_FILE

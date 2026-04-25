@@ -16,7 +16,10 @@ A quick list of features Clyth are:
   * High-level language ergonomics
   * LLVM IR
 
-You will find the project split into sub-projects that all fall under the main MIT license specified in the repo:
+You will find the project split into sub-projects that (with the exception of "antlr4-cpp-runtime-src") all fall under the main MIT license specified in the repo:
+  * antlr4-cpp-runtime-src
+    - Bundled library which contains the Antlr4 C++ runtime source code versioned 4.13.2 which is built using the zig cc and zig c++ compilers.
+    - License is included as-is in the [antlr4-cpp-runtime-src directory](./antlr4-cpp-runtime-src/LICENSE.txt) and this repo's [EXTERNAL_LIBRARIES_LICENSES.md](./EXTERNAL_LIBRARIES_LICENSES.md) file
   * compiler-src
     - A C++ project, specifically responsible for generating and consuming an AST and producing a binary from LLVM IR to statically link against the clyth-runtime
   * clyth-runtime
