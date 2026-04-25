@@ -1,8 +1,6 @@
 #include "common.hpp"
 #include "cxxopts/cxxopts.hpp"
 #include "scanner.hpp"
-#include "lexer.hpp"
-//#include "parser.hpp"
 
 int main(int argc, char** argv) {
     // Metadata and generate commandline flags:
@@ -72,10 +70,7 @@ int main(int argc, char** argv) {
 
         printf("Compiling %s\n", main_file.c_str());
         
-        // Now to lex this result:
-        Lexer lexer = Lexer();
-        lexer.lex_file(main_file);
-        printf("Current Lexer's contents: %s",lexer.to_string().c_str());
+        
     }
 
     return 0;
