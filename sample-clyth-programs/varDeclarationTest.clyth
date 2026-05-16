@@ -21,5 +21,4 @@ char anotherChar = '';
 int x = 10;
 float x1 = 10.00;
 float x2 = 10.000000000000000;
-
 int y = 100;
