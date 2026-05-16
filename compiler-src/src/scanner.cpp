@@ -25,12 +25,17 @@ std::string Scanner::to_string() {
         return this->assembled_string;
     }
 
-    // Otherwise we will re-assemble the string for all other cases.
+    // Preserve line boundaries. This matters because Clyth allows optional
+    // semicolons, and concatenating lines directly can merge tokens from
+    // adjacent source lines.
     for (auto &line : this->lines) {
         this->assembled_string.append(line);
+        this->assembled_string.push_back('\n');
     }
-    return assembled_string;
+
+    return this->assembled_string;
 }
+
 
 void Scanner::print_output() {
     printf("%s", this->to_string().c_str());

@@ -1,0 +1,31 @@
+struct TestObj {
+   int64 index
+   int64 max
+   string payload
+}
+
+TestObj customFunction() {
+    TestObj myObj = malloc(TestObj)
+    myObj.index = 0
+    myObj.payload = "This is a sample string"
+    myObj.max = myObj.payload.length
+
+    return myObj
+}
+
+int32 main(string[] args) {
+    if args.length == 0 {
+        return -1;
+    }
+    printf("\nMy string is: %s \n", args[0]);
+    TestObj myObj = customFunction();
+
+    printf("\nThis is the payload string: %s", myObj.payload)
+
+    for char c in myObj.payload {
+        printf("This is a char: %s", c)
+    }
+
+    free(myObj)
+    return 0;
+}

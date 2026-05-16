@@ -3,231 +3,288 @@
 ## Current Status:
 The Clyth frontend is currently being explored between an Antlr4 frontend implementation and a C++ Pratt Parser implementation. This decision may swing in favor of Antlr4 if project time and effort exceeds the benefits of maintaining a custom parser.
 
-The project is evolving and the Readme may be updated to reflect the latest design decisions.
+The base-language is designed around manually managed memory similar to C, while the MECC module (available separately) is an optional static-analysis optimizer intended to introduce deterministic ownership and memory reclamation strategies at compile time.
 
-## About Clyth:
-Clyth is an ahead-of-time (AOT) compiled language that aims to be an opinionated iteration of C that improves memory-management experience for developers without the runtime overhead associated with common garbage collection implementations. It takes major inspiration from C++ runtime performance and syntax inspired by scripting languages to reduce cognitive load on developers with improved ergonomics. The Managed Entanglement with Container-based Collections (MECC) system is designed to automatically transform developer code into single-ownership compliant code with pre-determined lifetimes for memory collection at compile-time, enabling performance comparable to Rust's borrow-checker and C++ RAII smart-pointers or arena based schemas in terms of runtime CPU performance without the cognitive burden on developers for adapting to a new paradigm of programming and without the tracing overhead common in garbage collected languages like Golang.
+The project is evolving and the README may be updated to reflect the latest design decisions.
 
-In short Clyth is a C-family systems programming language with the performance characteristics of Rust without the cognitive burden of adhering to a borrow-checker like Rust requires.
-A quick list of features Clyth are:
-  * Ahead Of Time (AOT) compiled programs (binaries)
-  * [MECC](#mecc-overview) which places Clyth in the 'no runtime garbage collection' group of languages such as Rust with it's borrow-checker.
-  * Pass-by-reference for objects and pass-by-value for primitive constant values.
-  * High-level language ergonomics
-  * LLVM IR
+---
 
-You will find the project split into sub-projects that (with the exception of "antlr4-cpp-runtime-src") all fall under the main MIT license specified in the repo:
-  * antlr4-cpp-runtime-src
-    - Bundled library which contains the Antlr4 C++ runtime source code versioned 4.13.2 which is built using the zig cc and zig c++ compilers.
-    - License is included as-is in the [antlr4-cpp-runtime-src directory](./antlr4-cpp-runtime-src/LICENSE.txt) and this repo's [EXTERNAL_LIBRARIES_LICENSES.md](./EXTERNAL_LIBRARIES_LICENSES.md) file
-  * compiler-src
-    - A C++ project, specifically responsible for generating and consuming an AST and producing a binary from LLVM IR to statically link against the clyth-runtime
-  * clyth-runtime
-    - The language's standard library to provide file-io, multi-threading, common datastructures, and more as the project grows in maturity.
-  As with all projects - the directory structure may change as the project evolves.
+# About Clyth
 
-## Goals and Aspirations:
-### Primary Goals:
-- Solving the loss of length and size information with arrays when passed as function arguments.
-- Default data-structures (dynamic lists, maps, and sets).
-- Simplifying dereferencing symbols (right-arrow vs dot operator) to just the dot operator.
-- [MECC](#mecc-overview), a non-blocking memory-management model with automatic single-ownership enforcement for memory reclamation, done at compile time to prevent cyclic references conflicting with memory reclamation at runtime.
+Clyth is an ahead-of-time (AOT) compiled systems programming language implemented in C++ with LLVM IR code generation.
 
-### Future Aspirations:
-- Documentation and design visualizations will be made at a later date as a solid release of Clyth is made.
-- Package manager and build-system for Clyth
-  - An out-of-the-box solution that can work offline or online.
-  - Assisting license management on compilation - any licenses used by imported packages (MIT or BSD for instance) will be compiled into the binary and a separate licenses file to aid developers to automate compliance with those licenses. Note - license compliance ultimately falls onto the developer and any automation failures or mistakes must be checked by the developer for correct and proper compliance.
-- JSON support
-- GUI support
-- Websockets and Webserver backend support
-- Support for IoT devices and other embedded architectures, such as running on a raspberry pi
-- Potential OpenCL, ROCm and/or CUDA support (depending on which approach reaches the widest compatability)
-- MLIR support for GPUs (this needs further research alongside the other GPU supporting options)
-- Cross platform compilation to WASM using a non-browser runtime (i.e., wasmer)
+The language is designed as an opinionated iteration of C focused on:
+- explicit control
+- predictable performance
+- improved ergonomics for systems development
+- LLVM-based optimization and portability
 
-## The Current Runtime Specification (subject to change as project evolves):
-  - Pass-by-reference is used by default for objects, where pass-by-value is used for primitive constants like ints and floats.
-    This is done to reduce calling complexity by allowing the programmer to simply call functions without needing a reassignment operation for updating objects and variables.
+The long-term goal of Clyth is to provide a cleaner systems-programming experience without sacrificing the low-level control and runtime predictability expected from C-family languages.
 
-  - No function overloading is supported. This is deliberate to prevent Java-like code-expansion, which often results in more complexity in large codebases. If you need function-overloading, leverage structs, or generics (targetted in the future) and update the functions accordingly.
-  For example, functions can receive a struct that resembles JavaScript-like objects with a variable corresponding to a value. This is subject to change if the ergonomics for writing generic code are hindered greatly.
-    ```cpp
-    int test_function (Obj1 object1, int64 value2, bool optional=false) {
-      // ... more logic here
-      return 0
-    }
+Clyth supports manual memory management by default, allowing developers to retain full ownership over allocation and reclamation behavior when desired.
 
-    int main(string[] args) {
-      printf(test_function({ object1: new Obj1(), value2: 100 }))
-      printf(test_function({ value2: 100 }))
+In addition to the base language, the project includes an optional static-analysis optimization framework called MECC (Managed Entanglement for Collapsable Collections).
 
-      return 0
-    }
-    ```
-  - Structural inheritance will be used to inline the inherited struct-members into the inheriting struct.
-  This avoids unnecessary nesting and an interface-like approach for a leaner object-oriented programming approach.
-    ```cpp
-    struct Simple_struct : ParentStruct {
-      // Overriding an inherited function or method is as simple as redeclaring that function or method.
-      // All other functions enclosed in struct definitions must declare their return types.
-      constructor() {}
-      destructor() {}
-    }
-    ```
-  - Functions will be first-class citizens, supported like any other custom or primitive type via the 'function' type. The main goal is to remove the verbosity involved with C-style function-pointers entirely and allow dynamic arguments and return-types leveraging structs and arrays - ultimately feeling more like Typescript or Javascript in this regard while maintaining the high-readability and predictability of systems-programming.
-  The final syntax for 'args {}' may evolve as the design is implemented.
-  Type annotations for function references are being considered and may be added at a future date.
-    ```cpp
-    struct Callback_registry {
-      function last_callback_function
-      function[] callback_functions
+Rather than relying on tracing garbage collection, MECC is designed around deterministic ownership analysis, lifetime propagation, alias cleanup, container-aware ownership propagation, and selective memory management strategies such as:
+- single ownership patterns
+- shared reference counting
+- ARC-like ownership behavior
+- weak references for non-owning relationships
+- arena-style allocation optimizations where static analysis determines they are beneficial
 
-      constructor() {}
-      destructor() {}
-      
-      void register_callback_function(function myFunc, args {}=null) {
-        this.last_callback_function = myFunc
-        this.last_callback_function.args = args
-        this.callback_functions.push(myFunc, args) // alternatively .append - also args is optional if args is null/empty
-      }
+The goal of MECC is to automatically transform eligible Clyth programs into deterministic memory-management patterns while preserving systems-level performance characteristics without tracing garbage collection or stop-the-world pauses.
 
-      void call_registered_functions() {
-        this.last_callback_function.call(this.last_callback_function.args)
-        this.last_callback_function.call({100, "myName"}) // can change args to call function with as well if you know the args-signature
-        for auto callback_function in this.callback_functions {
-          callback_function.call({12003, "different args name"}) // different args
-        }
-      }
-    }
+Current project work is focused on:
+- parser architecture
+- AST generation
+- semantic analysis foundations
+- LLVM IR lowering
+- runtime design
 
-    bool sample_function(int64 myArg, string name) {
-      printf(myArg, name)
-      return true
-    }
+---
 
-    int main(string[] args) {
-      Callback_registry local_registry = new Callback_registry()
-      local_registry.register_callback_function(sample_function, {100, "sample_function is my name!"})
-      local_registry.register_callback_function(sample_function, {20009234, "another sample function!"})
-      local_registry.call_registered_functions()
+# Project Structure
 
-      return 0
-    }
-    ```
-  - Memory management via [MECC](#mecc-overview)
-  - Concurrency:
-    - Threads will be implemented in a similar manner to how C does, however, the final implementation will favor intuitiveness and take inspiration from Go's goroutines - yet different in the execution and scheduling of threads.
-    ```cpp
-      // Thread signature:
-      Thread (function thread_instructions, args {})
+You will find the project split into sub-projects that (with the exception of "antlr4-cpp-runtime-src") all fall under the main MIT license specified in the repository:
 
-      bool sort_data(string[] data) {
-        // ... sorting-logic ... //
-        return true
-      }
+## antlr4-cpp-runtime-src
+- Bundled library containing the Antlr4 C++ runtime source code versioned 4.13.2.
+- Built using the Zig C/C++ toolchain.
+- License information is included in:
+  - `antlr4-cpp-runtime-src/LICENSE.txt`
+  - `EXTERNAL_LIBRARIES_LICENSES.md`
 
-      int main(string[] args) {
-          Thread background_task = new Thread(sort_data, {data: ["1", "2", "3", "4", "apple", "box", "pear", "BaNANa"]})
-          background_task.run()
-          background_task.join() // will attempt to join thread - will wait until thread is finished.
-          printf(background_task.value()) // returns the value returned by the function running in the thread
-      }
-    ```
+## compiler-src
+- Main C++ compiler frontend/backend project.
+- Responsible for:
+  - parsing
+  - AST generation
+  - semantic analysis
+  - LLVM IR generation
+  - binary production
 
-- ### Memory Management:
-  #### MECC Overview:
-  - Managed Entanglement with Container-based Collections (MECC) Architecture for non-pausing ownership-based memory collection.
-  - Conceptually consider MECC as a compile time static-analysis and structuring memory management for runtime to ensure resources are freed in a deterministic fashion without burdening the user with borrow-checker semantics and learning curve. The compiler aims to do the heavy-lifting and keep the experience as close as possible to writing C-like code.
-    - Eliminates tracing, marking + sweeping, and pausing (stop-the-world) that typical tracing garbage collectors suffer from.
-    - Eliminates cyclic references by enforcing single-ownership semantics and weak-pointer references for object references and containers (lists/vectors, maps, etc) by default.
-    - The cognitive load of memory-management is lifted away from the programmer and managed by the compiler - therefore semantics for strong versus weak references are managed by the compiler at compilation.
-    All object references are de-duplicated by the compiler in a scope to ensure only single-ownership references remain after unnecessary aliases are removed (see below for alias cleanup example).
-    - All objects and containers (lists, arrays, linked-lists, maps, and sets) ownership semantics follows this simple set of rules:
-    1. Containers will have priority over individual variable reference objects when ownership is being established - unless the individual variable reference is global alongside the collection it's competing with.
-    ```cpp
-    struct TestObj {
-      int32 value;
-    }
-    TestObj[] a_global_obj_ref = []
-    TestObj my_global_obj
+## clyth-runtime
+- Runtime and standard-library project.
+- Intended to provide:
+  - file I/O
+  - collections
+  - threading utilities
+  - runtime helpers
+  - future networking support
 
-    void testFunc() {
-      TestObj my_local_obj = new TestObj();
-      a_global_obj_ref.push(my_local_obj) // Ownership of the TestObj reference now goes to a_global_obj_ref, even though my_local_obj was assigned it first.
-    }
+As with all long-term projects, directory structures and organization may evolve over time.
 
-    void testFunc2() {
-      my_global_obj = new TestObj();
-      a_global_obj_ref.push(my_global_obj) // Ownership of the TestObj reference DOES NOT CHANGE since my_global_obj is global and there's no point in transferring ownership between two identical lifetime containers/variables.
-    }
+---
 
-    int32 main(string[] args) {
-      testFunc() // Global container competing with local variable
-      testFunc2() // Global variable competing with global container
-    }
-    ```
-    2. Globally declared variables and containers have the highest precedence for obtaining ownership of objects when assigned to them.
-    ```cpp
-    struct TestObj {
-      int32 value;
-    }
-    let a_global_obj_ref = []
-    void testFunc() {
-      TestObj my_local_obj = new TestObj();
-      a_global_obj_ref.push(my_local_obj) // Ownership of the TestObj reference now goes to a_global_obj_ref, even though my_local_obj was assigned it first.
-    }
+# Goals and Aspirations
 
-    int32 main(string[] args) {
-      testFunc()
-    }
-    ```
-    3. If no global variable or container is in the current scope, the function/method parameter variables and containers will take precedence for ownership on a first-come first-serve basis.
-    ```cpp
-    struct TestObj {
-      int32 value;
-    }
-    void testFunc(TestObj[] param_container) {
-      TestObj my_local_obj = new TestObj();
-      param_container.push(my_local_obj) // Ownership of the TestObj reference now goes to param_container, even though my_local_obj was assigned it first.
-    }
+## Primary Goals
 
-    int32 main(string[] args) {
-      testFunc()
-    }
-    ```
-    4. Lastly, non-parameter variables and containers have the lowest precedence for obtaining ownership of objects, so if none of their assignments are re-assigned to higher-priority variables or containers, they are owners of their assigned data references.
-    ```cpp
-      struct TestObj {
-        int32 value;
-      }
-      void testFunc() {
-        TestObj my_local_obj = new TestObj();
-      }
+- Simplified systems-programming ergonomics.
+- Cleaner syntax compared to traditional C pointer-heavy semantics.
+- LLVM IR compilation pipeline.
+- Built-in collection syntax support.
+- Deterministic memory-management optimization through MECC.
+- Bootstrappable systems language foundations.
+- C interoperability.
 
-      int32 main(string[] args) {
-        testFunc()
-      }
-    ```
-    - Cleanup of containers and variables is done at the end of a scope - if lifetimes persist beyond a scope, they will continue to exist.
-    - Any aliases in the same scope to the same reference will be cleaned up by the compiler at compile-time. This removes unnecessary aliases and clutter in the final produced code.
-    ie: source-code:
-    ```cpp
-    int32 main(string[] args) {
-      let alias1 = args;
-      let alias2 = alias1;
-      let alias3 = alias2;
+## Future Aspirations
 
-      printf(`Alias cleanup for args: ${alias3}`)
-    }
-    ```
-    transforms into:
-    ```cpp
-    int32 main(string[] args) {
-      printf(`Alias cleanup for args: ${args}`)
-    }
-    ```
-## Acknowledgements and Legal comments:
-- Zig compiler(s) toolchain is leveraged by the project to have cross-platform standalone binaries, specifically used for linking against musl-libc and llvm's libc++ libraries without any glibc or gnu libstdc++ implementations being used. This is primarily done for license preferences and avoiding GPL or LGPL licensing from impacting the distribution of binaries when statically linked. This is mentioned in the [EXTERNAL_LIBRARIES_LICENSES.md](./compiler-src/EXTERNAL_LIBRARIES_LICENSES.md) file for the compiler-backend and clyth-runtime projects which leverage the static-linkage capabilities.
-- This project is free from AI generated code - this is my own work as it's a passion-project of mine.
-- LEGAL DISCLAIMER - I am not legally responsible for ensuring license(s) compliance for programs written and compiled with Clyth. Reach out to your own legal department or contacts to ensure you are compliant with any licenses you end up using in your final executable as I am not a lawyer.
+- Package manager and build system.
+- JSON support.
+- GUI support.
+- Websocket and webserver utilities.
+- Embedded and IoT support.
+- GPU and MLIR exploration.
+- WASM support through non-browser runtimes.
+- Language server implementation.
+- Debugger tooling.
+
+---
+
+# Clyth Language Spec V1
+
+## Core Language Characteristics
+
+- Ahead-of-Time (AOT) compiled.
+- LLVM IR backend.
+- Manual memory management by default.
+- Pass-by-reference semantics for objects.
+- Pass-by-value semantics for primitive types.
+- Optional semicolons.
+- C interoperability through `extern C`.
+- Built-in collections syntax.
+
+---
+
+# Example Syntax
+
+## Structs and Manual Memory
+
+```go
+struct Person {
+    string name,
+    int32 age,
+}
+
+int32 main() {
+    Person p = malloc(Person)
+
+    p.name = "Harry"
+    p.age = 30
+
+    print(p.name)
+
+    free(p)
+
+    return 0
+}
+```
+
+---
+
+## Lists
+
+```go
+int32[] values = [1, 2, 3, 4]
+```
+
+---
+
+## Fixed Arrays
+
+```go
+int32[10] fixed_values = []
+```
+
+---
+
+## Maps
+
+```go
+numeric:string sample_map = {
+    1: "one",
+    2: "two",
+    1000: "thousand",
+}
+```
+
+---
+
+## Sets
+
+```go
+int32() unique_values = {
+    1, 2, 3, 4, 5
+}
+```
+
+---
+
+## C Interoperability
+
+```c
+extern C int32 printf(string fmt, ...)
+```
+
+---
+
+## Type Relationships
+
+```py
+if instance is drawable {
+    print("Drawable instance")
+}
+```
+
+---
+
+# Base Clyth Memory Model
+
+The base Clyth language relies on manually managed memory similar to C.
+
+This ensures:
+- low-level systems control
+- predictable allocation behavior
+- interoperability with existing native tooling
+- compatibility with environments where deterministic control is required
+
+Core allocation primitives include:
+- `malloc`
+- `free`
+
+Future runtime abstractions may build on top of these primitives while preserving explicit systems-level control.
+
+---
+
+# MECC Overview
+
+## Managed Entanglement for Collapsable Collections
+
+MECC is a separate static-analysis optimization framework for Clyth.
+
+Its purpose is to analyze ownership relationships, lifetimes, aliases, containers, and escape patterns in order to transform eligible code into deterministic memory-management patterns.
+
+MECC is designed to avoid tracing garbage collection approaches such as:
+- mark-and-sweep
+- stop-the-world tracing
+- periodic heap scanning
+
+Instead, MECC explores deterministic ownership and reclamation strategies such as:
+- ownership propagation
+- alias cleanup
+- reference counting
+- ARC-like ownership semantics
+- weak references for non-owning relationships
+- container-aware ownership propagation
+- opportunistic arena-style allocation optimizations
+
+The goal is to preserve systems-level performance characteristics while reducing manual ownership orchestration complexity for developers.
+
+---
+
+# Example MECC Alias Cleanup
+
+Source code:
+
+```go
+int32 main(string[] args) {
+    string[] alias1 = args
+    string[] alias2 = alias1
+    string[] alias3 = alias2
+
+    print(alias3)
+
+    return 0
+}
+```
+
+Potential optimized transformation:
+
+```go
+int32 main(string[] args) {
+    print(args)
+
+    return 0
+}
+```
+
+This optimization removes unnecessary aliases while preserving observable program behavior.
+
+---
+
+# Acknowledgements and Legal Notes
+
+- The Zig compiler toolchain is leveraged for portable static-linking support.
+- musl-libc and LLVM libc++ are preferred over glibc/libstdc++ for portability and licensing preferences.
+- External library licensing information is documented in:
+  - `EXTERNAL_LIBRARIES_LICENSES.md`
+
+## Legal Disclaimer
+
+The author of Clyth is not legally responsible for ensuring license compliance for programs written using the language or its tooling.
+
+Developers are responsible for verifying compliance with all third-party licenses included in their final binaries or distributions.
+
+Consult legal professionals where appropriate.
+

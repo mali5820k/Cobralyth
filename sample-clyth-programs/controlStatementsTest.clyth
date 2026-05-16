@@ -80,24 +80,18 @@ for {
 
 int:string testMap = {1: "10", 200: "something_else"}
 
-foreach (int x, string y in testMap) {
-    print(`Key: ${x}, Value: ${y}\n\n`)
-}
-foreach int x, string y in testMap {
-    print(`Key: ${x}, Value: ${y}\n\n`)
-}
 for (int x, string y in testMap) {
-    print(`Key: ${x}, Value: ${y}\n\n`)
+    printf(`Key: ${x}, Value: ${y}\n\n`)
 }
 for int x, string y in testMap {
-    print(`Key: ${x}, Value: ${y}\n\n`)
+    printf(`Key: ${x}, Value: ${y}\n\n`)
 }
 
 // while-loop:
 while (i >= 0) {
-    print("1something else?\n\n\n\t\"\n")
-    print('2something else?\n\n\n\t\'\n')
-    print(`3something else?\n\n\n\t\`\n`)
+    printf("1something else?\n\n\n\t\"\n")
+    printf('2something else?\n\n\n\t\'\n')
+    printf(`3something else?\n\n\n\t\`\n`)
     break;
 }
 while i >= 0 {
@@ -110,6 +104,6 @@ while i >= 0 {
 }
 
 while true {
-    print("do nothing")
+    printf("do nothing")
     break
 }
