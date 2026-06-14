@@ -1,5 +1,5 @@
 
-// Generated from ../ClythV1.g4 by ANTLR 4.13.2
+// Generated from ClythV1.g4 by ANTLR 4.13.2
 
 #pragma once
 
@@ -45,6 +45,15 @@ public:
 
   virtual void enterStructField(ClythV1Parser::StructFieldContext * /*ctx*/) override { }
   virtual void exitStructField(ClythV1Parser::StructFieldContext * /*ctx*/) override { }
+
+  virtual void enterMethodBlock(ClythV1Parser::MethodBlockContext * /*ctx*/) override { }
+  virtual void exitMethodBlock(ClythV1Parser::MethodBlockContext * /*ctx*/) override { }
+
+  virtual void enterMethodDecl(ClythV1Parser::MethodDeclContext * /*ctx*/) override { }
+  virtual void exitMethodDecl(ClythV1Parser::MethodDeclContext * /*ctx*/) override { }
+
+  virtual void enterMethodSimpleName(ClythV1Parser::MethodSimpleNameContext * /*ctx*/) override { }
+  virtual void exitMethodSimpleName(ClythV1Parser::MethodSimpleNameContext * /*ctx*/) override { }
 
   virtual void enterFunctionDecl(ClythV1Parser::FunctionDeclContext * /*ctx*/) override { }
   virtual void exitFunctionDecl(ClythV1Parser::FunctionDeclContext * /*ctx*/) override { }
@@ -118,6 +127,9 @@ public:
   virtual void enterContinueStmt(ClythV1Parser::ContinueStmtContext * /*ctx*/) override { }
   virtual void exitContinueStmt(ClythV1Parser::ContinueStmtContext * /*ctx*/) override { }
 
+  virtual void enterMeccBlock(ClythV1Parser::MeccBlockContext * /*ctx*/) override { }
+  virtual void exitMeccBlock(ClythV1Parser::MeccBlockContext * /*ctx*/) override { }
+
   virtual void enterParenExpr(ClythV1Parser::ParenExprContext * /*ctx*/) override { }
   virtual void exitParenExpr(ClythV1Parser::ParenExprContext * /*ctx*/) override { }
 
@@ -156,6 +168,9 @@ public:
 
   virtual void enterPrimary(ClythV1Parser::PrimaryContext * /*ctx*/) override { }
   virtual void exitPrimary(ClythV1Parser::PrimaryContext * /*ctx*/) override { }
+
+  virtual void enterAllocationExpression(ClythV1Parser::AllocationExpressionContext * /*ctx*/) override { }
+  virtual void exitAllocationExpression(ClythV1Parser::AllocationExpressionContext * /*ctx*/) override { }
 
   virtual void enterArgumentList(ClythV1Parser::ArgumentListContext * /*ctx*/) override { }
   virtual void exitArgumentList(ClythV1Parser::ArgumentListContext * /*ctx*/) override { }

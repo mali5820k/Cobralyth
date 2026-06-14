@@ -5,30 +5,50 @@ grammar ClythV1;
 //
 // Goals:
 // - C-like systems language frontend suitable for AST construction.
-// - Supports V1 syntax samples: comments, declarations, structs,
-//   functions, control flow, C interop, includes, lists, arrays,
-//   maps, sets, `is`, `in`, print/printf calls, and template strings.
-// - MECC is intentionally not represented in this grammar.
+// - Supports comments, declarations, structs, functions, control flow,
+//   C interop, includes, lists, fixed arrays, maps, sets, `is`, `in`,
+//   ordinary calls such as print/printf, and template strings.
+// - MECC syntax is parsed as an opt-in modifier/block for later semantic lowering.
+// - Struct methods are supported in two forms:
+//
+//     MyStruct {
+//         MyStruct constructor() {}
+//         void destructor() {}
+//         void _privateMethod() {}
+//     }
+//
+//     bool MyStruct.additionalMethod() {}
+//
+// Notes:
+// - This grammar is intentionally permissive in a few places so semantic passes
+//   can decide what is legal for V1 versus future extensions.
+// - `statement` is allowed at top-level for parser tests/script-mode experiments.
+//   Semantic analysis can reject top-level statements later.
 // ============================================================
 
-// -----------------------------
+
+// ============================================================
 // Parser rules
-// -----------------------------
+// ============================================================
 
 program
     : topLevelItem* EOF
     ;
 
-// `statement` is intentionally allowed at top-level for parser test files.
-// A later semantic pass can reject non-declaration top-level statements
-// outside of test/script mode if desired.
 topLevelItem
     : includeDecl
     | externDecl
     | structDecl
-    | functionDecl
+    | methodBlock
+    | functionDecl       // must appear before methodDecl so normal top-level functions stay functions
+    | methodDecl         // mainly for qualified methods: ReturnType StructName.methodName(...)
     | statement
     ;
+
+
+// -----------------------------
+// Top-level declarations
+// -----------------------------
 
 includeDecl
     : INCLUDE includeTarget SEMI?
@@ -41,7 +61,7 @@ includeTarget
     ;
 
 externDecl
-    : EXTERN externAbi? type IDENTIFIER '(' externParamList? ')' SEMI?
+    : EXTERN externAbi? type IDENTIFIER LPAREN externParamList? RPAREN SEMI?
     ;
 
 externAbi
@@ -50,7 +70,7 @@ externAbi
     ;
 
 externParamList
-    : externParam (',' externParam)* ','? (VARARGS)?
+    : externParam (COMMA externParam)* COMMA? VARARGS?
     | VARARGS
     ;
 
@@ -59,27 +79,69 @@ externParam
     ;
 
 structDecl
-    : STRUCT IDENTIFIER '{' structField* '}' SEMI?
+    : STRUCT IDENTIFIER LBRACE structField* RBRACE SEMI?
     ;
 
 structField
     : type IDENTIFIER commaOrSemi?
     ;
 
+
+// -----------------------------
+// Methods
+// -----------------------------
+//
+// Method names may be normal identifiers or constructor/destructor keywords.
+// The parser accepts private-looking names such as `_computeArea`; semantic
+// analysis can interpret underscore-prefixed methods as private.
+//
+// Inside a method block:
+//
+//     MyStruct {
+//         void foo() {}
+//     }
+//
+// Top-level qualified method:
+//
+//     bool MyStruct.foo() {}
+//
+// Normal top-level functions still parse as functionDecl because functionDecl
+// appears before methodDecl in topLevelItem.
+
+methodBlock
+    : IDENTIFIER LBRACE methodDecl* RBRACE
+    ;
+
+methodDecl
+    : MECC? type methodSimpleName LPAREN paramList? RPAREN block
+    | MECC? type IDENTIFIER DOT methodSimpleName LPAREN paramList? RPAREN block
+    ;
+
+methodSimpleName
+    : IDENTIFIER
+    | CONSTRUCTOR
+    | DESTRUCTOR
+    ;
+
 functionDecl
-    : type IDENTIFIER '(' paramList? ')' block
+    : MECC? type IDENTIFIER LPAREN paramList? RPAREN block
     ;
 
 paramList
-    : param (',' param)* ','?
+    : param (COMMA param)* COMMA?
     ;
 
 param
     : type IDENTIFIER
     ;
 
+
+// -----------------------------
+// Statements
+// -----------------------------
+
 block
-    : '{' statement* '}'
+    : LBRACE statement* RBRACE
     ;
 
 statement
@@ -92,11 +154,12 @@ statement
     | forStmt
     | breakStmt
     | continueStmt
+    | meccBlock
     | block
     ;
 
 varDecl
-    : type IDENTIFIER ('=' expression)? SEMI?
+    : type IDENTIFIER (ASSIGN expression)? SEMI?
     ;
 
 assignmentStmt
@@ -108,12 +171,12 @@ assignable
     ;
 
 assignmentOp
-    : '='
-    | '+='
-    | '-='
-    | '*='
-    | '/='
-    | '%='
+    : ASSIGN
+    | PLUS_ASSIGN
+    | MINUS_ASSIGN
+    | STAR_ASSIGN
+    | SLASH_ASSIGN
+    | PERCENT_ASSIGN
     ;
 
 exprStmt
@@ -142,9 +205,9 @@ whileStmt
 forStmt
     : FOR block
     | FOR forEachHeader block
-    | FOR '(' forEachHeader ')' block
+    | FOR LPAREN forEachHeader RPAREN block
     | FOR forClassicHeader block
-    | FOR '(' forClassicHeader ')' block
+    | FOR LPAREN forClassicHeader RPAREN block
     ;
 
 forEachHeader
@@ -152,7 +215,7 @@ forEachHeader
     ;
 
 forEachBinding
-    : forEachVar (',' forEachVar)*
+    : forEachVar (COMMA forEachVar)*
     ;
 
 forEachVar
@@ -171,7 +234,7 @@ forInit
     ;
 
 varDeclNoSemi
-    : type IDENTIFIER ('=' expression)?
+    : type IDENTIFIER (ASSIGN expression)?
     ;
 
 assignmentNoSemi
@@ -186,13 +249,18 @@ continueStmt
     : CONTINUE SEMI?
     ;
 
-parenExpr
-    : '(' expression ')'
+meccBlock
+    : MECC block
     ;
 
-// -----------------------------
+parenExpr
+    : LPAREN expression RPAREN
+    ;
+
+
+// ============================================================
 // Expression precedence
-// -----------------------------
+// ============================================================
 
 expression
     : logicalOr
@@ -237,8 +305,8 @@ postfix
 
 postfixSuffix
     : DOT IDENTIFIER
-    | '[' expression ']'
-    | '(' argumentList? ')'
+    | LBRACKET expression RBRACKET
+    | LPAREN argumentList? RPAREN
     | INCREMENT
     | DECREMENT
     ;
@@ -246,12 +314,17 @@ postfixSuffix
 primary
     : literal
     | collectionLiteral
+    | allocationExpression
     | IDENTIFIER
-    | '(' expression ')'
+    | LPAREN expression RPAREN
+    ;
+
+allocationExpression
+    : (MALLOC | ISO_MALLOC) LPAREN type RPAREN
     ;
 
 argumentList
-    : expression (',' expression)* ','?
+    : expression (COMMA expression)* COMMA?
     ;
 
 literal
@@ -262,49 +335,51 @@ literal
     | NULL_LITERAL
     ;
 
-// -----------------------------
+
+// ============================================================
 // Collection literals
-// -----------------------------
+// ============================================================
 
 collectionLiteral
-    : listLiteral
-    | mapLiteral
+    : mapLiteral
     | setLiteral
+    | listLiteral
     ;
 
 listLiteral
-    : '[' expressionList? ']'
+    : LBRACKET expressionList? RBRACKET
     ;
 
 mapLiteral
-    : '{' mapEntryList? '}'
+    : LBRACE mapEntryList? RBRACE
     ;
 
 mapEntryList
-    : mapEntry (',' mapEntry)* ','?
+    : mapEntry (COMMA mapEntry)* COMMA?
     ;
 
 mapEntry
-    : expression ':' expression
+    : expression COLON expression
     ;
 
 // Set literals use the same `{ ... }` surface form as maps.
-// During AST construction:
+// During AST/semantic analysis:
 // - `{ a: b }` is a map literal.
 // - `{ a, b, c }` is a set literal.
 // - `{}` is syntactically accepted as mapLiteral by default and can be
 //   semantically interpreted from target type when assigned.
 setLiteral
-    : '{' expressionList ','? '}'
+    : LBRACE expressionList COMMA? RBRACE
     ;
 
 expressionList
-    : expression (',' expression)* ','?
+    : expression (COMMA expression)* COMMA?
     ;
 
-// -----------------------------
+
+// ============================================================
 // Types
-// -----------------------------
+// ============================================================
 
 type
     : mapType
@@ -312,7 +387,7 @@ type
     ;
 
 mapType
-    : collectionType ':' collectionType
+    : collectionType COLON collectionType
     ;
 
 collectionType
@@ -325,24 +400,35 @@ baseType
     ;
 
 typeSuffix
-    : '[' ']'                 // dynamic list: int32[]
-    | '[' NUMERIC_LITERAL ']'  // fixed array: int32[10]
-    | '(' ')'                 // set: int32()
+    : LBRACKET RBRACKET                 // dynamic list: int32[]
+    | LBRACKET NUMERIC_LITERAL RBRACKET // fixed array: int32[10]
+    | LPAREN RPAREN                     // set: int32()
     ;
 
 commaOrSemi
-    : ','
+    : COMMA
     | SEMI
     ;
 
-// -----------------------------
+
+// ============================================================
 // Lexer rules
-// -----------------------------
+// ============================================================
+
+// Keywords.
+// Keep these before IDENTIFIER.
 
 INCLUDE : 'include';
 EXTERN  : 'extern';
 C_ABI   : 'C';
 STRUCT  : 'struct';
+
+MECC       : 'mecc';
+MALLOC     : 'malloc';
+ISO_MALLOC : 'iso_malloc';
+
+CONSTRUCTOR : 'constructor';
+DESTRUCTOR  : 'destructor';
 
 IF       : 'if';
 ELSE     : 'else';
@@ -356,12 +442,40 @@ IS  : 'is';
 IN  : 'in';
 NOT : 'not';
 
-SEMI : ';';
+BOOLEAN_LITERAL
+    : 'true'
+    | 'false'
+    ;
+
+NULL_LITERAL
+    : 'null'
+    ;
+
+
+// Punctuation.
+
+LPAREN   : '(';
+RPAREN   : ')';
+LBRACE   : '{';
+RBRACE   : '}';
+LBRACKET : '[';
+RBRACKET : ']';
+
+COMMA : ',';
+COLON : ':';
+SEMI  : ';';
+DOT   : '.';
+
+
+// Operators.
+// Multi-character operators must appear before single-character prefixes.
 
 OR  : '||';
 AND : '&&';
+
 EQ  : '==';
 NEQ : '!=';
+
 GTE : '>=';
 LTE : '<=';
 GT  : '>';
@@ -370,17 +484,28 @@ LT  : '<';
 INCREMENT : '++';
 DECREMENT : '--';
 
+PLUS_ASSIGN    : '+=';
+MINUS_ASSIGN   : '-=';
+STAR_ASSIGN    : '*=';
+SLASH_ASSIGN   : '/=';
+PERCENT_ASSIGN : '%=';
+
+ASSIGN : '=';
+
 PLUS    : '+';
 MINUS   : '-';
 STAR    : '*';
 SLASH   : '/';
 PERCENT : '%';
-BANG    : '!';
-TILDE   : '~';
-AMP     : '&';
-DOT     : '.';
+
+BANG  : '!';
+TILDE : '~';
+AMP   : '&';
 
 VARARGS : '...';
+
+
+// Types and literals.
 
 BUILTIN_TYPE
     : 'uint8'
@@ -405,18 +530,9 @@ BUILTIN_TYPE
     | 'auto'
     ;
 
-BOOLEAN_LITERAL
-    : 'true'
-    | 'false'
-    ;
-
-NULL_LITERAL
-    : 'null'
-    ;
-
 NUMERIC_LITERAL
     : DIGIT+ NUMERIC_SUFFIX?
-    | DIGIT+ '.' DIGIT+ NUMERIC_SUFFIX?
+    | DIGIT+ DOT DIGIT+ NUMERIC_SUFFIX?
     ;
 
 // Backtick strings are separated so the AST can detect template strings
@@ -450,6 +566,9 @@ fragment NUMERIC_SUFFIX
     | 'f32'
     | 'f64'
     ;
+
+
+// Whitespace and comments.
 
 SINGLE_LINE_COMMENT
     : '//' ~[\r\n]* -> skip

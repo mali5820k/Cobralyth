@@ -1,9 +1,14 @@
 # Cobralyth, Clyth for short
 
-## Current Status:
+## Current Status
+
 The Clyth frontend is currently being explored between an Antlr4 frontend implementation and a C++ Pratt Parser implementation. This decision may swing in favor of Antlr4 if project time and effort exceeds the benefits of maintaining a custom parser.
 
-The base-language is designed around manually managed memory similar to C, while the MECC module (available separately) is an optional static-analysis optimizer intended to introduce deterministic ownership and memory reclamation strategies at compile time.
+The base language is designed around manually managed memory similar to C.
+<br>
+In addition to the base language, Clyth includes an optional memory-management framework called MECC (Managed Estates for Clustered Counting).
+
+MECC explores region-based memory management through estate allocations and estate-level reference counting. Rather than managing individual objects through ARC or relying on tracing garbage collection, MECC manages ownership at the estate level and reclaims memory in clusters when an estate is no longer referenced.
 
 The project is evolving and the README may be updated to reflect the latest design decisions.
 
@@ -20,19 +25,18 @@ The language is designed as an opinionated iteration of C focused on:
 - LLVM-based optimization and portability
 
 The long-term goal of Clyth is to provide a cleaner systems-programming experience without sacrificing the low-level control and runtime predictability expected from C-family languages.
-
+<br><br>
 Clyth supports manual memory management by default, allowing developers to retain full ownership over allocation and reclamation behavior when desired.
-
-In addition to the base language, the project includes an optional static-analysis optimization framework called MECC (Managed Entanglement for Collapsable Collections).
-
-Rather than relying on tracing garbage collection, MECC is designed around deterministic ownership analysis, lifetime propagation, alias cleanup, container-aware ownership propagation, and selective memory management strategies such as:
-- single ownership patterns
-- shared reference counting
-- ARC-like ownership behavior
-- weak references for non-owning relationships
-- arena-style allocation optimizations where static analysis determines they are beneficial
-
-The goal of MECC is to automatically transform eligible Clyth programs into deterministic memory-management patterns while preserving systems-level performance characteristics without tracing garbage collection or stop-the-world pauses.
+<br>
+In addition to the base language, the project includes an optional memory-management framework called MECC (Managed Estates for Clustered Counting).
+<br><br>
+MECC explores deterministic memory management through estate allocations and clustered counting.
+<br>
+Rather than tracking ownership on a per-object basis or relying on tracing garbage collection, MECC groups related allocations into estates and manages ownership at the estate level.
+<br><br>
+This approach combines many of the allocation characteristics of arena allocators with deterministic reclamation through estate-level reference counting while avoiding tracing collectors and stop-the-world pauses.
+<br>
+The goal is to provide predictable memory behavior, low ownership overhead, and systems-level performance characteristics while reducing the amount of manual lifetime orchestration required by developers.
 
 Current project work is focused on:
 - parser architecture
@@ -43,65 +47,6 @@ Current project work is focused on:
 
 ---
 
-# Project Structure
-
-You will find the project split into sub-projects that (with the exception of "antlr4-cpp-runtime-src") all fall under the main MIT license specified in the repository:
-
-## antlr4-cpp-runtime-src
-- Bundled library containing the Antlr4 C++ runtime source code versioned 4.13.2.
-- Built using the Zig C/C++ toolchain.
-- License information is included in:
-  - `antlr4-cpp-runtime-src/LICENSE.txt`
-  - `EXTERNAL_LIBRARIES_LICENSES.md`
-
-## compiler-src
-- Main C++ compiler frontend/backend project.
-- Responsible for:
-  - parsing
-  - AST generation
-  - semantic analysis
-  - LLVM IR generation
-  - binary production
-
-## clyth-runtime
-- Runtime and standard-library project.
-- Intended to provide:
-  - file I/O
-  - collections
-  - threading utilities
-  - runtime helpers
-  - future networking support
-
-As with all long-term projects, directory structures and organization may evolve over time.
-
----
-
-# Goals and Aspirations
-
-## Primary Goals
-
-- Simplified systems-programming ergonomics.
-- Cleaner syntax compared to traditional C pointer-heavy semantics.
-- LLVM IR compilation pipeline.
-- Built-in collection syntax support.
-- Deterministic memory-management optimization through MECC.
-- Bootstrappable systems language foundations.
-- C interoperability.
-
-## Future Aspirations
-
-- Package manager and build system.
-- JSON support.
-- GUI support.
-- Websocket and webserver utilities.
-- Embedded and IoT support.
-- GPU and MLIR exploration.
-- WASM support through non-browser runtimes.
-- Language server implementation.
-- Debugger tooling.
-
----
-
 # Clyth Language Spec V1
 
 ## Core Language Characteristics
@@ -109,6 +54,7 @@ As with all long-term projects, directory structures and organization may evolve
 - Ahead-of-Time (AOT) compiled.
 - LLVM IR backend.
 - Manual memory management by default.
+- Optional MECC support through `mecc` scopes and functions.
 - Pass-by-reference semantics for objects.
 - Pass-by-value semantics for primitive types.
 - Optional semicolons.
@@ -141,23 +87,17 @@ int32 main() {
 }
 ```
 
----
-
 ## Lists
 
 ```go
 int32[] values = [1, 2, 3, 4]
 ```
 
----
-
 ## Fixed Arrays
 
 ```go
 int32[10] fixed_values = []
 ```
-
----
 
 ## Maps
 
@@ -169,8 +109,6 @@ numeric:string sample_map = {
 }
 ```
 
----
-
 ## Sets
 
 ```go
@@ -179,19 +117,15 @@ int32() unique_values = {
 }
 ```
 
----
-
 ## C Interoperability
 
-```c
+```c#
 extern C int32 printf(string fmt, ...)
 ```
 
----
-
 ## Type Relationships
 
-```py
+```go
 if instance is drawable {
     print("Drawable instance")
 }
@@ -202,74 +136,192 @@ if instance is drawable {
 # Base Clyth Memory Model
 
 The base Clyth language relies on manually managed memory similar to C.
-
-This ensures:
-- low-level systems control
-- predictable allocation behavior
-- interoperability with existing native tooling
-- compatibility with environments where deterministic control is required
-
+<br>
 Core allocation primitives include:
 - `malloc`
 - `free`
 
-Future runtime abstractions may build on top of these primitives while preserving explicit systems-level control.
+For allocations that require independent lifetimes when interacting with MECC-managed code, the language also reserves:
+
+- `iso_malloc`
+
+`iso_malloc` creates an allocation in its own independent estate.
+
+---
+
+# Why MECC Exists
+
+Traditional systems programming usually forces developers to choose between a few familiar tradeoffs:
+
+| Memory approach | Ownership unit | Main strength | Main tradeoff |
+|---|---:|---|---|
+| C manual memory | Individual allocation / programmer | Maximum control | Easy to leak or free incorrectly |
+| C++ `shared_ptr` / Rust `Arc` | Individual object | Shared ownership | Per-object reference counting overhead |
+| Java / C# / Go-style GC | Runtime heap | Developer ergonomics | Runtime tracing and pause/latency concerns |
+| Arena allocators | Region / arena | Very fast allocation and bulk free | Lifetime must be planned carefully |
+| **MECC estates** | **Estate / allocation cluster** | **Bulk allocation with clustered counting** | **Independent lifetimes may require `iso_malloc`** |
+
+MECC is not trying to make Base Clyth disappear.
+<br>
+Base Clyth exists for manual control.
+<br>
+MECC exists for code where clustered allocation and deterministic reclamation make more sense than micromanaging every single object allocation.
+<br>
+> Instead of counting every object, count the memory estate that owns related objects.
 
 ---
 
 # MECC Overview
 
-## Managed Entanglement for Collapsable Collections
+## Managed Estates for Clustered Counting
 
-MECC is a separate static-analysis optimization framework for Clyth.
+MECC is an optional memory-management framework for Clyth.
+<br>
+Rather than relying on tracing garbage collection or per-object ownership tracking, MECC groups allocations into estates.
+<br><br>
+An estate is a collection of related allocations that share a common ownership boundary and lifetime relationship.
+<br>
+Ownership is tracked through clustered counting, where reference counts are maintained at the estate level rather than the individual object level.
+<br>
+<br>
+Key design goals include:
+- deterministic memory reclamation
+- no tracing garbage collection
+- no stop-the-world pauses
+- reduced ownership bookkeeping
+- bulk allocation and reclamation
+- predictable runtime behavior
+- systems-level performance characteristics
 
-Its purpose is to analyze ownership relationships, lifetimes, aliases, containers, and escape patterns in order to transform eligible code into deterministic memory-management patterns.
-
-MECC is designed to avoid tracing garbage collection approaches such as:
-- mark-and-sweep
-- stop-the-world tracing
-- periodic heap scanning
-
-Instead, MECC explores deterministic ownership and reclamation strategies such as:
-- ownership propagation
-- alias cleanup
-- reference counting
-- ARC-like ownership semantics
-- weak references for non-owning relationships
-- container-aware ownership propagation
-- opportunistic arena-style allocation optimizations
-
-The goal is to preserve systems-level performance characteristics while reducing manual ownership orchestration complexity for developers.
+MECC-managed memory cannot be manually freed on a per-object basis.
+<br>
+Instead, estates are reclaimed when their clustered count reaches zero.
 
 ---
 
-# Example MECC Alias Cleanup
+# What An Estate Looks Like
 
-Source code:
+```mermaid
+flowchart TD
+    HandleA["Person Handle<br/>clustered_count = 2"] --> CurrentEstate
+
+    CurrentEstate["Current Estate<br/>MECC allocation estate"]
+    CurrentEstate --> Obj1["Person p"]
+    CurrentEstate --> Obj2["string p.name"]
+    CurrentEstate --> Obj3["int32 p.age"]
+    CurrentEstate --> Obj4["temporary helper allocations"]
+
+    Caller1["caller reference"] --> HandleA
+    Caller2["container reference"] --> HandleA
+```
+The estate is the ownership unit.
+
+---
+
+# Isolated Allocations
+
+Sometimes one value should survive independently from nearby allocations.
+
+```mermaid
+flowchart TD
+    CurrentEstate["Current Estate<br/>temporary function allocations"]
+    CurrentEstate --> Temp1["temporary buffer"]
+    CurrentEstate --> Temp2["temporary list"]
+    CurrentEstate --> Temp3["intermediate object"]
+
+    IndependentEstate["Independent Estate<br/>created via iso_malloc"]
+    IndependentEstate --> Result["Person result"]
+
+    Caller["caller reference"] --> IndependentEstate
+    Container["container reference"] --> IndependentEstate
+```
+
+The independent estate prevents one long-lived object from keeping an entire temporary estate alive.
+<br>
+This is commonly referred to as memory bubbling, where a small allocation unintentionally extends the lifetime of a much larger allocation cluster.
+
+---
+
+# Example MECC Usage
 
 ```go
-int32 main(string[] args) {
-    string[] alias1 = args
-    string[] alias2 = alias1
-    string[] alias3 = alias2
+mecc Person[] buildPeople() {
+    Person p = malloc(Person)
+    Person p2 = iso_malloc(Person)
 
-    print(alias3)
+    p.name = "Harry"
+    p.age = 30
+
+    p2.name = "Ron"
+    p2.age = 31
+
+    return [p, p2]
+}
+```
+
+Conceptually:
+
+```text
+current_estate = estate_create()
+independent_estate = estate_create()
+
+p  = estate_alloc(current_estate, sizeof(Person))
+p2 = estate_alloc(independent_estate, sizeof(Person))
+```
+
+In this example:
+
+- `p` belongs to the current estate.
+- `p2` belongs to an independent estate.
+- `iso_malloc` prevents a long-lived allocation from keeping a large temporary estate alive.
+
+---
+
+# MECC Function and Block Syntax
+
+```go
+mecc Person buildPerson() {
+    Person p = malloc(Person)
+    return p
+}
+```
+
+```go
+int32 main() {
+    mecc {
+        Person p = malloc(Person)
+    }
 
     return 0
 }
 ```
 
-Potential optimized transformation:
+Inside a MECC function or block:
 
-```go
-int32 main(string[] args) {
-    print(args)
+- `malloc(Type)` allocates into the current estate.
+- `iso_malloc(Type)` allocates into a separate estate.
+- `free(value)` is not allowed for MECC-owned values.
 
-    return 0
-}
+Outside MECC scopes:
+
+- `malloc(Type)` and `free(value)` behave normally.
+
+---
+
+# MECC and Base Clyth Together
+
+```text
+Base Clyth:
+    manual malloc/free
+    explicit programmer control
+
+MECC Clyth:
+    estate allocation
+    clustered counting
+    no per-object manual free
 ```
 
-This optimization removes unnecessary aliases while preserving observable program behavior.
+This keeps embedded-style, low-level, and performance-critical manual code possible while allowing application code to use MECC where it helps.
 
 ---
 
@@ -283,8 +335,7 @@ This optimization removes unnecessary aliases while preserving observable progra
 ## Legal Disclaimer
 
 The author of Clyth is not legally responsible for ensuring license compliance for programs written using the language or its tooling.
-
+<br>
 Developers are responsible for verifying compliance with all third-party licenses included in their final binaries or distributions.
-
+<br>
 Consult legal professionals where appropriate.
-

@@ -1,5 +1,5 @@
 
-// Generated from ../ClythV1.g4 by ANTLR 4.13.2
+// Generated from ClythV1.g4 by ANTLR 4.13.2
 
 #pragma once
 
@@ -43,6 +43,15 @@ public:
 
   virtual void enterStructField(ClythV1Parser::StructFieldContext *ctx) = 0;
   virtual void exitStructField(ClythV1Parser::StructFieldContext *ctx) = 0;
+
+  virtual void enterMethodBlock(ClythV1Parser::MethodBlockContext *ctx) = 0;
+  virtual void exitMethodBlock(ClythV1Parser::MethodBlockContext *ctx) = 0;
+
+  virtual void enterMethodDecl(ClythV1Parser::MethodDeclContext *ctx) = 0;
+  virtual void exitMethodDecl(ClythV1Parser::MethodDeclContext *ctx) = 0;
+
+  virtual void enterMethodSimpleName(ClythV1Parser::MethodSimpleNameContext *ctx) = 0;
+  virtual void exitMethodSimpleName(ClythV1Parser::MethodSimpleNameContext *ctx) = 0;
 
   virtual void enterFunctionDecl(ClythV1Parser::FunctionDeclContext *ctx) = 0;
   virtual void exitFunctionDecl(ClythV1Parser::FunctionDeclContext *ctx) = 0;
@@ -116,6 +125,9 @@ public:
   virtual void enterContinueStmt(ClythV1Parser::ContinueStmtContext *ctx) = 0;
   virtual void exitContinueStmt(ClythV1Parser::ContinueStmtContext *ctx) = 0;
 
+  virtual void enterMeccBlock(ClythV1Parser::MeccBlockContext *ctx) = 0;
+  virtual void exitMeccBlock(ClythV1Parser::MeccBlockContext *ctx) = 0;
+
   virtual void enterParenExpr(ClythV1Parser::ParenExprContext *ctx) = 0;
   virtual void exitParenExpr(ClythV1Parser::ParenExprContext *ctx) = 0;
 
@@ -154,6 +166,9 @@ public:
 
   virtual void enterPrimary(ClythV1Parser::PrimaryContext *ctx) = 0;
   virtual void exitPrimary(ClythV1Parser::PrimaryContext *ctx) = 0;
+
+  virtual void enterAllocationExpression(ClythV1Parser::AllocationExpressionContext *ctx) = 0;
+  virtual void exitAllocationExpression(ClythV1Parser::AllocationExpressionContext *ctx) = 0;
 
   virtual void enterArgumentList(ClythV1Parser::ArgumentListContext *ctx) = 0;
   virtual void exitArgumentList(ClythV1Parser::ArgumentListContext *ctx) = 0;

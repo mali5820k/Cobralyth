@@ -1,5 +1,5 @@
 
-// Generated from ../ClythV1.g4 by ANTLR 4.13.2
+// Generated from ClythV1.g4 by ANTLR 4.13.2
 
 #pragma once
 
@@ -12,17 +12,19 @@
 class  ClythV1Lexer : public antlr4::Lexer {
 public:
   enum {
-    T__0 = 1, T__1 = 2, T__2 = 3, T__3 = 4, T__4 = 5, T__5 = 6, T__6 = 7, 
-    T__7 = 8, T__8 = 9, T__9 = 10, T__10 = 11, T__11 = 12, T__12 = 13, T__13 = 14, 
-    INCLUDE = 15, EXTERN = 16, C_ABI = 17, STRUCT = 18, IF = 19, ELSE = 20, 
-    FOR = 21, WHILE = 22, RETURN = 23, BREAK = 24, CONTINUE = 25, IS = 26, 
-    IN = 27, NOT = 28, SEMI = 29, OR = 30, AND = 31, EQ = 32, NEQ = 33, 
-    GTE = 34, LTE = 35, GT = 36, LT = 37, INCREMENT = 38, DECREMENT = 39, 
-    PLUS = 40, MINUS = 41, STAR = 42, SLASH = 43, PERCENT = 44, BANG = 45, 
-    TILDE = 46, AMP = 47, DOT = 48, VARARGS = 49, BUILTIN_TYPE = 50, BOOLEAN_LITERAL = 51, 
-    NULL_LITERAL = 52, NUMERIC_LITERAL = 53, TEMPLATE_STRING_LITERAL = 54, 
-    STRING_LITERAL = 55, IDENTIFIER = 56, SINGLE_LINE_COMMENT = 57, MULTI_LINE_COMMENT = 58, 
-    WS = 59
+    INCLUDE = 1, EXTERN = 2, C_ABI = 3, STRUCT = 4, MECC = 5, MALLOC = 6, 
+    ISO_MALLOC = 7, CONSTRUCTOR = 8, DESTRUCTOR = 9, IF = 10, ELSE = 11, 
+    FOR = 12, WHILE = 13, RETURN = 14, BREAK = 15, CONTINUE = 16, IS = 17, 
+    IN = 18, NOT = 19, BOOLEAN_LITERAL = 20, NULL_LITERAL = 21, LPAREN = 22, 
+    RPAREN = 23, LBRACE = 24, RBRACE = 25, LBRACKET = 26, RBRACKET = 27, 
+    COMMA = 28, COLON = 29, SEMI = 30, DOT = 31, OR = 32, AND = 33, EQ = 34, 
+    NEQ = 35, GTE = 36, LTE = 37, GT = 38, LT = 39, INCREMENT = 40, DECREMENT = 41, 
+    PLUS_ASSIGN = 42, MINUS_ASSIGN = 43, STAR_ASSIGN = 44, SLASH_ASSIGN = 45, 
+    PERCENT_ASSIGN = 46, ASSIGN = 47, PLUS = 48, MINUS = 49, STAR = 50, 
+    SLASH = 51, PERCENT = 52, BANG = 53, TILDE = 54, AMP = 55, VARARGS = 56, 
+    BUILTIN_TYPE = 57, NUMERIC_LITERAL = 58, TEMPLATE_STRING_LITERAL = 59, 
+    STRING_LITERAL = 60, IDENTIFIER = 61, SINGLE_LINE_COMMENT = 62, MULTI_LINE_COMMENT = 63, 
+    WS = 64
   };
 
   explicit ClythV1Lexer(antlr4::CharStream *input);
