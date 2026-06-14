@@ -24,3 +24,10 @@ compiler-dev/frontend/.vscode/settings.json
 /antlr4-cpp-runtime-lib
 /antlr4-cpp-runtime-src/build
 /compiler-src/src/clyth_antlr_files
+compiler-src/src/clyth_antlr_files/ClythV1Parser.cpp
+compiler-src/src/clyth_antlr_files/ClythV1Listener.h
+compiler-src/src/clyth_antlr_files/ClythV1Listener.cpp
+compiler-src/src/clyth_antlr_files/ClythV1Lexer.h
+compiler-src/src/clyth_antlr_files/ClythV1Lexer.cpp
+compiler-src/src/clyth_antlr_files/ClythV1BaseListener.h
+compiler-src/src/clyth_antlr_files/ClythV1BaseListener.cpp
