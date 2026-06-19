@@ -2,7 +2,7 @@
 
 Clyth is an LLVM-based ahead-of-time (AOT) compiled systems programming language implemented in C++.
 
-The language is designed around explicit control, predictable performance, low runtime overhead, and practical ergonomics for systems development while retaining the low-level characteristics expected from C-family languages.
+The language explores deterministic memory management and practical systems-programming ergonomics while preserving explicit control and predictable runtime behavior.
 
 Clyth supports manual memory management by default and includes an optional memory-management model called **MECC**: **Managed Entanglement for Collapsible Collections**.
 
@@ -658,6 +658,25 @@ The long-term goal is to provide a practical toolchain path that can produce nat
 - [ ] Documentation generator.
 - [ ] AST visualizer.
 - [ ] Debugger/interpreter experimentation.
+
+---
+
+# AI-Assisted Development Philosophy
+
+Clyth is a personal systems programming language project exploring compiler construction, runtime design, and deterministic memory management.
+
+Modern AI-assisted development tools have been used throughout implementation to accelerate experimentation and reduce boilerplate, while language architecture, memory model design, runtime philosophy, and overall direction remain driven by the author's design goals.
+
+The project aims to remain transparent regarding the role of AI assistance.
+
+Neither of the following descriptions accurately reflects the nature of the work:
+
+- "I wrote every line myself."
+- "AI made the project."
+
+Architecture, design goals, tradeoffs, and overall direction are considered the primary authorship contribution, while AI tools are treated as accelerators that help reduce repetitive implementation effort.
+
+The goal is not to claim authorship through keystroke count, but through the ideas, constraints, and engineering decisions that shape the language.
 
 ---
 

@@ -5,12 +5,12 @@ target_include_directories(clyth_compiler_bin PUBLIC ${CMAKE_SOURCE_DIR}/src/cxx
 target_sources(
 	clyth_compiler_bin PUBLIC
 	scanner.cpp
-	utilFunctions.cpp
+	util_functions.cpp
 	main.cpp
-	clythAST.cpp
-	clythLLVMStub.cpp
-	clythLoweringPlan.cpp
-	clythSemantic.cpp
+	clyth_ast.cpp
+	clyth_llvm_stub.cpp
+	clyth_lowering_plan.cpp
+	clyth_semantic.cpp
 	clyth_antlr_files/ClythV1BaseListener.cpp
 	clyth_antlr_files/ClythV1Lexer.cpp
 	clyth_antlr_files/ClythV1Listener.cpp

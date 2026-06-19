@@ -1,4 +1,4 @@
-#include "clythSemantic.hpp"
+#include "clyth_semantic.hpp"
 
 #include <algorithm>
 #include <sstream>
@@ -254,6 +254,33 @@ bool SemanticContext::is_known_type(const TypeInfo& type) const {
         return true;
     }
 
+    const std::string& name = type.name;
+
+    // Fixed array syntax: T[N]. The element type must be known; the numeric
+    // length is validated more deeply in a later collection/type pass.
+    const std::size_t bracket_pos = name.find('[');
+    if (bracket_pos != std::string::npos && name.back() == ']') {
+        const std::string element_name = name.substr(0, bracket_pos);
+        TypeInfo element = parse_type_text(element_name);
+        return is_known_type(element);
+    }
+
+    // Generic runtime/library container syntax: List<T>, Map<K:V>, Set<T>.
+    // Generic containers are allowed as known V1 types even before their full
+    // runtime implementation exists, because semantic/codegen passes lower them
+    // into runtime/library calls later.
+    const std::size_t generic_pos = name.find('<');
+    if (generic_pos != std::string::npos && name.back() == '>') {
+        const std::string base = name.substr(0, generic_pos);
+        if (base == "List" || base == "list" ||
+            base == "Map" || base == "map" ||
+            base == "Set" || base == "set") {
+            return true;
+        }
+
+        return global_scope.symbols.find(base) != global_scope.symbols.end();
+    }
+
     return global_scope.symbols.find(type.name) != global_scope.symbols.end();
 }
 
@@ -476,8 +503,7 @@ bool is_expression_node(const ast::NodePtr& node) {
         case ast::NodeKind::PostfixExpr:
         case ast::NodeKind::AllocationExpr:
         case ast::NodeKind::ListLiteralExpr:
-        case ast::NodeKind::MapLiteralExpr:
-        case ast::NodeKind::SetLiteralExpr:
+        case ast::NodeKind::CurlyLiteralExpr:
             return true;
 
         default:
@@ -981,6 +1007,59 @@ void ControlFlowPass::visit_function(SemanticContext& context, const ast::NodePt
 }
 
 
+
+std::string CollectionLiteralSemanticPass::name() const {
+    return "CollectionLiteralSemanticPass";
+}
+
+void CollectionLiteralSemanticPass::run(SemanticContext& context, const ast::ProgramPtr& program) {
+    visit_node(context, program);
+}
+
+void CollectionLiteralSemanticPass::visit_node(SemanticContext& context, const ast::NodePtr& node) {
+    if (!node) {
+        return;
+    }
+
+    if (node->kind == ast::NodeKind::ListLiteralExpr) {
+        node->attributes["semantic_collection"] = "list_or_array_initializer";
+        node->attributes["lowering_hint"] = "target_type_decides_list_vs_fixed_array";
+    }
+
+    if (node->kind == ast::NodeKind::CurlyLiteralExpr) {
+        bool has_pair = false;
+        bool has_element = false;
+
+        std::vector<ast::NodePtr> entries;
+        collect_nodes_by_kind(node, ast::NodeKind::CurlyEntry, entries);
+
+        for (const auto& entry : entries) {
+            const auto kind = query::attr(entry, "entry_kind").value_or("element");
+            if (kind == "pair") {
+                has_pair = true;
+            } else {
+                has_element = true;
+            }
+        }
+
+        if (has_pair && has_element) {
+            context.diagnostics.add_error(
+                node->location,
+                "Curly collection literal cannot mix map key-value entries and set elements."
+            );
+            node->attributes["semantic_collection"] = "invalid_mixed_curly_literal";
+        } else if (has_pair) {
+            node->attributes["semantic_collection"] = "map_initializer";
+        } else {
+            node->attributes["semantic_collection"] = "set_initializer";
+        }
+    }
+
+    for (const auto& child : node->children) {
+        visit_node(context, child);
+    }
+}
+
 std::string MethodValidationPass::name() const {
     return "MethodValidationPass";
 }
@@ -1052,7 +1131,7 @@ void MethodValidationPass::run(SemanticContext& context, const ast::ProgramPtr& 
             continue;
         }
 
-        // Qualified method syntax: ReturnType StructName.methodName(...)
+        // Qualified method syntax: ReturnType StructName.method_name(...)
         // Current generic AST stores raw text, so this pass annotates conservatively.
         if (method->text.find('.') != std::string::npos) {
             method->attributes["qualified_method"] = "true";
@@ -1198,6 +1277,7 @@ void ClythSemanticPipeline::register_default_passes() {
     add_pass(std::make_unique<StructValidationPass>());
     add_pass(std::make_unique<FunctionSignaturePass>());
     add_pass(std::make_unique<MethodValidationPass>());
+    add_pass(std::make_unique<CollectionLiteralSemanticPass>());
     add_pass(std::make_unique<ScopeAndSymbolPass>());
     add_pass(std::make_unique<ControlFlowPass>());
     add_pass(std::make_unique<MeccSemanticPass>());

@@ -1,4 +1,4 @@
-#include "clythAST.hpp"
+#include "clyth_ast.hpp"
 #include <sstream>
 
 namespace clyth {
@@ -99,9 +99,9 @@ ClythSyntaxErrorListener::ClythSyntaxErrorListener(DiagnosticBag& diagnostics)
 
 void ClythSyntaxErrorListener::syntaxError(
     antlr4::Recognizer* recognizer,
-    antlr4::Token* offendingSymbol,
+    antlr4::Token* offending_symbol,
     std::size_t line,
-    std::size_t charPositionInLine,
+    std::size_t char_position_in_line,
     const std::string& msg,
     std::exception_ptr e
 ) {
@@ -110,15 +110,15 @@ void ClythSyntaxErrorListener::syntaxError(
 
     std::string message = msg;
 
-    if (offendingSymbol != nullptr) {
-        const std::string offending_text = offendingSymbol->getText();
+    if (offending_symbol != nullptr) {
+        const std::string offending_text = offending_symbol->getText();
 
         if (!offending_text.empty()) {
             message = fmt::format("{} near '{}'", msg, offending_text);
         }
     }
 
-    diagnostics.add_error(SourceLocation{line, charPositionInLine}, message);
+    diagnostics.add_error(SourceLocation{line, char_position_in_line}, message);
 }
 
 // ============================================================
@@ -161,9 +161,8 @@ std::string node_kind_name(NodeKind kind) {
         case NodeKind::PostfixExpr: return "PostfixExpr";
         case NodeKind::AllocationExpr: return "AllocationExpr";
         case NodeKind::ListLiteralExpr: return "ListLiteralExpr";
-        case NodeKind::MapLiteralExpr: return "MapLiteralExpr";
-        case NodeKind::MapEntry: return "MapEntry";
-        case NodeKind::SetLiteralExpr: return "SetLiteralExpr";
+        case NodeKind::CurlyLiteralExpr: return "CurlyLiteralExpr";
+        case NodeKind::CurlyEntry: return "CurlyEntry";
         case NodeKind::Generic: return "Generic";
         case NodeKind::Token: return "Token";
     }
@@ -795,23 +794,26 @@ std::any ClythAST::visitCollectionLiteral(ClythV1Parser::CollectionLiteralContex
 }
 
 std::any ClythAST::visitListLiteral(ClythV1Parser::ListLiteralContext* ctx) {
-    return build_generic(ast::NodeKind::ListLiteralExpr, ctx, "list");
+    auto node = build_generic(ast::NodeKind::ListLiteralExpr, ctx, "listLiteral");
+    node->attributes["literal_kind"] = "list";
+    return node;
 }
 
-std::any ClythAST::visitMapLiteral(ClythV1Parser::MapLiteralContext* ctx) {
-    return build_generic(ast::NodeKind::MapLiteralExpr, ctx, "map");
+std::any ClythAST::visitCurlyLiteral(ClythV1Parser::CurlyLiteralContext* ctx) {
+    auto node = build_generic(ast::NodeKind::CurlyLiteralExpr, ctx, "curlyLiteral");
+    node->attributes["literal_kind"] = "curly";
+    node->attributes["semantic_kind"] = "map_or_set";
+    return node;
 }
 
-std::any ClythAST::visitMapEntryList(ClythV1Parser::MapEntryListContext* ctx) {
-    return build_generic(ast::NodeKind::Generic, ctx, "mapEntryList");
+std::any ClythAST::visitCurlyEntryList(ClythV1Parser::CurlyEntryListContext* ctx) {
+    return build_generic(ast::NodeKind::Generic, ctx, "curlyEntryList");
 }
 
-std::any ClythAST::visitMapEntry(ClythV1Parser::MapEntryContext* ctx) {
-    return build_generic(ast::NodeKind::MapEntry, ctx, "mapEntry");
-}
-
-std::any ClythAST::visitSetLiteral(ClythV1Parser::SetLiteralContext* ctx) {
-    return build_generic(ast::NodeKind::SetLiteralExpr, ctx, "set");
+std::any ClythAST::visitCurlyEntry(ClythV1Parser::CurlyEntryContext* ctx) {
+    auto node = build_generic(ast::NodeKind::CurlyEntry, ctx, "curlyEntry");
+    node->attributes["entry_kind"] = ctx->COLON() != nullptr ? "pair" : "element";
+    return node;
 }
 
 std::any ClythAST::visitExpressionList(ClythV1Parser::ExpressionListContext* ctx) {
@@ -826,27 +828,34 @@ std::any ClythAST::visitType(ClythV1Parser::TypeContext* ctx) {
     return node;
 }
 
-std::any ClythAST::visitMapType(ClythV1Parser::MapTypeContext* ctx) {
-    auto node = build_generic(ast::NodeKind::Type, ctx, "mapType");
+std::any ClythAST::visitFixedArrayType(ClythV1Parser::FixedArrayTypeContext* ctx) {
+    auto node = build_generic(ast::NodeKind::Type, ctx, "fixedArrayType");
     node->attributes["name"] = ctx->getText();
+    node->attributes["container"] = "array";
+    node->attributes["array_kind"] = "fixed";
     return node;
 }
 
-std::any ClythAST::visitCollectionType(ClythV1Parser::CollectionTypeContext* ctx) {
-    auto node = build_generic(ast::NodeKind::Type, ctx, "collectionType");
+std::any ClythAST::visitGenericType(ClythV1Parser::GenericTypeContext* ctx) {
+    auto node = build_generic(ast::NodeKind::Type, ctx, "genericType");
     node->attributes["name"] = ctx->getText();
+    node->attributes["container"] = "generic";
     return node;
+}
+
+std::any ClythAST::visitGenericArgList(ClythV1Parser::GenericArgListContext* ctx) {
+    auto node = build_generic(ast::NodeKind::Generic, ctx, "genericArgList");
+    node->attributes["text"] = ctx->getText();
+    return node;
+}
+
+std::any ClythAST::visitTypeAtom(ClythV1Parser::TypeAtomContext* ctx) {
+    return visit_single_rule_child(ctx);
 }
 
 std::any ClythAST::visitBaseType(ClythV1Parser::BaseTypeContext* ctx) {
     auto node = make_node(ast::NodeKind::Type, ctx, "baseType");
     node->attributes["name"] = ctx->getText();
-    return node;
-}
-
-std::any ClythAST::visitTypeSuffix(ClythV1Parser::TypeSuffixContext* ctx) {
-    auto node = make_node(ast::NodeKind::Type, ctx, "typeSuffix");
-    node->attributes["suffix"] = ctx->getText();
     return node;
 }
 

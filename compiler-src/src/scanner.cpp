@@ -1,5 +1,5 @@
 #include "scanner.hpp"
-#include "utilFunctions.hpp"
+#include "util_functions.hpp"
 
 Scanner::Scanner() {}
 

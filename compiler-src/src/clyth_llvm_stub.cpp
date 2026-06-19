@@ -1,6 +1,6 @@
-#include "clythLLVMStub.hpp"
+#include "clyth_llvm_stub.hpp"
 
-namespace clyth::llvmstub {
+namespace clyth::llvm_stub {
 
 ClythLLVMCodegen::ClythLLVMCodegen(DiagnosticBag& diagnostics)
     : diagnostics(diagnostics) {}
@@ -66,8 +66,7 @@ bool ClythLLVMCodegen::emit_program(
             case ast::NodeKind::IndexExpr:
             case ast::NodeKind::PostfixExpr:
             case ast::NodeKind::ListLiteralExpr:
-            case ast::NodeKind::MapLiteralExpr:
-            case ast::NodeKind::SetLiteralExpr:
+            case ast::NodeKind::CurlyLiteralExpr:
                 if (!emit_expression_stub(node, semantics)) return false;
                 break;
 
@@ -136,4 +135,4 @@ bool ClythLLVMCodegen::emit_mecc_allocation_stub(const lowering::LinearNode& nod
     return true;
 }
 
-} // namespace clyth::llvmstub
+} // namespace clyth::llvm_stub

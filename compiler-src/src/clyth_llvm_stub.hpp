@@ -2,11 +2,11 @@
 #define CLYTH_LLVM_STUB_HPP
 
 #include "common.hpp"
-#include "clythAST.hpp"
-#include "clythSemantic.hpp"
-#include "clythLoweringPlan.hpp"
+#include "clyth_ast.hpp"
+#include "clyth_semantic.hpp"
+#include "clyth_lowering_plan.hpp"
 
-namespace clyth::llvmstub {
+namespace clyth::llvm_stub {
 
 // ============================================================
 // LLVM Codegen Stub
@@ -55,6 +55,6 @@ private:
     bool emit_mecc_allocation_stub(const lowering::LinearNode& node, const semantic::SemanticResult& semantics);
 };
 
-} // namespace clyth::llvmstub
+} // namespace clyth::llvm_stub
 
 #endif // CLYTH_LLVM_STUB_HPP

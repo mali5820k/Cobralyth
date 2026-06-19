@@ -2,7 +2,7 @@
 #define CLYTH_SEMANTIC_HPP
 
 #include "common.hpp"
-#include "clythAST.hpp"
+#include "clyth_ast.hpp"
 
 #include <optional>
 #include <set>

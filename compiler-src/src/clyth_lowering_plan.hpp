@@ -2,8 +2,8 @@
 #define CLYTH_LOWERING_PLAN_HPP
 
 #include "common.hpp"
-#include "clythAST.hpp"
-#include "clythSemantic.hpp"
+#include "clyth_ast.hpp"
+#include "clyth_semantic.hpp"
 
 #include <optional>
 #include <unordered_map>

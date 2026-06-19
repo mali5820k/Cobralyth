@@ -10,7 +10,7 @@
 #include <map>
 #include <stdexcept>
 #include <memory>
-#include "utilFunctions.hpp"
+#include "util_functions.hpp"
 #include <fmt/format.h>
 #include <fmt/compile.h>
 #include <fmt/chrono.h>

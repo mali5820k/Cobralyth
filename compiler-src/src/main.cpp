@@ -1,10 +1,10 @@
 #include "common.hpp"
 #include "cxxopts/cxxopts.hpp"
 #include "scanner.hpp"
-#include "clythAST.hpp"
-#include "clythSemantic.hpp"
-#include "clythLoweringPlan.hpp"
-#include "clythLLVMStub.hpp"
+#include "clyth_ast.hpp"
+#include "clyth_semantic.hpp"
+#include "clyth_lowering_plan.hpp"
+#include "clyth_llvm_stub.hpp"
 
 // ANTLR4 runtime includes.
 #include "antlr4-runtime.h"
@@ -139,8 +139,8 @@ static int parse_clyth_file(const CompilerOptions& opts) {
         lowering_plan.print();
     }
 
-    clyth::llvmstub::ClythLLVMCodegen codegen(diagnostics);
-    clyth::llvmstub::CodegenConfig codegen_config;
+    clyth::llvm_stub::ClythLLVMCodegen codegen(diagnostics);
+    clyth::llvm_stub::CodegenConfig codegen_config;
     codegen_config.module_name = opts.main_file.stem().string();
     codegen_config.dump_codegen_plan = opts.dump_codegen_plan || opts.debug_mode;
 
