@@ -1,0 +1,6 @@
+extern C int32 printf(string formatted_string, ...)
+
+int32 main() {
+    printf("\nSimplest extern-C function hookup\n")
+    return 0
+}

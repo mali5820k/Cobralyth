@@ -2,7 +2,7 @@
 #define CLYTH_SEMANTIC_HPP
 
 #include "common.hpp"
-#include "clythAST.hpp"
+#include "clyth_ast.hpp"
 
 #include <optional>
 #include <set>
@@ -247,6 +247,17 @@ class MethodValidationPass final : public ISemanticPass {
 public:
     std::string name() const override;
     void run(SemanticContext& context, const ast::ProgramPtr& program) override;
+};
+
+class CollectionLiteralSemanticPass final : public ISemanticPass {
+public:
+    std::string name() const override;
+    void run(SemanticContext& context, const ast::ProgramPtr& program) override;
+
+private:
+    void visit_node(SemanticContext& context, const ast::NodePtr& node);
+    void visit_list_literal(SemanticContext& context, const ast::NodePtr& node);
+    void visit_curly_literal(SemanticContext& context, const ast::NodePtr& node);
 };
 
 class MeccSemanticPass final : public ISemanticPass {

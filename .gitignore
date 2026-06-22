@@ -32,3 +32,6 @@ compiler-src/src/clyth_antlr_files/ClythV1Lexer.h
 compiler-src/src/clyth_antlr_files/ClythV1Lexer.cpp
 compiler-src/src/clyth_antlr_files/ClythV1BaseListener.h
 compiler-src/src/clyth_antlr_files/ClythV1BaseListener.cpp
+/llvm-build/
+/llvm-bundled/
+/llvm-project-src/

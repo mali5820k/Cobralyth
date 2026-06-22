@@ -1,9 +1,11 @@
-#include "clythLLVMStub.hpp"
+#include "clyth_llvm_stub.hpp"
 
-namespace clyth::llvmstub {
+namespace clyth::llvm_stub {
 
 ClythLLVMCodegen::ClythLLVMCodegen(DiagnosticBag& diagnostics)
-    : diagnostics(diagnostics) {}
+    : diagnostics(diagnostics),
+      module(std::make_unique<llvm::Module>("clyth_module", context)),
+      builder(context) {}
 
 bool ClythLLVMCodegen::emit(
     const lowering::ClythLoweringPlan& plan,
@@ -15,11 +17,26 @@ bool ClythLLVMCodegen::emit(
         return false;
     }
 
+    module->setModuleIdentifier(config.module_name);
+    module->setSourceFileName(config.module_name);
+
     if (config.dump_codegen_plan) {
         fmt::print("LLVM codegen stub for module '{}'\n", config.module_name);
     }
 
-    return emit_program(plan, semantics) && !diagnostics.has_errors();
+    const bool ok = emit_program(plan, semantics);
+    if (!ok || diagnostics.has_errors()) {
+        return false;
+    }
+
+    if (llvm::verifyModule(*module, &llvm::errs())) {
+        diagnostics.add_error(SourceLocation{}, "LLVM module verification failed.");
+        return false;
+    }
+
+    module->print(llvm::outs(), nullptr);
+
+    return true;
 }
 
 bool ClythLLVMCodegen::emit_program(
@@ -34,6 +51,10 @@ bool ClythLLVMCodegen::emit_program(
 
             case ast::NodeKind::FunctionDecl:
                 if (!emit_function_stub(node, semantics)) return false;
+                break;
+
+            case ast::NodeKind::ExternDecl:
+                if (!emit_extern_function_stub(node, semantics)) return false;
                 break;
 
             case ast::NodeKind::MethodDecl:
@@ -66,8 +87,7 @@ bool ClythLLVMCodegen::emit_program(
             case ast::NodeKind::IndexExpr:
             case ast::NodeKind::PostfixExpr:
             case ast::NodeKind::ListLiteralExpr:
-            case ast::NodeKind::MapLiteralExpr:
-            case ast::NodeKind::SetLiteralExpr:
+            case ast::NodeKind::CurlyLiteralExpr:
                 if (!emit_expression_stub(node, semantics)) return false;
                 break;
 
@@ -79,13 +99,52 @@ bool ClythLLVMCodegen::emit_program(
     return true;
 }
 
-bool ClythLLVMCodegen::emit_function_stub(const lowering::LinearNode& node, const semantic::SemanticResult&) {
-    (void)node;
+// clyth_llvm_stub.cpp
+bool ClythLLVMCodegen::emit_function_stub(const lowering::LinearNode& node, const semantic::SemanticResult& semantics) {
+    if (node.kind == ast::NodeKind::FunctionDecl &&
+        node.text.find("main") != std::string::npos) {
+        return emit_main_function_stub(node, semantics);
+    }
+
+    return true;
+}
+
+bool ClythLLVMCodegen::emit_extern_function_stub(const lowering::LinearNode& node, const semantic::SemanticResult& semantics) {
     // TODO:
     // - create llvm::FunctionType from semantic return/param types
     // - create llvm::Function
     // - create entry BasicBlock
     // - register params in codegen scope
+    if (node.kind == ast::NodeKind::ExternDecl && node.text.find("printf") != std::string::npos) {
+        return emit_printf_decl();
+    }
+
+    return true;
+}
+
+bool ClythLLVMCodegen::emit_printf_decl() {
+    llvm::Type* int32_type = llvm::Type::getInt32Ty(context);
+    llvm::Type* string_type = llvm::PointerType::get(context, 0);
+    std::vector<llvm::Type*> params;
+    params.push_back(string_type);
+    llvm::FunctionType* printf_type = llvm::FunctionType::get(int32_type, params, true);
+    llvm::Function* printf_function = llvm::Function::Create(printf_type, llvm::Function::ExternalLinkage, "printf", module.get());
+    functions["printf"] = printf_function;
+    return true;
+}
+
+bool ClythLLVMCodegen::emit_main_function_stub(const lowering::LinearNode& node, const semantic::SemanticResult&) {
+    (void)node;
+    llvm::Type* int32_type = llvm::Type::getInt32Ty(context);
+    llvm::FunctionType* main_type = llvm::FunctionType::get(int32_type, false);
+    llvm::Function* main_function = llvm::Function::Create(main_type, llvm::Function::ExternalLinkage, "main", module.get());
+    functions["main"] = main_function;
+    llvm::BasicBlock* entry_block = llvm::BasicBlock::Create(context, "entry", main_function);
+    builder.SetInsertPoint(entry_block);
+    llvm::Function* printf_function = functions.at("printf");
+    llvm::Value* msg = builder.CreateGlobalStringPtr("\nSimplest extern-C function hookup\n");
+    builder.CreateCall(printf_function, {msg});
+    builder.CreateRet(llvm::ConstantInt::get(int32_type, 0));
     return true;
 }
 
@@ -136,4 +195,4 @@ bool ClythLLVMCodegen::emit_mecc_allocation_stub(const lowering::LinearNode& nod
     return true;
 }
 
-} // namespace clyth::llvmstub
+} // namespace clyth::llvm_stub

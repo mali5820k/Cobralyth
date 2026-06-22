@@ -59,9 +59,9 @@ public:
 
     void syntaxError(
         antlr4::Recognizer* recognizer,
-        antlr4::Token* offendingSymbol,
+        antlr4::Token* offending_symbol,
         std::size_t line,
-        std::size_t charPositionInLine,
+        std::size_t char_position_in_line,
         const std::string& msg,
         std::exception_ptr e
     ) override;
@@ -113,9 +113,8 @@ enum class NodeKind {
     AllocationExpr,
 
     ListLiteralExpr,
-    MapLiteralExpr,
-    MapEntry,
-    SetLiteralExpr,
+    CurlyLiteralExpr,
+    CurlyEntry,
 
     Generic,
     Token
@@ -225,16 +224,16 @@ public:
     std::any visitLiteral(ClythV1Parser::LiteralContext* ctx) override;
     std::any visitCollectionLiteral(ClythV1Parser::CollectionLiteralContext* ctx) override;
     std::any visitListLiteral(ClythV1Parser::ListLiteralContext* ctx) override;
-    std::any visitMapLiteral(ClythV1Parser::MapLiteralContext* ctx) override;
-    std::any visitMapEntryList(ClythV1Parser::MapEntryListContext* ctx) override;
-    std::any visitMapEntry(ClythV1Parser::MapEntryContext* ctx) override;
-    std::any visitSetLiteral(ClythV1Parser::SetLiteralContext* ctx) override;
+    std::any visitCurlyLiteral(ClythV1Parser::CurlyLiteralContext* ctx) override;
+    std::any visitCurlyEntryList(ClythV1Parser::CurlyEntryListContext* ctx) override;
+    std::any visitCurlyEntry(ClythV1Parser::CurlyEntryContext* ctx) override;
     std::any visitExpressionList(ClythV1Parser::ExpressionListContext* ctx) override;
     std::any visitType(ClythV1Parser::TypeContext* ctx) override;
-    std::any visitMapType(ClythV1Parser::MapTypeContext* ctx) override;
-    std::any visitCollectionType(ClythV1Parser::CollectionTypeContext* ctx) override;
+    std::any visitFixedArrayType(ClythV1Parser::FixedArrayTypeContext* ctx) override;
+    std::any visitGenericType(ClythV1Parser::GenericTypeContext* ctx) override;
+    std::any visitGenericArgList(ClythV1Parser::GenericArgListContext* ctx) override;
+    std::any visitTypeAtom(ClythV1Parser::TypeAtomContext* ctx) override;
     std::any visitBaseType(ClythV1Parser::BaseTypeContext* ctx) override;
-    std::any visitTypeSuffix(ClythV1Parser::TypeSuffixContext* ctx) override;
     std::any visitCommaOrSemi(ClythV1Parser::CommaOrSemiContext* ctx) override;
 
 private:

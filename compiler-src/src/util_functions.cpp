@@ -30,12 +30,12 @@ std::vector<std::string> read_lines(std::string file_name) {
 }
 
 /**
- * Splits a given string via delimitter.
- * @param input_string The string to split via delimitter
- * @param delimitter The delimitter string pattern to split by
+ * Splits a given string via delimiter.
+ * @param input_string The string to split via delimiter
+ * @param delimiter The delimiter string pattern to split by
  * @return std::vector<std::string> vectors of strings
  */
-std::vector<std::string> split(std::string input_string, std::string delimitter) {
+std::vector<std::string> split(std::string input_string, std::string delimiter) {
     bool search_exhausted = false;
     std::vector<std::string> split_vector;
     std::size_t substring_found;
@@ -43,7 +43,7 @@ std::vector<std::string> split(std::string input_string, std::string delimitter)
     std::string substring_value(input_string);
     while (!search_exhausted) {
         printf("Now searching at index %zu\n", last_start);
-        substring_found = input_string.find(delimitter, last_start);
+        substring_found = input_string.find(delimiter, last_start);
         printf("Substring found at: %zu", substring_found);
         if (substring_found == std::string::npos) {
             search_exhausted = true;
@@ -54,7 +54,7 @@ std::vector<std::string> split(std::string input_string, std::string delimitter)
         printf("Substring length should be: %zu", substring_found - last_start);
         printf("Adding substring: %s", substring_value.c_str());
         split_vector.emplace_back(substring_value);
-        last_start = substring_found + delimitter.length();
+        last_start = substring_found + delimiter.length();
         if (last_start >= input_string.length()) {
             return split_vector;
         }

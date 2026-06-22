@@ -5,30 +5,12 @@ grammar ClythV1;
 //
 // Goals:
 // - C-like systems language frontend suitable for AST construction.
-// - Supports comments, declarations, structs, functions, control flow,
-//   C interop, includes, lists, fixed arrays, maps, sets, `is`, `in`,
-//   ordinary calls such as print/printf, and template strings.
+// - Fixed arrays are a base language primitive: T[N].
+// - Dynamic containers are explicit generic runtime/library types: List<T>, Map<K:V>, Set<T>.
+// - [] parses as a neutral list literal.
+// - {} parses as a neutral curly collection literal; semantic analysis decides Map vs Set.
+// - Struct methods are supported through method blocks and qualified method declarations.
 // - MECC syntax is parsed as an opt-in modifier/block for later semantic lowering.
-// - Struct methods are supported in two forms:
-//
-//     MyStruct {
-//         MyStruct constructor() {}
-//         void destructor() {}
-//         void _privateMethod() {}
-//     }
-//
-//     bool MyStruct.additionalMethod() {}
-//
-// Notes:
-// - This grammar is intentionally permissive in a few places so semantic passes
-//   can decide what is legal for V1 versus future extensions.
-// - `statement` is allowed at top-level for parser tests/script-mode experiments.
-//   Semantic analysis can reject top-level statements later.
-// ============================================================
-
-
-// ============================================================
-// Parser rules
 // ============================================================
 
 program
@@ -40,15 +22,10 @@ topLevelItem
     | externDecl
     | structDecl
     | methodBlock
-    | functionDecl       // must appear before methodDecl so normal top-level functions stay functions
-    | methodDecl         // mainly for qualified methods: ReturnType StructName.methodName(...)
+    | functionDecl
+    | methodDecl
     | statement
     ;
-
-
-// -----------------------------
-// Top-level declarations
-// -----------------------------
 
 includeDecl
     : INCLUDE includeTarget SEMI?
@@ -86,27 +63,9 @@ structField
     : type IDENTIFIER commaOrSemi?
     ;
 
-
 // -----------------------------
 // Methods
 // -----------------------------
-//
-// Method names may be normal identifiers or constructor/destructor keywords.
-// The parser accepts private-looking names such as `_computeArea`; semantic
-// analysis can interpret underscore-prefixed methods as private.
-//
-// Inside a method block:
-//
-//     MyStruct {
-//         void foo() {}
-//     }
-//
-// Top-level qualified method:
-//
-//     bool MyStruct.foo() {}
-//
-// Normal top-level functions still parse as functionDecl because functionDecl
-// appears before methodDecl in topLevelItem.
 
 methodBlock
     : IDENTIFIER LBRACE methodDecl* RBRACE
@@ -134,7 +93,6 @@ paramList
 param
     : type IDENTIFIER
     ;
-
 
 // -----------------------------
 // Statements
@@ -257,7 +215,6 @@ parenExpr
     : LPAREN expression RPAREN
     ;
 
-
 // ============================================================
 // Expression precedence
 // ============================================================
@@ -335,63 +292,70 @@ literal
     | NULL_LITERAL
     ;
 
-
 // ============================================================
 // Collection literals
 // ============================================================
 
 collectionLiteral
-    : mapLiteral
-    | setLiteral
-    | listLiteral
+    : listLiteral
+    | curlyLiteral
     ;
 
 listLiteral
     : LBRACKET expressionList? RBRACKET
     ;
 
-mapLiteral
-    : LBRACE mapEntryList? RBRACE
+curlyLiteral
+    : LBRACE curlyEntryList? RBRACE
     ;
 
-mapEntryList
-    : mapEntry (COMMA mapEntry)* COMMA?
+curlyEntryList
+    : curlyEntry (COMMA curlyEntry)* COMMA?
     ;
 
-mapEntry
-    : expression COLON expression
-    ;
-
-// Set literals use the same `{ ... }` surface form as maps.
-// During AST/semantic analysis:
-// - `{ a: b }` is a map literal.
-// - `{ a, b, c }` is a set literal.
-// - `{}` is syntactically accepted as mapLiteral by default and can be
-//   semantically interpreted from target type when assigned.
-setLiteral
-    : LBRACE expressionList COMMA? RBRACE
+curlyEntry
+    : expression (COLON expression)?
     ;
 
 expressionList
     : expression (COMMA expression)* COMMA?
     ;
 
-
 // ============================================================
 // Types
 // ============================================================
+//
+// V1 canonical container model:
+// - T[N]        = fixed array in the base language.
+// - List<T>     = dynamic list runtime/library type.
+// - Map<K:V>    = dynamic map runtime/library type.
+// - Set<T>      = dynamic set runtime/library type.
+//
+// Note: genericArgList supports both COMMA and COLON separators so Clyth can
+// accept Map<K,V> and map<K:V>-style spellings while semantic analysis
+// canonicalizes them into one internal type representation.
 
 type
-    : mapType
-    | collectionType
+    : fixedArrayType
+    | genericType
+    | baseType
     ;
 
-mapType
-    : collectionType COLON collectionType
+fixedArrayType
+    : typeAtom LBRACKET NUMERIC_LITERAL RBRACKET
     ;
 
-collectionType
-    : baseType typeSuffix*
+genericType
+    : IDENTIFIER LT genericArgList GT
+    ;
+
+genericArgList
+    : type ((COMMA | COLON) type)*
+    ;
+
+typeAtom
+    : genericType
+    | baseType
     ;
 
 baseType
@@ -399,24 +363,14 @@ baseType
     | IDENTIFIER
     ;
 
-typeSuffix
-    : LBRACKET RBRACKET                 // dynamic list: int32[]
-    | LBRACKET NUMERIC_LITERAL RBRACKET // fixed array: int32[10]
-    | LPAREN RPAREN                     // set: int32()
-    ;
-
 commaOrSemi
     : COMMA
     | SEMI
     ;
 
-
 // ============================================================
 // Lexer rules
 // ============================================================
-
-// Keywords.
-// Keep these before IDENTIFIER.
 
 INCLUDE : 'include';
 EXTERN  : 'extern';
@@ -451,9 +405,6 @@ NULL_LITERAL
     : 'null'
     ;
 
-
-// Punctuation.
-
 LPAREN   : '(';
 RPAREN   : ')';
 LBRACE   : '{';
@@ -465,10 +416,6 @@ COMMA : ',';
 COLON : ':';
 SEMI  : ';';
 DOT   : '.';
-
-
-// Operators.
-// Multi-character operators must appear before single-character prefixes.
 
 OR  : '||';
 AND : '&&';
@@ -504,9 +451,6 @@ AMP   : '&';
 
 VARARGS : '...';
 
-
-// Types and literals.
-
 BUILTIN_TYPE
     : 'uint8'
     | 'uint16'
@@ -535,8 +479,6 @@ NUMERIC_LITERAL
     | DIGIT+ DOT DIGIT+ NUMERIC_SUFFIX?
     ;
 
-// Backtick strings are separated so the AST can detect template strings
-// early and later parse `${...}` interpolation segments.
 TEMPLATE_STRING_LITERAL
     : '`' ('\\' . | ~[`\\\r\n])* '`'
     ;
@@ -566,9 +508,6 @@ fragment NUMERIC_SUFFIX
     | 'f32'
     | 'f64'
     ;
-
-
-// Whitespace and comments.
 
 SINGLE_LINE_COMMENT
     : '//' ~[\r\n]* -> skip

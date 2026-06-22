@@ -2,11 +2,19 @@
 #define CLYTH_LLVM_STUB_HPP
 
 #include "common.hpp"
-#include "clythAST.hpp"
-#include "clythSemantic.hpp"
-#include "clythLoweringPlan.hpp"
+#include "clyth_ast.hpp"
+#include "clyth_semantic.hpp"
+#include "clyth_lowering_plan.hpp"
 
-namespace clyth::llvmstub {
+#include <llvm/IR/LLVMContext.h>
+#include <llvm/IR/IRBuilder.h>
+#include <llvm/IR/Module.h>
+#include <llvm/IR/Function.h>
+#include <llvm/IR/Type.h>
+#include <llvm/IR/Verifier.h>
+#include <llvm/Support/raw_ostream.h>
+
+namespace clyth::llvm_stub {
 
 // ============================================================
 // LLVM Codegen Stub
@@ -46,8 +54,16 @@ public:
 private:
     DiagnosticBag& diagnostics;
 
+    llvm::LLVMContext context;
+    std::unique_ptr<llvm::Module> module;
+    llvm::IRBuilder<> builder;
+    std::unordered_map<std::string, llvm::Function*> functions;
+    
     bool emit_program(const lowering::ClythLoweringPlan& plan, const semantic::SemanticResult& semantics);
     bool emit_function_stub(const lowering::LinearNode& node, const semantic::SemanticResult& semantics);
+    bool emit_extern_function_stub(const lowering::LinearNode& node, const semantic::SemanticResult& semantics);
+    bool emit_main_function_stub(const lowering::LinearNode& node, const semantic::SemanticResult& semantics);
+    bool emit_printf_decl();
     bool emit_method_stub(const lowering::LinearNode& node, const semantic::SemanticResult& semantics);
     bool emit_struct_stub(const lowering::LinearNode& node, const semantic::SemanticResult& semantics);
     bool emit_statement_stub(const lowering::LinearNode& node, const semantic::SemanticResult& semantics);
@@ -55,6 +71,6 @@ private:
     bool emit_mecc_allocation_stub(const lowering::LinearNode& node, const semantic::SemanticResult& semantics);
 };
 
-} // namespace clyth::llvmstub
+} // namespace clyth::llvm_stub
 
 #endif // CLYTH_LLVM_STUB_HPP
