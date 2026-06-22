@@ -27,9 +27,13 @@ Implemented or scaffolded components include:
 - Symbol and scope analysis scaffolding.
 - MECC semantic annotation scaffolding.
 - Linear lowering plan for code generation.
-- LLVM IR generation scaffolding.
+- LLVM IR generation for an initial V1 subset.
+- `extern C` interop for declarations such as `printf`.
+- LLVM IR file emission through `--emit-ir-only`.
+- Optional executable linking through Zig/Clang targeting musl for statically linked Linux binaries.
+- Distribution packaging with compiler binary, useful LLVM tools, samples, README, and license files.
 
-Current work focuses on completing LLVM IR generation and producing executable binaries from Clyth source programs.
+Current work focuses on broadening LLVM IR generation beyond the initial V1 subset into structs, control flow, runtime containers, manual allocation, and MECC runtime lowering.
 
 ---
 
@@ -515,19 +519,21 @@ This provides a code-generation-friendly view of the program so LLVM IR generati
 
 ## LLVM IR Generation
 
-LLVM IR generation is the next major implementation stage.
+LLVM IR generation is now active for an initial V1 subset.
 
-The intended implementation path is:
+Currently supported backend behavior includes:
 
-1. Generate `int32 main() { return 42 }`.
-2. Generate arithmetic expressions.
-3. Generate local variables.
-4. Generate function calls.
-5. Generate `extern C` calls such as `printf`.
-6. Generate structs.
-7. Generate basic `malloc` / `free`.
-8. Generate MECC runtime calls.
-9. Generate estate allocation and clustered counting behavior.
+1. Declaring `extern C` functions such as `printf`.
+2. Defining Clyth functions.
+3. Lowering integer, boolean, string, and null literals.
+4. Lowering return statements and expression statements.
+5. Lowering local variables and simple assignment.
+6. Lowering function calls.
+7. Lowering common integer arithmetic, comparison, and boolean operations.
+8. Emitting `.ll` LLVM IR files.
+9. Invoking `zig cc` to link supported programs as statically linked musl-targeted executables.
+
+Unsupported language nodes are intentionally reported as diagnostics rather than silently ignored. Struct layout lowering, method lowering, manual allocation, runtime containers, control flow, and MECC runtime calls remain planned backend work.
 
 ---
 
@@ -609,6 +615,41 @@ Preferred portability and licensing direction includes:
 
 The long-term goal is to provide a practical toolchain path that can produce native binaries while keeping external dependencies and licensing concerns understandable.
 
+## Building and Compiling
+
+Build the compiler and bundled LLVM pieces:
+
+```bash
+./build_compiler.sh
+```
+
+Compile a supported Clyth program to a statically linked musl-targeted executable:
+
+```bash
+./build-compiler/clyth_compiler_bin -c sample-clyth-programs/printf_test.clyth -o printf_test
+./printf_test
+```
+
+Emit LLVM IR only:
+
+```bash
+./build-compiler/clyth_compiler_bin -c sample-clyth-programs/printf_test.clyth -o printf_test --emit-ir-only
+```
+
+Print generated IR to stdout while compiling:
+
+```bash
+./build-compiler/clyth_compiler_bin -c sample-clyth-programs/printf_test.clyth -o printf_test --print-ir
+```
+
+Show bundled/project license text:
+
+```bash
+./build-compiler/clyth_compiler_bin --show-licenses
+```
+
+The build script also creates a `dist-clyth/` directory and `clyth-dist.tar.gz` distribution archive containing the compiler binary, useful LLVM tools, samples, README files, and license files. Zig is expected to remain installed on the host PATH for final executable linking.
+
 ---
 
 # Roadmap
@@ -628,15 +669,19 @@ The long-term goal is to provide a practical toolchain path that can produce nat
 
 ## Backend
 
-- [ ] LLVM IR generation for `main`.
-- [ ] LLVM IR generation for literals.
-- [ ] LLVM IR generation for arithmetic.
-- [ ] LLVM IR generation for local variables.
-- [ ] LLVM IR generation for function calls.
-- [ ] `extern C` interop through LLVM.
+- [x] LLVM IR generation for `main`.
+- [x] LLVM IR generation for literals.
+- [x] LLVM IR generation for arithmetic.
+- [x] LLVM IR generation for local variables.
+- [x] LLVM IR generation for function calls.
+- [x] `extern C` interop through LLVM.
+- [x] LLVM IR file output.
+- [x] Statically linked executable output through Zig/musl for supported programs.
+- [ ] Control-flow lowering.
 - [ ] Struct layout lowering.
 - [ ] Method lowering.
 - [ ] Manual `malloc` / `free` lowering.
+- [ ] Runtime container lowering.
 - [ ] MECC runtime lowering.
 
 ## Runtime

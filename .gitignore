@@ -35,3 +35,4 @@ compiler-src/src/clyth_antlr_files/ClythV1BaseListener.cpp
 /llvm-build/
 /llvm-bundled/
 /llvm-project-src/
+/dist-clyth/
