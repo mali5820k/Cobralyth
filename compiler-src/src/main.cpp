@@ -6,6 +6,9 @@
 #include "clyth_lowering_plan.hpp"
 #include "clyth_llvm_stub.hpp"
 
+#include <array>
+#include <iterator>
+
 // ANTLR4 runtime includes.
 #include "antlr4-runtime.h"
 
@@ -18,6 +21,8 @@ struct CompilerOptions {
     bool dump_ast_json_stdout = false;
     bool dump_ast_bytecode_stdout = false;
     bool dump_codegen_plan = false;
+    bool emit_ir_only = false;
+    bool print_ir = false;
 
     std::filesystem::path main_file;
     std::filesystem::path ast_json_file;
@@ -143,6 +148,12 @@ static int parse_clyth_file(const CompilerOptions& opts) {
     clyth::llvm_stub::CodegenConfig codegen_config;
     codegen_config.module_name = opts.main_file.stem().string();
     codegen_config.dump_codegen_plan = opts.dump_codegen_plan || opts.debug_mode;
+    codegen_config.output_binary_path = opts.output_binary_name;
+    std::filesystem::path ir_output_path = opts.output_binary_name;
+    ir_output_path.replace_extension(".ll");
+    codegen_config.output_ir_path = ir_output_path;
+    codegen_config.compile_to_executable = !opts.emit_ir_only;
+    codegen_config.print_ir_to_stdout = opts.print_ir || opts.debug_mode;
 
     if (!codegen.emit(lowering_plan, semantic_result, codegen_config) || diagnostics.has_errors()) {
         diagnostics.print_to_stderr(opts.main_file);
@@ -168,7 +179,10 @@ int main(int argc, char** argv) {
         ("dump-ast-json", "Print human-readable AST JSON to stdout", cxxopts::value<bool>()->default_value("false"))
         ("ast-bytecode", "Write Clyth AST bytecode/debug format to file", cxxopts::value<std::string>()->default_value(""))
         ("dump-ast-bytecode", "Print Clyth AST bytecode/debug format to stdout", cxxopts::value<bool>()->default_value("false"))
-        ("dump-codegen-plan", "Print LLVM codegen stub activity", cxxopts::value<bool>()->default_value("false"))
+        ("dump-codegen-plan", "Print LLVM codegen activity", cxxopts::value<bool>()->default_value("false"))
+        ("emit-ir-only", "Write LLVM IR but do not link an executable", cxxopts::value<bool>()->default_value("false"))
+        ("print-ir", "Print generated LLVM IR to stdout", cxxopts::value<bool>()->default_value("false"))
+        ("show-licenses", "Print Clyth and bundled third-party license text", cxxopts::value<bool>()->default_value("false"))
         ("v,version", "Version of compiler", cxxopts::value<bool>()->default_value("false"))
         ("h,help", "Display supported commands", cxxopts::value<bool>()->default_value("false"));
 
@@ -185,12 +199,54 @@ int main(int argc, char** argv) {
             return 0;
         }
 
+        if (result["show-licenses"].as<bool>()) {
+            const std::array<std::filesystem::path, 11> license_candidates {
+                "../LICENSE",
+                "../compiler-src/EXTERNAL_LIBRARIES_LICENSES.md",
+                "../clyth-runtime/EXTERNAL_LIBRARIES_LICENSES.md",
+                "LICENSE",
+                "EXTERNAL_LIBRARIES_LICENSES.md",
+                "licenses/CLYTH_LICENSE",
+                "licenses/EXTERNAL_LIBRARIES_LICENSES.md",
+                "licenses/RUNTIME_EXTERNAL_LIBRARIES_LICENSES.md",
+                "licenses/ANTLR4_RUNTIME_LICENSE.txt",
+                "licenses/FMT_LICENSE",
+                "licenses/LLVM_LICENSE.TXT"
+            };
+
+            bool printed_any = false;
+            for (const auto& path : license_candidates) {
+                if (!std::filesystem::exists(path)) {
+                    continue;
+                }
+
+                std::ifstream file(path);
+                if (!file) {
+                    continue;
+                }
+
+                fmt::print("\n===== {} =====\n", path.string());
+                fmt::print("{}", std::string(std::istreambuf_iterator<char>(file), std::istreambuf_iterator<char>()));
+                fmt::print("\n");
+                printed_any = true;
+            }
+
+            if (!printed_any) {
+                fmt::print(stderr, "No license files were found near the compiler binary.\n");
+                return 1;
+            }
+
+            return 0;
+        }
+
         opts.debug_mode = result["debug"].as<bool>();
         opts.output_binary_name = result["output"].as<std::string>();
         opts.main_file = result["compile"].as<std::string>();
         opts.dump_ast_json_stdout = result["dump-ast-json"].as<bool>();
         opts.dump_ast_bytecode_stdout = result["dump-ast-bytecode"].as<bool>();
         opts.dump_codegen_plan = result["dump-codegen-plan"].as<bool>();
+        opts.emit_ir_only = result["emit-ir-only"].as<bool>();
+        opts.print_ir = result["print-ir"].as<bool>();
 
         const std::string ast_json = result["ast-json"].as<std::string>();
         const std::string ast_bytecode = result["ast-bytecode"].as<std::string>();

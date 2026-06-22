@@ -41,6 +41,8 @@ BUILD_LLVM=1
 REBUILD_LLVM=0
 REBUILD_ANTLR=0
 REBUILD_ALL=0
+PACKAGE_DIST=1
+DIST_DIR="${ROOT_DIR}/dist-clyth"
 
 info(){ printf "\033[1;34m[INFO]\033[0m %s\n" "$*"; }
 ok(){ printf "\033[1;32m[ OK ]\033[0m %s\n" "$*"; }
@@ -55,6 +57,7 @@ Usage: ./build_compiler.sh [options]
   --rebuild-llvm    Delete llvm-build/llvm-bundled and rebuild LLVM.
   --rebuild-antlr   Delete antlr4-cpp-runtime-lib and rebuild ANTLR runtime.
   --rebuild-all     Rebuild ANTLR runtime, LLVM, and Clyth compiler.
+  --no-package      Skip creating dist-clyth distribution directory.
   -h, --help        Show this help.
 USAGE
 }
@@ -65,6 +68,7 @@ while [[ $# -gt 0 ]]; do
     --rebuild-llvm) REBUILD_LLVM=1 ;;
     --rebuild-antlr) REBUILD_ANTLR=1 ;;
     --rebuild-all) REBUILD_ALL=1; REBUILD_LLVM=1; REBUILD_ANTLR=1 ;;
+    --no-package) PACKAGE_DIST=0 ;;
     -h|--help) usage; exit 0 ;;
     *) die "Unknown option: $1" ;;
   esac
@@ -231,10 +235,83 @@ build_llvm(){
   ok "LLVM installed to $LLVM_INSTALL"
 }
 
+package_distribution(){
+  [[ "$PACKAGE_DIST" -eq 1 ]] || { info "Skipping distribution packaging."; return; }
+
+  info "Creating Clyth distribution directory..."
+  rm -rf "$DIST_DIR"
+  mkdir -p "$DIST_DIR/bin" "$DIST_DIR/licenses" "$DIST_DIR/share/clyth/samples"
+
+  local compiler_bin="$CLYTH_BUILD/clyth_compiler_bin"
+  [[ -x "$compiler_bin" ]] || die "Compiler binary not found at $compiler_bin"
+  cp "$compiler_bin" "$DIST_DIR/bin/"
+
+  # Clyth uses Zig's clang-compatible frontend for final musl static links.
+  # The Zig binary itself is not vendored here; users should install Zig and keep it on PATH.
+  cp "$ZIG_CC" "$DIST_DIR/bin/zig-c.sh" 2>/dev/null || true
+  cp "$ZIG_CXX" "$DIST_DIR/bin/zig-c++.sh" 2>/dev/null || true
+
+  # Ship the small LLVM tools that are useful for inspecting/debugging generated IR.
+  for tool in llc lli llvm-as llvm-dis llvm-link opt lld ld.lld; do
+    if [[ -x "$LLVM_INSTALL/bin/$tool" ]]; then
+      cp "$LLVM_INSTALL/bin/$tool" "$DIST_DIR/bin/"
+    fi
+  done
+
+  # Project and third-party license files travel with every distribution.
+  cp "$ROOT_DIR/LICENSE" "$DIST_DIR/licenses/CLYTH_LICENSE" 2>/dev/null || true
+  cp "$CLYTH_SRC/EXTERNAL_LIBRARIES_LICENSES.md" "$DIST_DIR/licenses/EXTERNAL_LIBRARIES_LICENSES.md" 2>/dev/null || true
+  cp "$ROOT_DIR/clyth-runtime/EXTERNAL_LIBRARIES_LICENSES.md" "$DIST_DIR/licenses/RUNTIME_EXTERNAL_LIBRARIES_LICENSES.md" 2>/dev/null || true
+  cp "$ANTLR_SRC/LICENSE.txt" "$DIST_DIR/licenses/ANTLR4_RUNTIME_LICENSE.txt" 2>/dev/null || true
+  cp "$FMT_SRC/LICENSE" "$DIST_DIR/licenses/FMT_LICENSE" 2>/dev/null || true
+  if [[ -f "$LLVM_SRC/llvm/LICENSE.TXT" ]]; then
+    cp "$LLVM_SRC/llvm/LICENSE.TXT" "$DIST_DIR/licenses/LLVM_LICENSE.TXT"
+  elif [[ -f "$LLVM_INSTALL/LICENSE.TXT" ]]; then
+    cp "$LLVM_INSTALL/LICENSE.TXT" "$DIST_DIR/licenses/LLVM_LICENSE.TXT"
+  fi
+
+  cp "$ROOT_DIR/README.md" "$DIST_DIR/README.md" 2>/dev/null || true
+  cp "$CLYTH_SRC/release_info.json" "$DIST_DIR/release_info.json" 2>/dev/null || true
+  cp "$ROOT_DIR/sample-clyth-programs"/*.clyth "$DIST_DIR/share/clyth/samples/" 2>/dev/null || true
+
+  cat > "$DIST_DIR/README_DIST.md" <<'TXT'
+# Clyth Distribution
+
+This directory contains the Clyth compiler binary, useful LLVM inspection tools,
+project documentation, sample programs, and license texts for bundled project
+components.
+
+The compiler can emit LLVM IR and can invoke `zig cc` to produce a statically
+linked musl-targeted executable from supported Clyth programs:
+
+```bash
+bin/clyth_compiler_bin -c share/clyth/samples/printf_test.clyth -o printf_test
+./printf_test
+```
+
+Zig is expected to be installed and available on PATH for final executable
+linking. Use `--emit-ir-only` to stop after LLVM IR emission.
+
+```bash
+bin/clyth_compiler_bin -c input.clyth -o output --emit-ir-only
+```
+
+Show bundled license text:
+
+```bash
+bin/clyth_compiler_bin --show-licenses
+```
+TXT
+
+  tar -C "$DIST_DIR/.." -czf "$ROOT_DIR/clyth-dist.tar.gz" "$(basename "$DIST_DIR")"
+  ok "Distribution directory created: $DIST_DIR"
+  ok "Distribution tarball created: $ROOT_DIR/clyth-dist.tar.gz"
+}
+
 build_clyth(){
   info "Building Clyth compiler..."
   rm -rf "$CLYTH_BUILD"; mkdir -p "$CLYTH_BUILD"
-  rm -rf "$CLYTH_SRC/compiler-src/clyth_antlr_files/"
+  rm -rf "$CLYTH_SRC/src/clyth_antlr_files/"
   cd "$CLYTH_GRAMMAR_DIRECTORY"
   ./generateAntlr4RuntimeCpp.sh "$CLYTH_GRAMMAR_FILE"
   cd -
@@ -266,6 +343,7 @@ main(){
   build_antlr
   build_llvm
   build_clyth
+  package_distribution
   cat <<SUMMARY
 
 Build summary:
@@ -276,6 +354,7 @@ Build summary:
   llc:           $LLVM_INSTALL/bin/llc
   lld:           $LLVM_INSTALL/bin/lld
   Clyth build:   $CLYTH_BUILD
+  Distribution:  $DIST_DIR
 
 SUMMARY
   ok "Build completed successfully."
