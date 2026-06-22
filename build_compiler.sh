@@ -34,6 +34,8 @@ LLVM_BUILD="${ROOT_DIR}/llvm-build"
 LLVM_INSTALL="${ROOT_DIR}/llvm-bundled"
 CLYTH_SRC="${ROOT_DIR}/compiler-src"
 CLYTH_BUILD="${ROOT_DIR}/build-compiler"
+CLYTH_GRAMMAR_DIRECTORY="${ROOT_DIR}/Grammar-and-antlr4-files/"
+CLYTH_GRAMMAR_FILE="ClythV1.g4"
 
 BUILD_LLVM=1
 REBUILD_LLVM=0
@@ -232,6 +234,10 @@ build_llvm(){
 build_clyth(){
   info "Building Clyth compiler..."
   rm -rf "$CLYTH_BUILD"; mkdir -p "$CLYTH_BUILD"
+  rm -rf "$CLYTH_SRC/compiler-src/clyth_antlr_files/"
+  cd "$CLYTH_GRAMMAR_DIRECTORY"
+  ./generateAntlr4RuntimeCpp.sh "$CLYTH_GRAMMAR_FILE"
+  cd -
   mapfile -t g < <(gen_args)
   extra=()
   if [[ "$BUILD_LLVM" -eq 1 && -d "$LLVM_INSTALL/lib/cmake/llvm" ]]; then

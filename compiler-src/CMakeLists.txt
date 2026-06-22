@@ -13,7 +13,20 @@ project(
 
 add_executable(clyth_compiler_bin)
 add_subdirectory(fmt)
-target_include_directories(clyth_compiler_bin PUBLIC ${CMAKE_SOURCE_DIR}/../antlr4-cpp-runtime-lib/usr/local/include/antlr4-runtime/)
+target_include_directories(clyth_compiler_bin PUBLIC ${CMAKE_SOURCE_DIR}/../antlr4-cpp-runtime-lib/usr/local/include/antlr4-runtime/
+    ${LLVM_INCLUDE_DIRS}
+)
+target_compile_definitions(clyth_compiler_bin PUBLIC
+    ${LLVM_DEFINITIONS}
+)
+
+llvm_map_components_to_libnames(LLVM_LIBS
+    core
+    support
+)
+
 target_link_libraries(  clyth_compiler_bin fmt::fmt
-                        ${CMAKE_SOURCE_DIR}/../antlr4-cpp-runtime-lib/usr/local/lib64/libantlr4-runtime.a)
+                        ${CMAKE_SOURCE_DIR}/../antlr4-cpp-runtime-lib/usr/local/lib64/libantlr4-runtime.a
+                        ${LLVM_LIBS}                        
+)
 add_subdirectory(src)

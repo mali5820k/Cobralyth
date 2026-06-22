@@ -6,6 +6,14 @@
 #include "clyth_semantic.hpp"
 #include "clyth_lowering_plan.hpp"
 
+#include <llvm/IR/LLVMContext.h>
+#include <llvm/IR/IRBuilder.h>
+#include <llvm/IR/Module.h>
+#include <llvm/IR/Function.h>
+#include <llvm/IR/Type.h>
+#include <llvm/IR/Verifier.h>
+#include <llvm/Support/raw_ostream.h>
+
 namespace clyth::llvm_stub {
 
 // ============================================================
@@ -46,8 +54,15 @@ public:
 private:
     DiagnosticBag& diagnostics;
 
+    llvm::LLVMContext context;
+    std::unique_ptr<llvm::Module> module;
+    llvm::IRBuilder<> builder;
+    std::unordered_map<std::string, llvm::Function*> functions;
+    
     bool emit_program(const lowering::ClythLoweringPlan& plan, const semantic::SemanticResult& semantics);
     bool emit_function_stub(const lowering::LinearNode& node, const semantic::SemanticResult& semantics);
+    bool emit_extern_function_stub(const lowering::LinearNode& node, const semantic::SemanticResult& semantics);
+    bool emit_printf_decl();
     bool emit_method_stub(const lowering::LinearNode& node, const semantic::SemanticResult& semantics);
     bool emit_struct_stub(const lowering::LinearNode& node, const semantic::SemanticResult& semantics);
     bool emit_statement_stub(const lowering::LinearNode& node, const semantic::SemanticResult& semantics);
