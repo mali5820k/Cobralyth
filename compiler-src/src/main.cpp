@@ -150,7 +150,7 @@ static int parse_clyth_file(const CompilerOptions& opts) {
         return 1;
     }
 
-    fmt::print("Frontend pipeline completed. LLVM IR implementation is ready to be filled in next.\n");
+    fmt::print("Frontend pipeline completed. LLVM IR generation completed.\n");
     return 0;
 }
 

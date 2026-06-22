@@ -249,6 +249,17 @@ public:
     void run(SemanticContext& context, const ast::ProgramPtr& program) override;
 };
 
+class CollectionLiteralSemanticPass final : public ISemanticPass {
+public:
+    std::string name() const override;
+    void run(SemanticContext& context, const ast::ProgramPtr& program) override;
+
+private:
+    void visit_node(SemanticContext& context, const ast::NodePtr& node);
+    void visit_list_literal(SemanticContext& context, const ast::NodePtr& node);
+    void visit_curly_literal(SemanticContext& context, const ast::NodePtr& node);
+};
+
 class MeccSemanticPass final : public ISemanticPass {
 public:
     std::string name() const override;

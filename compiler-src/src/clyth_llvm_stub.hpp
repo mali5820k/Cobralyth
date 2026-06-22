@@ -62,6 +62,7 @@ private:
     bool emit_program(const lowering::ClythLoweringPlan& plan, const semantic::SemanticResult& semantics);
     bool emit_function_stub(const lowering::LinearNode& node, const semantic::SemanticResult& semantics);
     bool emit_extern_function_stub(const lowering::LinearNode& node, const semantic::SemanticResult& semantics);
+    bool emit_main_function_stub(const lowering::LinearNode& node, const semantic::SemanticResult& semantics);
     bool emit_printf_decl();
     bool emit_method_stub(const lowering::LinearNode& node, const semantic::SemanticResult& semantics);
     bool emit_struct_stub(const lowering::LinearNode& node, const semantic::SemanticResult& semantics);

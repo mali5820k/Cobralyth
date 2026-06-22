@@ -6,7 +6,7 @@ set(CMAKE_CXX_FLAGS "-std=c++17")
 set(CMAKE_C_LINKER_DEPFILE_SUPPORTED FALSE)
 set(CMAKE_CXX_LINKER_DEPFILE_SUPPORTED FALSE)
 
-project(clyth_compiler_bin VERSION 1.0.0 LANGUAGES CXX)
+project(clyth_compiler_bin VERSION 1.0.0 LANGUAGES C CXX)
 
 find_package(LLVM REQUIRED CONFIG)
 

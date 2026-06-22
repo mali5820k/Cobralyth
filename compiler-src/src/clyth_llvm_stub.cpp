@@ -99,29 +99,26 @@ bool ClythLLVMCodegen::emit_program(
     return true;
 }
 
-bool ClythLLVMCodegen::emit_function_stub(const lowering::LinearNode& node, const semantic::SemanticResult&) {
-    (void)node;
-    // TODO:
-    // - create llvm::FunctionType from semantic return/param types
-    // - create llvm::Function
-    // - create entry BasicBlock
-    // - register params in codegen scope
+// clyth_llvm_stub.cpp
+bool ClythLLVMCodegen::emit_function_stub(const lowering::LinearNode& node, const semantic::SemanticResult& semantics) {
+    if (node.kind == ast::NodeKind::FunctionDecl &&
+        node.text.find("main") != std::string::npos) {
+        return emit_main_function_stub(node, semantics);
+    }
+
     return true;
 }
 
-bool ClythLLVMCodegen::emit_extern_function_stub(const lowering::LinearNode& node, const semantic::SemanticResult&) {
-    (void)node;
+bool ClythLLVMCodegen::emit_extern_function_stub(const lowering::LinearNode& node, const semantic::SemanticResult& semantics) {
     // TODO:
     // - create llvm::FunctionType from semantic return/param types
     // - create llvm::Function
     // - create entry BasicBlock
     // - register params in codegen scope
     if (node.kind == ast::NodeKind::ExternDecl && node.text.find("printf") != std::string::npos) {
-        emit_printf_decl();
+        return emit_printf_decl();
     }
-    if (node.kind == ast::NodeKind::FunctionDecl && node.text.find("main") != std::string::npos) {
-        return emit_main_function_stub(node, semantics);
-    }
+
     return true;
 }
 
@@ -139,7 +136,7 @@ bool ClythLLVMCodegen::emit_printf_decl() {
 bool ClythLLVMCodegen::emit_main_function_stub(const lowering::LinearNode& node, const semantic::SemanticResult&) {
     (void)node;
     llvm::Type* int32_type = llvm::Type::getInt32Ty(context);
-    llvm::FunctionType::get(int32_type, false);
+    llvm::FunctionType* main_type = llvm::FunctionType::get(int32_type, false);
     llvm::Function* main_function = llvm::Function::Create(main_type, llvm::Function::ExternalLinkage, "main", module.get());
     functions["main"] = main_function;
     llvm::BasicBlock* entry_block = llvm::BasicBlock::Create(context, "entry", main_function);
@@ -147,7 +144,7 @@ bool ClythLLVMCodegen::emit_main_function_stub(const lowering::LinearNode& node,
     llvm::Function* printf_function = functions.at("printf");
     llvm::Value* msg = builder.CreateGlobalStringPtr("\nSimplest extern-C function hookup\n");
     builder.CreateCall(printf_function, {msg});
-    builder.CreateRet(llvm::ConstnatInt::get(int32_type, 0));
+    builder.CreateRet(llvm::ConstantInt::get(int32_type, 0));
     return true;
 }
 
