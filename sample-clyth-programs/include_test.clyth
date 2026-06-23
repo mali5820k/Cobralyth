@@ -1,0 +1,8 @@
+include "include_math.clyth"
+extern C int32 printf(string fmt, ...)
+
+int32 main() {
+    int32 value = add_two(40)
+    printf("included result=%d\n", value)
+    return value
+}

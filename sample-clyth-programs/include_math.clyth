@@ -1,0 +1,3 @@
+int32 add_two(int32 value) {
+    return value + 2
+}

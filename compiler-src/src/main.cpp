@@ -6,8 +6,14 @@
 #include "clyth_lowering_plan.hpp"
 #include "clyth_llvm_stub.hpp"
 
+#include <algorithm>
 #include <array>
+#include <cctype>
 #include <iterator>
+#include <regex>
+#include <set>
+#include <sstream>
+#include <vector>
 
 // ANTLR4 runtime includes.
 #include "antlr4-runtime.h"
@@ -30,20 +36,378 @@ struct CompilerOptions {
     std::string output_binary_name = "clyth_program.bin";
 };
 
-static int parse_clyth_file(const CompilerOptions& opts) {
-    Scanner scanner;
 
-    if (!scanner.read_file(opts.main_file.string())) {
-        fmt::print(stderr, "ERROR: Failed to read source file: {}\n", opts.main_file.string());
-        return 1;
+static std::string strip_quotes(std::string value) {
+    if (value.size() >= 2 &&
+        ((value.front() == '"' && value.back() == '"') ||
+         (value.front() == '`' && value.back() == '`'))) {
+        return value.substr(1, value.size() - 2);
+    }
+    return value;
+}
+
+static bool read_clyth_source_with_includes_impl(
+    const std::filesystem::path& file,
+    std::set<std::filesystem::path>& active_stack,
+    std::set<std::filesystem::path>& already_included,
+    std::ostringstream& output
+) {
+    std::error_code ec;
+    const std::filesystem::path canonical = std::filesystem::weakly_canonical(file, ec);
+    const std::filesystem::path normalized = ec ? file.lexically_normal() : canonical;
+
+    if (active_stack.count(normalized) > 0) {
+        fmt::print(stderr, "ERROR: include cycle detected at {}\n", normalized.string());
+        return false;
     }
 
-    const std::string source_code = scanner.to_string();
+    if (already_included.count(normalized) > 0) {
+        return true;
+    }
+
+    Scanner scanner;
+    if (!scanner.read_file(normalized.string())) {
+        fmt::print(stderr, "ERROR: Failed to read source file: {}\n", normalized.string());
+        return false;
+    }
+
+    active_stack.insert(normalized);
+    already_included.insert(normalized);
+
+    const std::filesystem::path base_dir = normalized.parent_path();
+    const std::regex include_pattern(R"(^\s*include\s+([^;\s]+)\s*;?\s*$)");
+    std::istringstream input(scanner.to_string());
+    std::string line;
+
+    output << "// begin include unit: " << normalized.string() << "\n";
+
+    while (std::getline(input, line)) {
+        std::smatch match;
+        if (std::regex_match(line, match, include_pattern)) {
+            std::string include_target = strip_quotes(match[1].str());
+            std::filesystem::path include_path(include_target);
+
+            if (include_path.extension().empty()) {
+                include_path += ".clyth";
+            }
+
+            if (include_path.is_relative()) {
+                include_path = base_dir / include_path;
+            }
+
+            if (!read_clyth_source_with_includes_impl(include_path, active_stack, already_included, output)) {
+                return false;
+            }
+            continue;
+        }
+
+        output << line << "\n";
+    }
+
+    output << "// end include unit: " << normalized.string() << "\n";
+    active_stack.erase(normalized);
+    return true;
+}
+
+
+struct StructInlineDesugarResult {
+    bool ok = true;
+    std::string source;
+};
+
+static bool is_ident_start(char ch) {
+    return std::isalpha(static_cast<unsigned char>(ch)) || ch == '_';
+}
+
+static bool is_ident_continue(char ch) {
+    return std::isalnum(static_cast<unsigned char>(ch)) || ch == '_';
+}
+
+static std::size_t skip_ws(const std::string& source, std::size_t pos) {
+    while (pos < source.size() && std::isspace(static_cast<unsigned char>(source[pos]))) {
+        ++pos;
+    }
+    return pos;
+}
+
+static bool starts_keyword_at(const std::string& source, std::size_t pos, const std::string& keyword) {
+    if (pos + keyword.size() > source.size() || source.compare(pos, keyword.size(), keyword) != 0) {
+        return false;
+    }
+    const bool left_ok = pos == 0 || !is_ident_continue(source[pos - 1]);
+    const bool right_ok = pos + keyword.size() >= source.size() || !is_ident_continue(source[pos + keyword.size()]);
+    return left_ok && right_ok;
+}
+
+static std::size_t find_matching_brace(const std::string& source, std::size_t open_pos) {
+    std::size_t depth = 0;
+    bool in_string = false;
+    bool escaped = false;
+
+    for (std::size_t i = open_pos; i < source.size(); ++i) {
+        const char ch = source[i];
+        if (in_string) {
+            if (escaped) {
+                escaped = false;
+            } else if (ch == '\\') {
+                escaped = true;
+            } else if (ch == '"') {
+                in_string = false;
+            }
+            continue;
+        }
+        if (ch == '"') {
+            in_string = true;
+            continue;
+        }
+        if (ch == '{') {
+            ++depth;
+        } else if (ch == '}') {
+            if (depth == 0) {
+                return std::string::npos;
+            }
+            --depth;
+            if (depth == 0) {
+                return i;
+            }
+        }
+    }
+
+    return std::string::npos;
+}
+
+static std::string trim_copy(std::string text) {
+    auto not_space = [](unsigned char ch) { return !std::isspace(ch); };
+    text.erase(text.begin(), std::find_if(text.begin(), text.end(), not_space));
+    text.erase(std::find_if(text.rbegin(), text.rend(), not_space).base(), text.end());
+    return text;
+}
+
+static std::vector<std::string> split_struct_body_items(const std::string& body) {
+    std::vector<std::string> items;
+    std::size_t start = 0;
+    std::size_t depth_paren = 0;
+    std::size_t depth_brace = 0;
+    std::size_t depth_bracket = 0;
+    bool in_string = false;
+    bool escaped = false;
+
+    auto push_item_until = [&](std::size_t end_exclusive) {
+        std::string item = trim_copy(body.substr(start, end_exclusive - start));
+        if (!item.empty()) {
+            items.push_back(item);
+        }
+        start = end_exclusive;
+    };
+
+    for (std::size_t i = 0; i < body.size(); ++i) {
+        const char ch = body[i];
+        if (in_string) {
+            if (escaped) {
+                escaped = false;
+            } else if (ch == '\\') {
+                escaped = true;
+            } else if (ch == '"') {
+                in_string = false;
+            }
+            continue;
+        }
+        if (ch == '"') {
+            in_string = true;
+            continue;
+        }
+        if (ch == '(') { ++depth_paren; continue; }
+        if (ch == ')' && depth_paren > 0) { --depth_paren; continue; }
+        if (ch == '[') { ++depth_bracket; continue; }
+        if (ch == ']' && depth_bracket > 0) { --depth_bracket; continue; }
+        if (ch == '{') { ++depth_brace; continue; }
+        if (ch == '}' && depth_brace > 0) {
+            --depth_brace;
+            if (depth_brace == 0 && depth_paren == 0 && depth_bracket == 0) {
+                push_item_until(i + 1);
+            }
+            continue;
+        }
+
+        if (depth_paren == 0 && depth_brace == 0 && depth_bracket == 0) {
+            if (ch == ';' || ch == ',') {
+                push_item_until(i + 1);
+                continue;
+            }
+
+            if (ch == '\n') {
+                // Clyth permits semicolon-less field declarations. A field inside
+                // a struct is usually a single top-level line like `int32 value` or
+                // `private int32 value`. Method signatures include `(` and are
+                // completed when their body-closing brace is seen above.
+                std::string candidate = trim_copy(body.substr(start, i - start));
+                if (!candidate.empty() && candidate.find('(') == std::string::npos) {
+                    items.push_back(candidate);
+                    start = i + 1;
+                }
+            }
+        }
+    }
+
+    std::string tail = trim_copy(body.substr(start));
+    if (!tail.empty()) {
+        items.push_back(tail);
+    }
+
+    return items;
+}
+
+static bool looks_like_inline_method(const std::string& item) {
+    const auto paren = item.find('(');
+    const auto brace = item.find('{');
+    if (paren == std::string::npos || brace == std::string::npos || paren > brace) {
+        return false;
+    }
+    return item.find('}') != std::string::npos;
+}
+
+static std::string strip_visibility_prefix(std::string item) {
+    std::string trimmed = trim_copy(item);
+    if (starts_keyword_at(trimmed, 0, "public")) {
+        return trim_copy(trimmed.substr(6));
+    }
+    if (starts_keyword_at(trimmed, 0, "private")) {
+        // Alpha 0.2 accepts the spelling so code can be written in the intended
+        // style. Visibility enforcement is intentionally a semantic pass later.
+        return trim_copy(trimmed.substr(7));
+    }
+    return item;
+}
+
+static std::string normalize_constructor_item(std::string item) {
+    std::string trimmed = trim_copy(item);
+    if (starts_keyword_at(trimmed, 0, "constructor")) {
+        return "void " + trimmed;
+    }
+    if (starts_keyword_at(trimmed, 0, "destructor")) {
+        return "void " + trimmed;
+    }
+    return item;
+}
+
+static StructInlineDesugarResult desugar_inline_struct_methods(const std::string& source) {
+    StructInlineDesugarResult result;
+    std::ostringstream out;
+    std::size_t pos = 0;
+
+    while (pos < source.size()) {
+        if (!starts_keyword_at(source, pos, "struct")) {
+            out << source[pos++];
+            continue;
+        }
+
+        const std::size_t struct_start = pos;
+        std::size_t cursor = skip_ws(source, pos + 6);
+        if (cursor >= source.size() || !is_ident_start(source[cursor])) {
+            out << source[pos++];
+            continue;
+        }
+
+        const std::size_t name_start = cursor;
+        while (cursor < source.size() && is_ident_continue(source[cursor])) {
+            ++cursor;
+        }
+        const std::string struct_name = source.substr(name_start, cursor - name_start);
+        cursor = skip_ws(source, cursor);
+        if (cursor >= source.size() || source[cursor] != '{') {
+            out << source[pos++];
+            continue;
+        }
+
+        const std::size_t open_brace = cursor;
+        const std::size_t close_brace = find_matching_brace(source, open_brace);
+        if (close_brace == std::string::npos) {
+            result.ok = false;
+            result.source = source;
+            return result;
+        }
+
+        std::size_t after = close_brace + 1;
+        if (after < source.size() && source[after] == ';') {
+            ++after;
+        }
+
+        const std::string body = source.substr(open_brace + 1, close_brace - open_brace - 1);
+        const std::vector<std::string> items = split_struct_body_items(body);
+        std::vector<std::string> fields;
+        std::vector<std::string> methods;
+
+        for (std::string item : items) {
+            item = strip_visibility_prefix(item);
+            item = normalize_constructor_item(item);
+            if (looks_like_inline_method(item)) {
+                methods.push_back(item);
+            } else if (!trim_copy(item).empty()) {
+                fields.push_back(trim_copy(item));
+            }
+        }
+
+        out << "struct " << struct_name << " {\n";
+        for (const auto& field : fields) {
+            out << "    " << field;
+            const std::string trimmed = trim_copy(field);
+            if (!trimmed.empty() && trimmed.back() != ';' && trimmed.back() != ',') {
+                out << ";";
+            }
+            out << "\n";
+        }
+        out << "}\n";
+
+        if (!methods.empty()) {
+            out << "\n" << struct_name << " {\n";
+            for (const auto& method : methods) {
+                out << method << "\n";
+            }
+            out << "}\n";
+        }
+
+        pos = after;
+        (void)struct_start;
+    }
+
+    result.source = out.str();
+    return result;
+}
+
+static bool read_clyth_source_with_includes(
+    const std::filesystem::path& main_file,
+    std::string& source_code
+) {
+    std::set<std::filesystem::path> active_stack;
+    std::set<std::filesystem::path> already_included;
+    std::ostringstream output;
+
+    if (!read_clyth_source_with_includes_impl(main_file, active_stack, already_included, output)) {
+        return false;
+    }
+
+    source_code = output.str();
+    return true;
+}
+
+static int parse_clyth_file(const CompilerOptions& opts) {
+    std::string source_code;
+
+    if (!read_clyth_source_with_includes(opts.main_file, source_code)) {
+        return 1;
+    }
 
     if (source_code.empty()) {
         fmt::print(stderr, "ERROR: Source file is empty: {}\n", opts.main_file.string());
         return 1;
     }
+
+    StructInlineDesugarResult desugared = desugar_inline_struct_methods(source_code);
+    if (!desugared.ok) {
+        fmt::print(stderr, "ERROR: Failed to desugar inline struct methods/constructors.\n");
+        return 1;
+    }
+    source_code = desugared.source;
 
     antlr4::ANTLRInputStream input(source_code);
     ClythV1Lexer lexer(&input);

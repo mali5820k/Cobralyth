@@ -595,6 +595,15 @@ std::any ClythAST::visitMethodBlock(ClythV1Parser::MethodBlockContext* ctx) {
 std::any ClythAST::visitMethodDecl(ClythV1Parser::MethodDeclContext* ctx) {
     auto node = build_generic(ast::NodeKind::MethodDecl, ctx, "method");
     node->attributes["qualified"] = ctx->getText().find('.') != std::string::npos ? "true" : "false";
+    if (ctx->methodSimpleName() != nullptr) {
+        node->attributes["name"] = ctx->methodSimpleName()->getText();
+    }
+    return node;
+}
+
+std::any ClythAST::visitMethodSimpleName(ClythV1Parser::MethodSimpleNameContext* ctx) {
+    auto node = make_node(ast::NodeKind::Generic, ctx, "methodSimpleName");
+    node->attributes["name"] = ctx != nullptr ? ctx->getText() : "";
     return node;
 }
 
@@ -833,6 +842,15 @@ std::any ClythAST::visitFixedArrayType(ClythV1Parser::FixedArrayTypeContext* ctx
     node->attributes["name"] = ctx->getText();
     node->attributes["container"] = "array";
     node->attributes["array_kind"] = "fixed";
+    return node;
+}
+
+
+std::any ClythAST::visitDynamicArrayType(ClythV1Parser::DynamicArrayTypeContext* ctx) {
+    auto node = build_generic(ast::NodeKind::Type, ctx, "dynamicArrayType");
+    node->attributes["name"] = ctx->getText();
+    node->attributes["container"] = "array";
+    node->attributes["array_kind"] = "dynamic";
     return node;
 }
 

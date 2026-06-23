@@ -1,0 +1,6 @@
+extern C int32 printf(string fmt, ...)
+
+int32 main(string[] args) {
+    printf("program name: %s\n", args[0])
+    return 0
+}

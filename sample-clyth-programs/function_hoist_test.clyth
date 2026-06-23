@@ -1,0 +1,14 @@
+extern C int32 printf(string formatted_string, ...)
+
+int32 main(string[] args) {
+    int32 result = add(global_value, 2)
+    printf("hoisted function result: %d\n", result)
+    printf("program: %s\n", args[0])
+    return result - 42
+}
+
+int32 add(int32 a, int32 b) {
+    return a + b
+}
+
+int32 global_value = 40

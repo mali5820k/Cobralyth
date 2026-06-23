@@ -256,8 +256,8 @@ bool SemanticContext::is_known_type(const TypeInfo& type) const {
 
     const std::string& name = type.name;
 
-    // Fixed array syntax: T[N]. The element type must be known; the numeric
-    // length is validated more deeply in a later collection/type pass.
+    // Array syntax: T[N] and T[]. The element type must be known; lengths
+    // and dynamic array layout are validated/lowered in later passes.
     const std::size_t bracket_pos = name.find('[');
     if (bracket_pos != std::string::npos && name.back() == ']') {
         const std::string element_name = name.substr(0, bracket_pos);
@@ -274,7 +274,8 @@ bool SemanticContext::is_known_type(const TypeInfo& type) const {
         const std::string base = name.substr(0, generic_pos);
         if (base == "List" || base == "list" ||
             base == "Map" || base == "map" ||
-            base == "Set" || base == "set") {
+            base == "Set" || base == "set" ||
+            base == "pointer") {
             return true;
         }
 
@@ -299,7 +300,7 @@ TypeInfo SemanticContext::parse_type_text(const std::string& text) const {
     // surface spelling starts with a known or user-defined base type. Deep
     // collection type validation can be added as a later semantic pass.
     if (!type.is_builtin) {
-        const std::size_t collection_pos = text.find_first_of("[:(");
+        const std::size_t collection_pos = text.find_first_of("[:(<");
         const std::string base = collection_pos == std::string::npos
             ? text
             : text.substr(0, collection_pos);
@@ -449,6 +450,10 @@ bool contains_token_text(const ast::NodePtr& node, const std::string& token_text
 std::optional<std::string> declared_name(const ast::NodePtr& node) {
     if (!node) {
         return std::nullopt;
+    }
+
+    if (auto explicit_name = attr(node, "name")) {
+        return *explicit_name;
     }
 
     switch (node->kind) {

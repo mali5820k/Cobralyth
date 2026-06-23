@@ -12,9 +12,9 @@ MECC explores deterministic memory management through scoped memory estates, est
 
 ## Current Status
 
-Clyth currently has a working compiler frontend architecture centered around ANTLR4 and C++.
+Clyth has moved beyond the original `extern C printf` proof-of-concept and now compiles a larger Alpha 0.2.0 language subset into native Linux executables.
 
-Implemented or scaffolded components include:
+Implemented components include:
 
 - ANTLR4 grammar and generated C++ frontend.
 - Command-line compiler driver.
@@ -24,16 +24,52 @@ Implemented or scaffolded components include:
 - AST JSON output for visualization tooling.
 - AST bytecode/debug output for future interpreter/debugger tooling.
 - Semantic analysis pass infrastructure.
-- Symbol and scope analysis scaffolding.
+- Symbol and scope analysis.
 - MECC semantic annotation scaffolding.
 - Linear lowering plan for code generation.
-- LLVM IR generation for an initial V1 subset.
+- LLVM IR generation for the current Alpha language subset.
 - `extern C` interop for declarations such as `printf`.
+- `int32 main(string[] args)` startup lowering over the native C ABI.
+- Local variables, user functions, function hoisting, and global variable hoisting.
+- `if`/`else`, `while`, `break`, and `continue`.
+- Fixed arrays: initialization, indexing, assignment, and `.length`.
+- Struct declarations, field access, field assignment, methods, default constructors, and implicit `this` field access.
 - LLVM IR file emission through `--emit-ir-only`.
 - Optional executable linking through Zig/Clang targeting musl for statically linked Linux binaries.
 - Distribution packaging with compiler binary, useful LLVM tools, samples, README, and license files.
 
-Current work focuses on broadening LLVM IR generation beyond the initial V1 subset into structs, control flow, runtime containers, manual allocation, and MECC runtime lowering.
+Current work focuses on dynamic arrays, native strings, generics, runtime containers, manual allocation, and MECC runtime lowering.
+
+---
+
+## Alpha 0.2.0 Release Candidate Highlights
+
+Alpha 0.1.0 proved that Clyth could compile a minimal `extern C printf` program end-to-end. Alpha 0.2.0 expands that proof into a substantially more complete base-language subset.
+
+New since Alpha 0.1.0:
+
+- Multi-file local includes.
+- Command-line arguments through `int32 main(string[] args)`.
+- User-defined functions and function calls.
+- Function and global declaration hoisting.
+- Local variables and lexical nested scopes.
+- Global variables with literal initializers.
+- Control flow: `if`, `else`, `while`, `break`, `continue`.
+- Fixed arrays: `T[N]`, list initialization, indexing, assignment, and `.length`.
+- Structs with fields and LLVM struct layout generation.
+- Struct field reads and writes.
+- Struct methods, method calls, default constructors, and implicit `this` field access.
+- Improved sample programs that act more like behavior tests.
+
+Still planned after Alpha 0.2.0:
+
+- Dynamic arrays: `T[]`.
+- Native Clyth strings backed by `char[]`.
+- `List<T>`, `Map<K,V>`, and `Set<T>`.
+- Generics and monomorphization.
+- Function references and dispatch metadata.
+- Async/thread-pool runtime support.
+- Manual memory APIs and MECC estates.
 
 ---
 
@@ -527,13 +563,15 @@ Currently supported backend behavior includes:
 2. Defining Clyth functions.
 3. Lowering integer, boolean, string, and null literals.
 4. Lowering return statements and expression statements.
-5. Lowering local variables and simple assignment.
+5. Lowering local variables, simple assignment, and compound assignment (`+=`, `-=`, `*=`, `/=`, `%=`).
 6. Lowering function calls.
-7. Lowering common integer arithmetic, comparison, and boolean operations.
-8. Emitting `.ll` LLVM IR files.
-9. Invoking `zig cc` to link supported programs as statically linked musl-targeted executables.
+7. Lowering common integer/floating-point arithmetic, comparison, and boolean operations.
+8. Lowering `if`/`else`, `while`, `break`, `continue`, and MECC blocks as normal blocks until MECC runtime lowering exists.
+9. Expanding simple file-based `include "file.clyth"` declarations before parsing.
+10. Emitting `.ll` LLVM IR files.
+11. Invoking `zig cc` to link supported programs as statically linked musl-targeted executables.
 
-Unsupported language nodes are intentionally reported as diagnostics rather than silently ignored. Struct layout lowering, method lowering, manual allocation, runtime containers, control flow, and MECC runtime calls remain planned backend work.
+Unsupported language nodes are intentionally reported as diagnostics rather than silently ignored. Struct layout lowering, method lowering, manual allocation, runtime containers, `for` loop lowering, function references, async dispatch, and MECC runtime calls remain planned backend work.
 
 ---
 
@@ -677,7 +715,9 @@ The build script also creates a `dist-clyth/` directory and `clyth-dist.tar.gz` 
 - [x] `extern C` interop through LLVM.
 - [x] LLVM IR file output.
 - [x] Statically linked executable output through Zig/musl for supported programs.
-- [ ] Control-flow lowering.
+- [x] Basic include expansion for local `.clyth` files.
+- [x] Basic `if`/`else` and `while` control-flow lowering.
+- [ ] `for` loop lowering.
 - [ ] Struct layout lowering.
 - [ ] Method lowering.
 - [ ] Manual `malloc` / `free` lowering.
@@ -749,3 +789,47 @@ The author of Clyth is not legally responsible for ensuring license compliance f
 Developers are responsible for verifying compliance with all third-party licenses included in their final binaries or distributions.
 
 Consult legal professionals where appropriate.
+
+
+### Current Backend Additions
+
+Recent backend passes now support multi-file include expansion, control flow lowering, while loops, break/continue, compound assignments, floating-point arithmetic, dynamic array type syntax (`T[]`), and the modern Clyth entrypoint form:
+
+```clyth
+int32 main(string[] args) {
+    printf("program name: %s\n", args[0])
+    return 0
+}
+```
+
+For this pass, `string[] args` is lowered through the native C ABI `argv` representation. The long-term runtime model is still a native Clyth string type backed by primitive `char[]` storage.
+
+## Backend Pass 4 Snapshot
+
+The current backend snapshot supports local lexical scopes, local variables, assignments, global/function hoisting, user-defined function calls, and `int32 main(string[] args)` command-line arguments.
+
+New behavior-focused sample:
+
+```bash
+./build-compiler/clyth_compiler_bin -c sample-clyth-programs/variables_functions_test.clyth -o variables_functions_test
+./variables_functions_test
+```
+
+## Backend Pass 6B: Struct Methods
+
+This snapshot adds first-stage struct method lowering using method blocks:
+
+```clyth
+struct Point {
+    int32 x;
+    int32 y;
+}
+
+Point {
+    int32 sum() {
+        return this.x + this.y
+    }
+}
+```
+
+Methods lower to ordinary LLVM functions with an implicit `this` pointer. Inline methods inside `struct { ... }`, constructors, and visibility enforcement remain future passes.

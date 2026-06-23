@@ -180,6 +180,7 @@ public:
     // Requires grammar regeneration after adding methodBlock/methodDecl rules.
     std::any visitMethodBlock(ClythV1Parser::MethodBlockContext* ctx) override;
     std::any visitMethodDecl(ClythV1Parser::MethodDeclContext* ctx) override;
+    std::any visitMethodSimpleName(ClythV1Parser::MethodSimpleNameContext* ctx) override;
 
     std::any visitFunctionDecl(ClythV1Parser::FunctionDeclContext* ctx) override;
     std::any visitParamList(ClythV1Parser::ParamListContext* ctx) override;
@@ -230,6 +231,7 @@ public:
     std::any visitExpressionList(ClythV1Parser::ExpressionListContext* ctx) override;
     std::any visitType(ClythV1Parser::TypeContext* ctx) override;
     std::any visitFixedArrayType(ClythV1Parser::FixedArrayTypeContext* ctx) override;
+    std::any visitDynamicArrayType(ClythV1Parser::DynamicArrayTypeContext* ctx) override;
     std::any visitGenericType(ClythV1Parser::GenericTypeContext* ctx) override;
     std::any visitGenericArgList(ClythV1Parser::GenericArgListContext* ctx) override;
     std::any visitTypeAtom(ClythV1Parser::TypeAtomContext* ctx) override;

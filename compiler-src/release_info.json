@@ -1,4 +1,5 @@
 {
-    "Name": "Cobralyth First-Gen compiler",
-    "Version": "v1.0.0"
+    "Name": "Clyth Compiler",
+    "Version": "v0.2.0-alpha-rc1",
+    "Summary": "Alpha 0.2.0 release candidate with functions, scopes, globals, control flow, fixed arrays, structs, methods, constructors, and static executable generation."
 }
