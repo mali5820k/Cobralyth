@@ -230,6 +230,7 @@ public:
     std::any visitExpressionList(ClythV1Parser::ExpressionListContext* ctx) override;
     std::any visitType(ClythV1Parser::TypeContext* ctx) override;
     std::any visitFixedArrayType(ClythV1Parser::FixedArrayTypeContext* ctx) override;
+    std::any visitDynamicArrayType(ClythV1Parser::DynamicArrayTypeContext* ctx) override;
     std::any visitGenericType(ClythV1Parser::GenericTypeContext* ctx) override;
     std::any visitGenericArgList(ClythV1Parser::GenericArgListContext* ctx) override;
     std::any visitTypeAtom(ClythV1Parser::TypeAtomContext* ctx) override;

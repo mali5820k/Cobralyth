@@ -6,6 +6,7 @@ grammar ClythV1;
 // Goals:
 // - C-like systems language frontend suitable for AST construction.
 // - Fixed arrays are a base language primitive: T[N].
+// - Dynamic arrays are a base language primitive: T[].
 // - Dynamic containers are explicit generic runtime/library types: List<T>, Map<K:V>, Set<T>.
 // - [] parses as a neutral list literal.
 // - {} parses as a neutral curly collection literal; semantic analysis decides Map vs Set.
@@ -327,6 +328,8 @@ expressionList
 //
 // V1 canonical container model:
 // - T[N]        = fixed array in the base language.
+// - T[]         = dynamic array in the base language.
+// - pointer<T>  = explicit raw interop pointer type.
 // - List<T>     = dynamic list runtime/library type.
 // - Map<K:V>    = dynamic map runtime/library type.
 // - Set<T>      = dynamic set runtime/library type.
@@ -337,12 +340,17 @@ expressionList
 
 type
     : fixedArrayType
+    | dynamicArrayType
     | genericType
     | baseType
     ;
 
 fixedArrayType
     : typeAtom LBRACKET NUMERIC_LITERAL RBRACKET
+    ;
+
+dynamicArrayType
+    : typeAtom LBRACKET RBRACKET
     ;
 
 genericType

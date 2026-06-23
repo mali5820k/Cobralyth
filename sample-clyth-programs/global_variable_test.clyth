@@ -1,0 +1,10 @@
+extern C int32 printf(string formatted_string, ...)
+
+int32 main(string[] args) {
+    printf("before: %d\n", counter)
+    counter += 5
+    printf("after: %d\n", counter)
+    return counter - 15
+}
+
+int32 counter = 10

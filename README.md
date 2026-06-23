@@ -527,13 +527,15 @@ Currently supported backend behavior includes:
 2. Defining Clyth functions.
 3. Lowering integer, boolean, string, and null literals.
 4. Lowering return statements and expression statements.
-5. Lowering local variables and simple assignment.
+5. Lowering local variables, simple assignment, and compound assignment (`+=`, `-=`, `*=`, `/=`, `%=`).
 6. Lowering function calls.
-7. Lowering common integer arithmetic, comparison, and boolean operations.
-8. Emitting `.ll` LLVM IR files.
-9. Invoking `zig cc` to link supported programs as statically linked musl-targeted executables.
+7. Lowering common integer/floating-point arithmetic, comparison, and boolean operations.
+8. Lowering `if`/`else`, `while`, `break`, `continue`, and MECC blocks as normal blocks until MECC runtime lowering exists.
+9. Expanding simple file-based `include "file.clyth"` declarations before parsing.
+10. Emitting `.ll` LLVM IR files.
+11. Invoking `zig cc` to link supported programs as statically linked musl-targeted executables.
 
-Unsupported language nodes are intentionally reported as diagnostics rather than silently ignored. Struct layout lowering, method lowering, manual allocation, runtime containers, control flow, and MECC runtime calls remain planned backend work.
+Unsupported language nodes are intentionally reported as diagnostics rather than silently ignored. Struct layout lowering, method lowering, manual allocation, runtime containers, `for` loop lowering, function references, async dispatch, and MECC runtime calls remain planned backend work.
 
 ---
 
@@ -677,7 +679,9 @@ The build script also creates a `dist-clyth/` directory and `clyth-dist.tar.gz` 
 - [x] `extern C` interop through LLVM.
 - [x] LLVM IR file output.
 - [x] Statically linked executable output through Zig/musl for supported programs.
-- [ ] Control-flow lowering.
+- [x] Basic include expansion for local `.clyth` files.
+- [x] Basic `if`/`else` and `while` control-flow lowering.
+- [ ] `for` loop lowering.
 - [ ] Struct layout lowering.
 - [ ] Method lowering.
 - [ ] Manual `malloc` / `free` lowering.
@@ -749,3 +753,28 @@ The author of Clyth is not legally responsible for ensuring license compliance f
 Developers are responsible for verifying compliance with all third-party licenses included in their final binaries or distributions.
 
 Consult legal professionals where appropriate.
+
+
+### Current Backend Additions
+
+Recent backend passes now support multi-file include expansion, control flow lowering, while loops, break/continue, compound assignments, floating-point arithmetic, dynamic array type syntax (`T[]`), and the modern Clyth entrypoint form:
+
+```clyth
+int32 main(string[] args) {
+    printf("program name: %s\n", args[0])
+    return 0
+}
+```
+
+For this pass, `string[] args` is lowered through the native C ABI `argv` representation. The long-term runtime model is still a native Clyth string type backed by primitive `char[]` storage.
+
+## Backend Pass 4 Snapshot
+
+The current backend snapshot supports local lexical scopes, local variables, assignments, global/function hoisting, user-defined function calls, and `int32 main(string[] args)` command-line arguments.
+
+New behavior-focused sample:
+
+```bash
+./build-compiler/clyth_compiler_bin -c sample-clyth-programs/variables_functions_test.clyth -o variables_functions_test
+./variables_functions_test
+```

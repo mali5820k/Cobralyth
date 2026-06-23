@@ -8,6 +8,9 @@
 
 #include <array>
 #include <iterator>
+#include <regex>
+#include <set>
+#include <sstream>
 
 // ANTLR4 runtime includes.
 #include "antlr4-runtime.h"
@@ -30,15 +33,101 @@ struct CompilerOptions {
     std::string output_binary_name = "clyth_program.bin";
 };
 
-static int parse_clyth_file(const CompilerOptions& opts) {
-    Scanner scanner;
 
-    if (!scanner.read_file(opts.main_file.string())) {
-        fmt::print(stderr, "ERROR: Failed to read source file: {}\n", opts.main_file.string());
-        return 1;
+static std::string strip_quotes(std::string value) {
+    if (value.size() >= 2 &&
+        ((value.front() == '"' && value.back() == '"') ||
+         (value.front() == '`' && value.back() == '`'))) {
+        return value.substr(1, value.size() - 2);
+    }
+    return value;
+}
+
+static bool read_clyth_source_with_includes_impl(
+    const std::filesystem::path& file,
+    std::set<std::filesystem::path>& active_stack,
+    std::set<std::filesystem::path>& already_included,
+    std::ostringstream& output
+) {
+    std::error_code ec;
+    const std::filesystem::path canonical = std::filesystem::weakly_canonical(file, ec);
+    const std::filesystem::path normalized = ec ? file.lexically_normal() : canonical;
+
+    if (active_stack.count(normalized) > 0) {
+        fmt::print(stderr, "ERROR: include cycle detected at {}\n", normalized.string());
+        return false;
     }
 
-    const std::string source_code = scanner.to_string();
+    if (already_included.count(normalized) > 0) {
+        return true;
+    }
+
+    Scanner scanner;
+    if (!scanner.read_file(normalized.string())) {
+        fmt::print(stderr, "ERROR: Failed to read source file: {}\n", normalized.string());
+        return false;
+    }
+
+    active_stack.insert(normalized);
+    already_included.insert(normalized);
+
+    const std::filesystem::path base_dir = normalized.parent_path();
+    const std::regex include_pattern(R"(^\s*include\s+([^;\s]+)\s*;?\s*$)");
+    std::istringstream input(scanner.to_string());
+    std::string line;
+
+    output << "// begin include unit: " << normalized.string() << "\n";
+
+    while (std::getline(input, line)) {
+        std::smatch match;
+        if (std::regex_match(line, match, include_pattern)) {
+            std::string include_target = strip_quotes(match[1].str());
+            std::filesystem::path include_path(include_target);
+
+            if (include_path.extension().empty()) {
+                include_path += ".clyth";
+            }
+
+            if (include_path.is_relative()) {
+                include_path = base_dir / include_path;
+            }
+
+            if (!read_clyth_source_with_includes_impl(include_path, active_stack, already_included, output)) {
+                return false;
+            }
+            continue;
+        }
+
+        output << line << "\n";
+    }
+
+    output << "// end include unit: " << normalized.string() << "\n";
+    active_stack.erase(normalized);
+    return true;
+}
+
+static bool read_clyth_source_with_includes(
+    const std::filesystem::path& main_file,
+    std::string& source_code
+) {
+    std::set<std::filesystem::path> active_stack;
+    std::set<std::filesystem::path> already_included;
+    std::ostringstream output;
+
+    if (!read_clyth_source_with_includes_impl(main_file, active_stack, already_included, output)) {
+        return false;
+    }
+
+    source_code = output.str();
+    return true;
+}
+
+static int parse_clyth_file(const CompilerOptions& opts) {
+    std::string source_code;
+
+    if (!read_clyth_source_with_includes(opts.main_file, source_code)) {
+        return 1;
+    }
 
     if (source_code.empty()) {
         fmt::print(stderr, "ERROR: Source file is empty: {}\n", opts.main_file.string());

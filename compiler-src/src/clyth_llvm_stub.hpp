@@ -10,6 +10,7 @@
 #include <llvm/IR/Constants.h>
 #include <llvm/IR/DerivedTypes.h>
 #include <llvm/IR/Function.h>
+#include <llvm/IR/GlobalVariable.h>
 #include <llvm/IR/IRBuilder.h>
 #include <llvm/IR/LLVMContext.h>
 #include <llvm/IR/Module.h>
@@ -19,6 +20,7 @@
 #include <llvm/Support/raw_ostream.h>
 
 #include <unordered_map>
+#include <vector>
 
 namespace clyth::llvm_stub {
 
@@ -61,10 +63,23 @@ public:
     );
 
 private:
+    struct LocalArrayInfo {
+        llvm::AllocaInst* alloca = nullptr;
+        llvm::Type* element_type = nullptr;
+        std::uint64_t length = 0;
+        bool fixed = false;
+    };
+
     struct FunctionScope {
         llvm::Function* function = nullptr;
         llvm::Type* return_type = nullptr;
-        std::unordered_map<std::string, llvm::AllocaInst*> locals;
+        std::vector<std::unordered_map<std::string, llvm::AllocaInst*>> local_scopes;
+        std::vector<std::unordered_map<std::string, LocalArrayInfo>> local_array_scopes;
+    };
+
+    struct LoopScope {
+        llvm::BasicBlock* continue_block = nullptr;
+        llvm::BasicBlock* break_block = nullptr;
     };
 
     DiagnosticBag& diagnostics;
@@ -73,26 +88,44 @@ private:
     std::unique_ptr<llvm::Module> module;
     llvm::IRBuilder<> builder;
     std::unordered_map<std::string, llvm::Function*> functions;
+    std::unordered_map<std::string, llvm::GlobalVariable*> globals;
     std::unique_ptr<FunctionScope> current_scope;
+    std::vector<LoopScope> loop_stack;
 
     bool emit_program(const lowering::ClythLoweringPlan& plan, const semantic::SemanticResult& semantics);
     bool emit_top_level_node(const ast::NodePtr& node, const semantic::SemanticResult& semantics);
     bool declare_extern_function(const ast::NodePtr& node);
     bool declare_function_header(const ast::NodePtr& node);
+    bool declare_global_variable(const ast::NodePtr& node);
+    bool is_modern_main_signature(const ast::NodePtr& node) const;
     bool emit_function_body(const ast::NodePtr& node, const semantic::SemanticResult& semantics);
     bool emit_block(const ast::NodePtr& node, const semantic::SemanticResult& semantics);
     bool emit_statement(const ast::NodePtr& node, const semantic::SemanticResult& semantics);
+    bool emit_if_statement(const ast::NodePtr& node, const semantic::SemanticResult& semantics);
+    bool emit_while_statement(const ast::NodePtr& node, const semantic::SemanticResult& semantics);
 
     llvm::Value* emit_expression(const ast::NodePtr& node, const semantic::SemanticResult& semantics);
     llvm::Value* emit_literal(const ast::NodePtr& node);
     llvm::Value* emit_identifier(const ast::NodePtr& node);
     llvm::Value* emit_postfix(const ast::NodePtr& node, const semantic::SemanticResult& semantics);
     llvm::Value* emit_call_suffix(const std::string& callee_name, const ast::NodePtr& call_node, const semantic::SemanticResult& semantics);
+    llvm::Value* emit_lvalue_address(const ast::NodePtr& node, const semantic::SemanticResult& semantics, llvm::Type** out_type = nullptr);
+    llvm::Value* emit_fixed_array_element_address(const std::string& name, const ast::NodePtr& index_node, const semantic::SemanticResult& semantics, llvm::Type** out_type = nullptr);
+    bool emit_fixed_array_initializer(const std::string& name, const ast::NodePtr& list_node, const semantic::SemanticResult& semantics);
     llvm::Value* emit_unary(const ast::NodePtr& node, const semantic::SemanticResult& semantics);
     llvm::Value* emit_binary(const ast::NodePtr& node, const semantic::SemanticResult& semantics);
+    llvm::Value* emit_condition_value(const ast::NodePtr& node, const semantic::SemanticResult& semantics);
+    llvm::Constant* emit_global_constant_initializer(llvm::Type* type, const ast::NodePtr& node);
 
     llvm::Type* llvm_type_from_clyth_type(const std::string& type_name);
     llvm::AllocaInst* create_entry_alloca(llvm::Function* function, llvm::Type* type, const std::string& name);
+
+    void push_local_scope();
+    void pop_local_scope();
+    bool register_local(const std::string& name, llvm::AllocaInst* alloca);
+    llvm::AllocaInst* lookup_local(const std::string& name) const;
+    bool register_local_array(const std::string& name, const LocalArrayInfo& info);
+    std::optional<LocalArrayInfo> lookup_local_array(const std::string& name) const;
 
     bool write_ir_file(const std::filesystem::path& output_path);
     bool link_executable(const CodegenConfig& config);

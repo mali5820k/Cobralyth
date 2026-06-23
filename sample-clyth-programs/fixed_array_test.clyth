@@ -1,0 +1,17 @@
+extern C int32 printf(string formatted_string, ...)
+
+int32 sum_first_three() {
+    int32[3] values = [10, 20, 12]
+    int32 total = values[0] + values[1] + values[2]
+    printf("array length: %d\n", values.length)
+    return total
+}
+
+int32 main(string[] args) {
+    int32[3] values = [1, 2, 3]
+    values[1] += 40
+    printf("program: %s\n", args[0])
+    printf("middle: %d\n", values[1])
+    printf("sum: %d\n", sum_first_three())
+    return 0
+}

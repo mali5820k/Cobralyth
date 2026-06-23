@@ -201,6 +201,160 @@ bool is_wrapper_node(const ast::NodePtr& node) {
     }
 }
 
+
+bool is_expression_like(const ast::NodePtr& node) {
+    if (!node) {
+        return false;
+    }
+
+    return semantic::query::is_expression_node(node) ||
+           node->kind == ast::NodeKind::Generic ||
+           node->kind == ast::NodeKind::LiteralExpr ||
+           node->kind == ast::NodeKind::IdentifierExpr;
+}
+
+ast::NodePtr first_expression_like_child(const ast::NodePtr& node) {
+    if (!node) {
+        return nullptr;
+    }
+
+    for (const auto& child : node->children) {
+        if (is_expression_like(child)) {
+            return child;
+        }
+    }
+
+    return nullptr;
+}
+
+std::vector<ast::NodePtr> direct_children_of_kind(const ast::NodePtr& node, ast::NodeKind kind) {
+    std::vector<ast::NodePtr> result;
+    if (!node) {
+        return result;
+    }
+
+    for (const auto& child : node->children) {
+        if (child && child->kind == kind) {
+            result.push_back(child);
+        }
+    }
+
+    return result;
+}
+
+
+std::vector<ast::NodePtr> direct_params(const ast::NodePtr& node) {
+    std::vector<ast::NodePtr> params;
+    if (!node) {
+        return params;
+    }
+    for (const auto& child : node->children) {
+        if (!child || (child->label != "paramList" && child->label != "externParamList")) {
+            continue;
+        }
+        for (const auto& param : child->children) {
+            if (param && param->kind == ast::NodeKind::Param) {
+                params.push_back(param);
+            }
+        }
+    }
+    return params;
+}
+
+bool is_dynamic_array_type_name(const std::string& type_name) {
+    return type_name.size() >= 2 && type_name.compare(type_name.size() - 2, 2, "[]") == 0;
+}
+
+struct FixedArrayTypeInfo {
+    std::string element_type_name;
+    std::uint64_t length = 0;
+};
+
+std::optional<FixedArrayTypeInfo> parse_fixed_array_type_name(const std::string& type_name) {
+    const std::size_t left = type_name.rfind('[');
+    if (left == std::string::npos || type_name.empty() || type_name.back() != ']') {
+        return std::nullopt;
+    }
+
+    const std::string size_text = type_name.substr(left + 1, type_name.size() - left - 2);
+    if (size_text.empty()) {
+        return std::nullopt;
+    }
+
+    for (char ch : size_text) {
+        if (!std::isdigit(static_cast<unsigned char>(ch))) {
+            return std::nullopt;
+        }
+    }
+
+    FixedArrayTypeInfo info;
+    info.element_type_name = type_name.substr(0, left);
+    info.length = static_cast<std::uint64_t>(std::stoull(size_text));
+    return info;
+}
+
+
+ast::NodePtr first_descendant_of_kind(const ast::NodePtr& node, ast::NodeKind kind) {
+    if (!node) {
+        return nullptr;
+    }
+
+    if (node->kind == kind) {
+        return node;
+    }
+
+    for (const auto& child : node->children) {
+        if (auto found = first_descendant_of_kind(child, kind)) {
+            return found;
+        }
+    }
+
+    return nullptr;
+}
+
+std::vector<ast::NodePtr> list_literal_elements(const ast::NodePtr& list_node) {
+    std::vector<ast::NodePtr> result;
+    if (!list_node) {
+        return result;
+    }
+
+    for (const auto& child : list_node->children) {
+        if (!child) {
+            continue;
+        }
+
+        if (child->label == "expressionList") {
+            for (const auto& expr : child->children) {
+                if (is_expression_like(expr)) {
+                    result.push_back(expr);
+                }
+            }
+        } else if (is_expression_like(child)) {
+            result.push_back(child);
+        }
+    }
+
+    return result;
+}
+
+bool is_pointer_generic_type_name(const std::string& type_name) {
+    return type_name.rfind("pointer<", 0) == 0 && !type_name.empty() && type_name.back() == '>';
+}
+
+ast::NodePtr else_body_child(const ast::NodePtr& else_node) {
+    if (!else_node) {
+        return nullptr;
+    }
+
+    for (const auto& child : else_node->children) {
+        if (child && (child->kind == ast::NodeKind::IfStmt || child->kind == ast::NodeKind::BlockStmt)) {
+            return child;
+        }
+    }
+
+    return nullptr;
+}
+
 std::vector<ast::NodePtr> direct_top_level_nodes(const lowering::ClythLoweringPlan& plan) {
     std::vector<ast::NodePtr> result;
 
@@ -283,6 +437,10 @@ bool ClythLLVMCodegen::emit_program(
             if (!declare_function_header(node)) {
                 return false;
             }
+        } else if (node->kind == ast::NodeKind::VarDeclStmt) {
+            if (!declare_global_variable(node)) {
+                return false;
+            }
         }
     }
 
@@ -315,6 +473,9 @@ bool ClythLLVMCodegen::emit_top_level_node(const ast::NodePtr& node, const seman
             return true;
 
         case ast::NodeKind::IncludeDecl:
+            return true;
+
+        case ast::NodeKind::VarDeclStmt:
             return true;
 
         default:
@@ -396,16 +557,17 @@ bool ClythLLVMCodegen::declare_function_header(const ast::NodePtr& node) {
     }
 
     std::vector<llvm::Type*> parameter_types;
-    for (const auto& child : node->children) {
-        if (!child || child->label != "paramList") {
-            continue;
-        }
+    const bool modern_main = is_modern_main_signature(node);
 
-        for (const auto& param : child->children) {
-            if (!param || param->kind != ast::NodeKind::Param) {
-                continue;
-            }
-
+    if (modern_main) {
+        // Clyth exposes main(string[] args), but native process startup still
+        // uses the C ABI: int main(int argc, char** argv). The hidden argc is
+        // retained for future args.length support; the visible args parameter
+        // is bound to argv for this pass.
+        parameter_types.push_back(llvm::Type::getInt32Ty(context));
+        parameter_types.push_back(llvm::PointerType::get(context, 0));
+    } else {
+        for (const auto& param : direct_params(node)) {
             const std::string param_type_name = declared_type_name(param);
             llvm::Type* param_type = llvm_type_from_clyth_type(param_type_name);
             if (param_type == nullptr) {
@@ -426,11 +588,78 @@ bool ClythLLVMCodegen::declare_function_header(const ast::NodePtr& node) {
 
     std::size_t arg_index = 0;
     for (llvm::Argument& arg : function->args()) {
-        arg.setName(fmt::format("arg{}", arg_index++));
+        if (modern_main && arg_index == 0) {
+            arg.setName("__clyth_argc");
+        } else if (modern_main && arg_index == 1) {
+            arg.setName("args");
+        } else {
+            arg.setName(fmt::format("arg{}", arg_index));
+        }
+        ++arg_index;
     }
 
     functions[function_name] = function;
     return true;
+}
+
+bool ClythLLVMCodegen::declare_global_variable(const ast::NodePtr& node) {
+    const auto maybe_name = declared_name(node);
+    if (!maybe_name) {
+        add_codegen_error(node, "Global variable declaration is missing a name.");
+        return false;
+    }
+
+    const std::string name = *maybe_name;
+    if (globals.find(name) != globals.end()) {
+        return true;
+    }
+
+    const std::string type_name = declared_type_name(node);
+    llvm::Type* type = llvm_type_from_clyth_type(type_name);
+    if (type == nullptr) {
+        add_codegen_error(node, fmt::format("Unsupported global variable type '{}'.", type_name));
+        return false;
+    }
+
+    llvm::Constant* initializer = emit_global_constant_initializer(type, node);
+    if (initializer == nullptr) {
+        if (type->isIntegerTy()) {
+            initializer = llvm::ConstantInt::get(type, 0);
+        } else if (type->isFloatingPointTy()) {
+            initializer = llvm::ConstantFP::get(type, 0.0);
+        } else if (type->isPointerTy()) {
+            initializer = llvm::ConstantPointerNull::get(llvm::cast<llvm::PointerType>(type));
+        } else {
+            add_codegen_error(node, fmt::format("Global variable '{}' has unsupported default initializer type.", name));
+            return false;
+        }
+    }
+
+    auto* global = new llvm::GlobalVariable(
+        *module,
+        type,
+        false,
+        llvm::GlobalValue::ExternalLinkage,
+        initializer,
+        name
+    );
+
+    globals[name] = global;
+    return true;
+}
+
+bool ClythLLVMCodegen::is_modern_main_signature(const ast::NodePtr& node) const {
+    const auto maybe_name = declared_name(node);
+    if (!maybe_name || *maybe_name != "main") {
+        return false;
+    }
+
+    const std::vector<ast::NodePtr> params = direct_params(node);
+    if (params.size() != 1) {
+        return false;
+    }
+
+    return declared_type_name(params.front()) == "string[]";
 }
 
 bool ClythLLVMCodegen::emit_function_body(const ast::NodePtr& node, const semantic::SemanticResult& semantics) {
@@ -457,24 +686,30 @@ bool ClythLLVMCodegen::emit_function_body(const ast::NodePtr& node, const semant
     current_scope = std::make_unique<FunctionScope>();
     current_scope->function = function;
     current_scope->return_type = function->getReturnType();
+    push_local_scope();
 
     // Materialize arguments into allocas so later assignment/load logic can be uniform.
-    std::vector<ast::NodePtr> params;
-    for (const auto& child : node->children) {
-        if (!child || child->label != "paramList") {
-            continue;
-        }
-        for (const auto& param : child->children) {
-            if (param && param->kind == ast::NodeKind::Param) {
-                params.push_back(param);
-            }
-        }
-    }
+    const std::vector<ast::NodePtr> params = direct_params(node);
+    const bool modern_main = is_modern_main_signature(node);
 
     std::size_t index = 0;
     for (llvm::Argument& arg : function->args()) {
+        if (modern_main && index == 0) {
+            llvm::AllocaInst* argc_alloca = create_entry_alloca(function, arg.getType(), "__clyth_argc");
+            builder.CreateStore(&arg, argc_alloca);
+            register_local("__clyth_argc", argc_alloca);
+            ++index;
+            continue;
+        }
+
         std::string name = fmt::format("arg{}", index);
-        if (index < params.size()) {
+        if (modern_main && index == 1 && !params.empty()) {
+            if (auto param_name = declared_name(params.front())) {
+                name = *param_name;
+            } else {
+                name = "args";
+            }
+        } else if (!modern_main && index < params.size()) {
             if (auto param_name = declared_name(params[index])) {
                 name = *param_name;
             }
@@ -483,7 +718,7 @@ bool ClythLLVMCodegen::emit_function_body(const ast::NodePtr& node, const semant
 
         llvm::AllocaInst* alloca = create_entry_alloca(function, arg.getType(), name);
         builder.CreateStore(&arg, alloca);
-        current_scope->locals[name] = alloca;
+        register_local(name, alloca);
         ++index;
     }
 
@@ -517,9 +752,13 @@ bool ClythLLVMCodegen::emit_block(const ast::NodePtr& node, const semantic::Sema
         return true;
     }
 
+    push_local_scope();
+    bool ok = true;
+
     for (const auto& child : node->children) {
         if (!emit_statement(child, semantics)) {
-            return false;
+            ok = false;
+            break;
         }
 
         if (builder.GetInsertBlock() && builder.GetInsertBlock()->getTerminator()) {
@@ -527,7 +766,8 @@ bool ClythLLVMCodegen::emit_block(const ast::NodePtr& node, const semantic::Sema
         }
     }
 
-    return true;
+    pop_local_scope();
+    return ok;
 }
 
 bool ClythLLVMCodegen::emit_statement(const ast::NodePtr& node, const semantic::SemanticResult& semantics) {
@@ -590,7 +830,31 @@ bool ClythLLVMCodegen::emit_statement(const ast::NodePtr& node, const semantic::
             }
 
             llvm::AllocaInst* alloca = create_entry_alloca(current_scope->function, type, *maybe_name);
-            current_scope->locals[*maybe_name] = alloca;
+            if (!register_local(*maybe_name, alloca)) { return false; }
+
+            if (auto fixed_array = parse_fixed_array_type_name(type_name)) {
+                llvm::Type* element_type = llvm_type_from_clyth_type(fixed_array->element_type_name);
+                if (element_type == nullptr) {
+                    add_codegen_error(node, fmt::format("Unsupported fixed array element type '{}'.", fixed_array->element_type_name));
+                    return false;
+                }
+                if (!register_local_array(*maybe_name, LocalArrayInfo{alloca, element_type, fixed_array->length, true})) {
+                    return false;
+                }
+
+                const auto exprs = expression_children(node);
+                if (!exprs.empty()) {
+                    ast::NodePtr list_initializer = first_descendant_of_kind(exprs.front(), ast::NodeKind::ListLiteralExpr);
+                    if (!list_initializer) {
+                        add_codegen_error(exprs.front(), "Fixed array initializer must be a list literal in this backend pass.");
+                        return false;
+                    }
+                    return emit_fixed_array_initializer(*maybe_name, list_initializer, semantics);
+                }
+
+                builder.CreateStore(llvm::ConstantAggregateZero::get(type), alloca);
+                return true;
+            }
 
             const auto exprs = expression_children(node);
             if (!exprs.empty()) {
@@ -604,6 +868,8 @@ bool ClythLLVMCodegen::emit_statement(const ast::NodePtr& node, const semantic::
                 builder.CreateStore(initializer, alloca);
             } else if (type->isIntegerTy()) {
                 builder.CreateStore(llvm::ConstantInt::get(type, 0), alloca);
+            } else if (type->isFloatingPointTy()) {
+                builder.CreateStore(llvm::ConstantFP::get(type, 0.0), alloca);
             } else if (type->isPointerTy()) {
                 builder.CreateStore(llvm::ConstantPointerNull::get(llvm::cast<llvm::PointerType>(type)), alloca);
             }
@@ -617,15 +883,17 @@ bool ClythLLVMCodegen::emit_statement(const ast::NodePtr& node, const semantic::
                 return false;
             }
 
-            const auto maybe_name = first_token_text(first_child_with_label(node, "assignable"));
+            const ast::NodePtr assignable = first_child_with_label(node, "assignable");
+            const auto maybe_name = first_token_text(assignable);
             if (!maybe_name) {
                 add_codegen_error(node, "Assignment target could not be resolved.");
                 return false;
             }
 
-            auto local_it = current_scope->locals.find(*maybe_name);
-            if (local_it == current_scope->locals.end()) {
-                add_codegen_error(node, fmt::format("Unknown assignment target '{}'.", *maybe_name));
+            llvm::Type* target_type = nullptr;
+            llvm::Value* target_address = emit_lvalue_address(assignable, semantics, &target_type);
+
+            if (target_address == nullptr || target_type == nullptr) {
                 return false;
             }
 
@@ -640,17 +908,72 @@ bool ClythLLVMCodegen::emit_statement(const ast::NodePtr& node, const semantic::
                 return false;
             }
 
-            builder.CreateStore(value, local_it->second);
+            std::string assignment_operator = "=";
+            if (const ast::NodePtr op_node = first_child_with_label(node, "assignmentOp")) {
+                if (auto op_text = attr(op_node, "operator")) {
+                    assignment_operator = *op_text;
+                }
+            }
+
+            if (assignment_operator != "=") {
+                llvm::Value* existing = builder.CreateLoad(target_type, target_address, *maybe_name);
+                if (existing->getType()->isIntegerTy() && value->getType()->isIntegerTy() && existing->getType() != value->getType()) {
+                    value = builder.CreateIntCast(value, existing->getType(), true, "assigncast");
+                }
+
+                if (assignment_operator == "+=") {
+                    value = builder.CreateAdd(existing, value, "addassigntmp");
+                } else if (assignment_operator == "-=") {
+                    value = builder.CreateSub(existing, value, "subassigntmp");
+                } else if (assignment_operator == "*=") {
+                    value = builder.CreateMul(existing, value, "mulassigntmp");
+                } else if (assignment_operator == "/=") {
+                    value = builder.CreateSDiv(existing, value, "divassigntmp");
+                } else if (assignment_operator == "%=") {
+                    value = builder.CreateSRem(existing, value, "modassigntmp");
+                } else {
+                    add_codegen_error(node, fmt::format("Unsupported assignment operator '{}'.", assignment_operator));
+                    return false;
+                }
+            }
+
+            if (value->getType() != target_type && value->getType()->isIntegerTy() && target_type->isIntegerTy()) {
+                value = builder.CreateIntCast(value, target_type, true, "assigncast");
+            }
+            builder.CreateStore(value, target_address);
             return true;
         }
 
         case ast::NodeKind::IfStmt:
+            return emit_if_statement(node, semantics);
+
         case ast::NodeKind::WhileStmt:
-        case ast::NodeKind::ForStmt:
+            return emit_while_statement(node, semantics);
+
         case ast::NodeKind::BreakStmt:
+            if (loop_stack.empty()) {
+                add_codegen_error(node, "'break' used outside of a loop.");
+                return false;
+            }
+            builder.CreateBr(loop_stack.back().break_block);
+            return true;
+
         case ast::NodeKind::ContinueStmt:
+            if (loop_stack.empty()) {
+                add_codegen_error(node, "'continue' used outside of a loop.");
+                return false;
+            }
+            builder.CreateBr(loop_stack.back().continue_block);
+            return true;
+
         case ast::NodeKind::MeccBlockStmt:
-            add_codegen_error(node, fmt::format("Codegen for '{}' is not implemented in this V1 backend subset yet.", ast::node_kind_name(node->kind)));
+            // Until MECC estate lowering exists, a mecc block behaves like a
+            // normal lexical block for codegen purposes. Semantic analysis
+            // still records that MECC was requested.
+            return emit_block(first_child_of_kind(node, ast::NodeKind::BlockStmt), semantics);
+
+        case ast::NodeKind::ForStmt:
+            add_codegen_error(node, "'for' loop codegen is not implemented yet; use while loops in this backend pass.");
             return false;
 
         default:
@@ -660,6 +983,97 @@ bool ClythLLVMCodegen::emit_statement(const ast::NodePtr& node, const semantic::
             }
             return true;
     }
+}
+
+
+bool ClythLLVMCodegen::emit_if_statement(const ast::NodePtr& node, const semantic::SemanticResult& semantics) {
+    llvm::Value* condition = emit_condition_value(first_expression_like_child(node), semantics);
+    if (condition == nullptr) {
+        return false;
+    }
+
+    llvm::Function* function = builder.GetInsertBlock()->getParent();
+    llvm::BasicBlock* then_block = llvm::BasicBlock::Create(context, "if.then", function);
+    const ast::NodePtr else_clause = first_child_of_kind(node, ast::NodeKind::ElseClause);
+    llvm::BasicBlock* else_block = else_clause
+        ? llvm::BasicBlock::Create(context, "if.else", function)
+        : nullptr;
+    llvm::BasicBlock* merge_block = llvm::BasicBlock::Create(context, "if.end", function);
+
+    builder.CreateCondBr(condition, then_block, else_clause ? else_block : merge_block);
+
+    builder.SetInsertPoint(then_block);
+    const auto blocks = direct_children_of_kind(node, ast::NodeKind::BlockStmt);
+    if (blocks.empty()) {
+        add_codegen_error(node, "if statement is missing a then-block.");
+        return false;
+    }
+    if (!emit_block(blocks.front(), semantics)) {
+        return false;
+    }
+    if (!builder.GetInsertBlock()->getTerminator()) {
+        builder.CreateBr(merge_block);
+    }
+
+    if (else_clause) {
+        builder.SetInsertPoint(else_block);
+        const ast::NodePtr else_body = else_body_child(else_clause);
+        if (!else_body) {
+            add_codegen_error(else_clause, "else clause is missing a block or nested if statement.");
+            return false;
+        }
+        if (else_body->kind == ast::NodeKind::IfStmt) {
+            if (!emit_if_statement(else_body, semantics)) {
+                return false;
+            }
+        } else if (!emit_block(else_body, semantics)) {
+            return false;
+        }
+        if (!builder.GetInsertBlock()->getTerminator()) {
+            builder.CreateBr(merge_block);
+        }
+    }
+
+    builder.SetInsertPoint(merge_block);
+    return true;
+}
+
+bool ClythLLVMCodegen::emit_while_statement(const ast::NodePtr& node, const semantic::SemanticResult& semantics) {
+    llvm::Function* function = builder.GetInsertBlock()->getParent();
+    llvm::BasicBlock* condition_block = llvm::BasicBlock::Create(context, "while.cond", function);
+    llvm::BasicBlock* body_block = llvm::BasicBlock::Create(context, "while.body", function);
+    llvm::BasicBlock* end_block = llvm::BasicBlock::Create(context, "while.end", function);
+
+    builder.CreateBr(condition_block);
+    builder.SetInsertPoint(condition_block);
+
+    llvm::Value* condition = emit_condition_value(first_expression_like_child(node), semantics);
+    if (condition == nullptr) {
+        return false;
+    }
+    builder.CreateCondBr(condition, body_block, end_block);
+
+    builder.SetInsertPoint(body_block);
+    loop_stack.push_back(LoopScope{condition_block, end_block});
+
+    const ast::NodePtr body = first_child_of_kind(node, ast::NodeKind::BlockStmt);
+    if (!body) {
+        add_codegen_error(node, "while statement is missing a body block.");
+        loop_stack.pop_back();
+        return false;
+    }
+    const bool ok = emit_block(body, semantics);
+    loop_stack.pop_back();
+    if (!ok) {
+        return false;
+    }
+
+    if (!builder.GetInsertBlock()->getTerminator()) {
+        builder.CreateBr(condition_block);
+    }
+
+    builder.SetInsertPoint(end_block);
+    return true;
 }
 
 llvm::Value* ClythLLVMCodegen::emit_expression(const ast::NodePtr& node, const semantic::SemanticResult& semantics) {
@@ -692,7 +1106,7 @@ llvm::Value* ClythLLVMCodegen::emit_expression(const ast::NodePtr& node, const s
 
         case ast::NodeKind::Generic: {
             if (auto token = first_token_text(node)) {
-                if (current_scope && current_scope->locals.count(*token) > 0) {
+                if (current_scope && lookup_local(*token) != nullptr) {
                     return emit_identifier(node);
                 }
             }
@@ -743,6 +1157,14 @@ llvm::Value* ClythLLVMCodegen::emit_literal(const ast::NodePtr& node) {
         return llvm::ConstantInt::get(llvm::Type::getInt32Ty(context), std::stoll(literal), true);
     }
 
+    if (literal.find('.') != std::string::npos) {
+        try {
+            return llvm::ConstantFP::get(llvm::Type::getDoubleTy(context), std::stod(literal));
+        } catch (const std::exception&) {
+            // Fall through to diagnostic below.
+        }
+    }
+
     add_codegen_error(node, fmt::format("Unsupported literal '{}'.", literal));
     return nullptr;
 }
@@ -759,13 +1181,18 @@ llvm::Value* ClythLLVMCodegen::emit_identifier(const ast::NodePtr& node) {
         return nullptr;
     }
 
-    auto it = current_scope->locals.find(*maybe_name);
-    if (it == current_scope->locals.end()) {
-        add_codegen_error(node, fmt::format("Unknown identifier '{}'.", *maybe_name));
-        return nullptr;
+    if (llvm::AllocaInst* local = lookup_local(*maybe_name)) {
+        return builder.CreateLoad(local->getAllocatedType(), local, *maybe_name);
     }
 
-    return builder.CreateLoad(it->second->getAllocatedType(), it->second, *maybe_name);
+    auto global_it = globals.find(*maybe_name);
+    if (global_it != globals.end()) {
+        llvm::GlobalVariable* global = global_it->second;
+        return builder.CreateLoad(global->getValueType(), global, *maybe_name);
+    }
+
+    add_codegen_error(node, fmt::format("Unknown identifier '{}'.", *maybe_name));
+    return nullptr;
 }
 
 llvm::Value* ClythLLVMCodegen::emit_postfix(const ast::NodePtr& node, const semantic::SemanticResult& semantics) {
@@ -776,7 +1203,7 @@ llvm::Value* ClythLLVMCodegen::emit_postfix(const ast::NodePtr& node, const sema
     }
 
     llvm::Value* current_value = nullptr;
-    bool consumed_call = false;
+    bool consumed_suffix = false;
 
     for (const auto& child : node->children) {
         if (!child) {
@@ -785,21 +1212,184 @@ llvm::Value* ClythLLVMCodegen::emit_postfix(const ast::NodePtr& node, const sema
 
         if (child->kind == ast::NodeKind::CallExpr) {
             current_value = emit_call_suffix(*maybe_base_name, child, semantics);
-            consumed_call = true;
+            consumed_suffix = true;
             continue;
         }
 
-        if (child->kind == ast::NodeKind::MemberAccessExpr || child->kind == ast::NodeKind::IndexExpr) {
+        if (child->kind == ast::NodeKind::IndexExpr) {
+            llvm::Type* element_type = nullptr;
+            llvm::Value* element_address = emit_fixed_array_element_address(*maybe_base_name, child, semantics, &element_type);
+            if (element_address != nullptr && element_type != nullptr) {
+                current_value = builder.CreateLoad(element_type, element_address, "arrayindexload");
+                consumed_suffix = true;
+                continue;
+            }
+
+            if (!current_scope) {
+                add_codegen_error(child, "Indexing requires a function scope.");
+                return nullptr;
+            }
+            llvm::AllocaInst* local = lookup_local(*maybe_base_name);
+            if (local == nullptr) {
+                add_codegen_error(child, fmt::format("Unknown indexed value '{}'.", *maybe_base_name));
+                return nullptr;
+            }
+
+            llvm::Value* base_pointer = builder.CreateLoad(local->getAllocatedType(), local, *maybe_base_name);
+            llvm::Value* index_value = emit_expression(first_expression_like_child(child), semantics);
+            if (index_value == nullptr) {
+                return nullptr;
+            }
+            if (!index_value->getType()->isIntegerTy(32)) {
+                index_value = builder.CreateIntCast(index_value, llvm::Type::getInt32Ty(context), true, "idxcast");
+            }
+
+            // Pass 2 models string[] args as native argv for startup interop: an
+            // opaque pointer to an array of opaque pointers. args[i] therefore
+            // loads one C-string pointer. Native Clyth string arrays will later
+            // lower through the runtime string/array representation.
+            element_type = llvm::PointerType::get(context, 0);
+            llvm::Value* slot = builder.CreateGEP(element_type, base_pointer, index_value, "indexslot");
+            current_value = builder.CreateLoad(element_type, slot, "indexload");
+            consumed_suffix = true;
+            continue;
+        }
+
+        if (child->kind == ast::NodeKind::MemberAccessExpr) {
+            const std::string member_text = child->text;
+            if (member_text == ".length" || member_text == "length" || first_token_text(child).value_or("") == "length") {
+                if (auto info = lookup_local_array(*maybe_base_name)) {
+                    current_value = llvm::ConstantInt::get(llvm::Type::getInt64Ty(context), info->length);
+                    consumed_suffix = true;
+                    continue;
+                }
+            }
+
             add_codegen_error(child, fmt::format("Postfix suffix '{}' is not implemented yet.", ast::node_kind_name(child->kind)));
             return nullptr;
         }
     }
 
-    if (consumed_call) {
+    if (consumed_suffix) {
         return current_value;
     }
 
     return emit_identifier(node);
+}
+
+
+llvm::Value* ClythLLVMCodegen::emit_fixed_array_element_address(
+    const std::string& name,
+    const ast::NodePtr& index_node,
+    const semantic::SemanticResult& semantics,
+    llvm::Type** out_type
+) {
+    auto info = lookup_local_array(name);
+    if (!info || info->alloca == nullptr || info->element_type == nullptr) {
+        return nullptr;
+    }
+
+    llvm::Value* index_value = emit_expression(first_expression_like_child(index_node), semantics);
+    if (index_value == nullptr) {
+        return nullptr;
+    }
+
+    if (!index_value->getType()->isIntegerTy(64)) {
+        index_value = builder.CreateIntCast(index_value, llvm::Type::getInt64Ty(context), true, "arrayidxcast");
+    }
+
+    llvm::Value* zero = llvm::ConstantInt::get(llvm::Type::getInt64Ty(context), 0);
+    llvm::Value* element_address = builder.CreateInBoundsGEP(
+        info->alloca->getAllocatedType(),
+        info->alloca,
+        {zero, index_value},
+        fmt::format("{}.elem", name)
+    );
+
+    if (out_type != nullptr) {
+        *out_type = info->element_type;
+    }
+
+    return element_address;
+}
+
+llvm::Value* ClythLLVMCodegen::emit_lvalue_address(
+    const ast::NodePtr& node,
+    const semantic::SemanticResult& semantics,
+    llvm::Type** out_type
+) {
+    const auto maybe_name = first_token_text(node);
+    if (!maybe_name) {
+        add_codegen_error(node, "Assignment target could not be resolved.");
+        return nullptr;
+    }
+
+    for (const auto& child : node->children) {
+        if (child && child->kind == ast::NodeKind::IndexExpr) {
+            return emit_fixed_array_element_address(*maybe_name, child, semantics, out_type);
+        }
+    }
+
+    if (llvm::AllocaInst* local = lookup_local(*maybe_name)) {
+        if (out_type != nullptr) {
+            *out_type = local->getAllocatedType();
+        }
+        return local;
+    }
+
+    auto global_it = globals.find(*maybe_name);
+    if (global_it != globals.end()) {
+        if (out_type != nullptr) {
+            *out_type = global_it->second->getValueType();
+        }
+        return global_it->second;
+    }
+
+    add_codegen_error(node, fmt::format("Unknown assignment target '{}'.", *maybe_name));
+    return nullptr;
+}
+
+bool ClythLLVMCodegen::emit_fixed_array_initializer(
+    const std::string& name,
+    const ast::NodePtr& list_node,
+    const semantic::SemanticResult& semantics
+) {
+    auto info = lookup_local_array(name);
+    if (!info || info->alloca == nullptr || info->element_type == nullptr) {
+        add_codegen_error(list_node, fmt::format("Internal codegen error: '{}' is not a fixed array.", name));
+        return false;
+    }
+
+    llvm::Constant* zero_initializer = llvm::ConstantAggregateZero::get(info->alloca->getAllocatedType());
+    builder.CreateStore(zero_initializer, info->alloca);
+
+    const std::vector<ast::NodePtr> elements = list_literal_elements(list_node);
+    if (elements.size() > info->length) {
+        add_codegen_error(list_node, fmt::format("Array initializer for '{}' has {} elements but array length is {}.", name, elements.size(), info->length));
+        return false;
+    }
+
+    for (std::size_t index = 0; index < elements.size(); ++index) {
+        llvm::Value* index_value = llvm::ConstantInt::get(llvm::Type::getInt64Ty(context), index);
+        llvm::Value* zero = llvm::ConstantInt::get(llvm::Type::getInt64Ty(context), 0);
+        llvm::Value* slot = builder.CreateInBoundsGEP(
+            info->alloca->getAllocatedType(),
+            info->alloca,
+            {zero, index_value},
+            fmt::format("{}.init{}", name, index)
+        );
+
+        llvm::Value* value = emit_expression(elements[index], semantics);
+        if (value == nullptr) {
+            return false;
+        }
+        if (value->getType() != info->element_type && value->getType()->isIntegerTy() && info->element_type->isIntegerTy()) {
+            value = builder.CreateIntCast(value, info->element_type, true, "arrayinitcast");
+        }
+        builder.CreateStore(value, slot);
+    }
+
+    return true;
 }
 
 llvm::Value* ClythLLVMCodegen::emit_call_suffix(
@@ -896,6 +1486,25 @@ llvm::Value* ClythLLVMCodegen::emit_binary(const ast::NodePtr& node, const seman
         return nullptr;
     }
 
+    auto value_to_bool = [&](llvm::Value* value) -> llvm::Value* {
+        if (value == nullptr) {
+            return nullptr;
+        }
+        if (value->getType()->isIntegerTy(1)) {
+            return value;
+        }
+        if (value->getType()->isIntegerTy()) {
+            return builder.CreateICmpNE(value, llvm::ConstantInt::get(value->getType(), 0), "booltmp");
+        }
+        if (value->getType()->isPointerTy()) {
+            return builder.CreateICmpNE(value, llvm::ConstantPointerNull::get(llvm::cast<llvm::PointerType>(value->getType())), "boolptrtmp");
+        }
+        if (value->getType()->isFloatingPointTy()) {
+            return builder.CreateFCmpONE(value, llvm::ConstantFP::get(value->getType(), 0.0), "boolfloattmp");
+        }
+        return nullptr;
+    };
+
     for (std::size_t i = 1; i < operands.size(); ++i) {
         llvm::Value* rhs = emit_expression(operands[i], semantics);
         if (rhs == nullptr) {
@@ -904,7 +1513,22 @@ llvm::Value* ClythLLVMCodegen::emit_binary(const ast::NodePtr& node, const seman
 
         const std::string op = i - 1 < operators.size() ? operators[i - 1] : "";
 
-        if (lhs->getType()->isIntegerTy() && rhs->getType()->isIntegerTy() && lhs->getType() != rhs->getType()) {
+        const bool numeric_float = lhs->getType()->isFloatingPointTy() || rhs->getType()->isFloatingPointTy();
+        if (numeric_float) {
+            llvm::Type* target_type = (lhs->getType()->isDoubleTy() || rhs->getType()->isDoubleTy())
+                ? llvm::Type::getDoubleTy(context)
+                : llvm::Type::getFloatTy(context);
+            if (lhs->getType()->isIntegerTy()) {
+                lhs = builder.CreateSIToFP(lhs, target_type, "lhsfpcast");
+            } else if (lhs->getType() != target_type) {
+                lhs = builder.CreateFPCast(lhs, target_type, "lhsfpcast");
+            }
+            if (rhs->getType()->isIntegerTy()) {
+                rhs = builder.CreateSIToFP(rhs, target_type, "rhsfpcast");
+            } else if (rhs->getType() != target_type) {
+                rhs = builder.CreateFPCast(rhs, target_type, "rhsfpcast");
+            }
+        } else if (lhs->getType()->isIntegerTy() && rhs->getType()->isIntegerTy() && lhs->getType() != rhs->getType()) {
             const unsigned lhs_bits = lhs->getType()->getIntegerBitWidth();
             const unsigned rhs_bits = rhs->getType()->getIntegerBitWidth();
             llvm::Type* target_type = lhs_bits >= rhs_bits ? lhs->getType() : rhs->getType();
@@ -913,31 +1537,47 @@ llvm::Value* ClythLLVMCodegen::emit_binary(const ast::NodePtr& node, const seman
         }
 
         if (op == "+") {
-            lhs = builder.CreateAdd(lhs, rhs, "addtmp");
+            lhs = numeric_float ? builder.CreateFAdd(lhs, rhs, "faddtmp") : builder.CreateAdd(lhs, rhs, "addtmp");
         } else if (op == "-") {
-            lhs = builder.CreateSub(lhs, rhs, "subtmp");
+            lhs = numeric_float ? builder.CreateFSub(lhs, rhs, "fsubtmp") : builder.CreateSub(lhs, rhs, "subtmp");
         } else if (op == "*") {
-            lhs = builder.CreateMul(lhs, rhs, "multmp");
+            lhs = numeric_float ? builder.CreateFMul(lhs, rhs, "fmultmp") : builder.CreateMul(lhs, rhs, "multmp");
         } else if (op == "/") {
-            lhs = builder.CreateSDiv(lhs, rhs, "divtmp");
+            lhs = numeric_float ? builder.CreateFDiv(lhs, rhs, "fdivtmp") : builder.CreateSDiv(lhs, rhs, "divtmp");
         } else if (op == "%") {
+            if (numeric_float) {
+                add_codegen_error(node, "Modulo is not supported for floating-point operands.");
+                return nullptr;
+            }
             lhs = builder.CreateSRem(lhs, rhs, "modtmp");
         } else if (op == "==") {
-            lhs = builder.CreateICmpEQ(lhs, rhs, "eqtmp");
+            lhs = numeric_float ? builder.CreateFCmpOEQ(lhs, rhs, "feqtmp") : builder.CreateICmpEQ(lhs, rhs, "eqtmp");
         } else if (op == "!=") {
-            lhs = builder.CreateICmpNE(lhs, rhs, "netmp");
+            lhs = numeric_float ? builder.CreateFCmpONE(lhs, rhs, "fnetmp") : builder.CreateICmpNE(lhs, rhs, "netmp");
         } else if (op == "<") {
-            lhs = builder.CreateICmpSLT(lhs, rhs, "lttmp");
+            lhs = numeric_float ? builder.CreateFCmpOLT(lhs, rhs, "flttmp") : builder.CreateICmpSLT(lhs, rhs, "lttmp");
         } else if (op == "<=") {
-            lhs = builder.CreateICmpSLE(lhs, rhs, "letmp");
+            lhs = numeric_float ? builder.CreateFCmpOLE(lhs, rhs, "fletmp") : builder.CreateICmpSLE(lhs, rhs, "letmp");
         } else if (op == ">") {
-            lhs = builder.CreateICmpSGT(lhs, rhs, "gttmp");
+            lhs = numeric_float ? builder.CreateFCmpOGT(lhs, rhs, "fgttmp") : builder.CreateICmpSGT(lhs, rhs, "gttmp");
         } else if (op == ">=") {
-            lhs = builder.CreateICmpSGE(lhs, rhs, "getmp");
+            lhs = numeric_float ? builder.CreateFCmpOGE(lhs, rhs, "fgetmp") : builder.CreateICmpSGE(lhs, rhs, "getmp");
         } else if (op == "&&" || op == "and") {
-            lhs = builder.CreateAnd(lhs, rhs, "andtmp");
+            llvm::Value* lhs_bool = value_to_bool(lhs);
+            llvm::Value* rhs_bool = value_to_bool(rhs);
+            if (lhs_bool == nullptr || rhs_bool == nullptr) {
+                add_codegen_error(node, "Logical and requires boolean-compatible operands.");
+                return nullptr;
+            }
+            lhs = builder.CreateAnd(lhs_bool, rhs_bool, "andtmp");
         } else if (op == "||" || op == "or") {
-            lhs = builder.CreateOr(lhs, rhs, "ortmp");
+            llvm::Value* lhs_bool = value_to_bool(lhs);
+            llvm::Value* rhs_bool = value_to_bool(rhs);
+            if (lhs_bool == nullptr || rhs_bool == nullptr) {
+                add_codegen_error(node, "Logical or requires boolean-compatible operands.");
+                return nullptr;
+            }
+            lhs = builder.CreateOr(lhs_bool, rhs_bool, "ortmp");
         } else {
             add_codegen_error(node, fmt::format("Unsupported binary operator '{}'.", op));
             return nullptr;
@@ -945,6 +1585,98 @@ llvm::Value* ClythLLVMCodegen::emit_binary(const ast::NodePtr& node, const seman
     }
 
     return lhs;
+}
+
+
+llvm::Value* ClythLLVMCodegen::emit_condition_value(const ast::NodePtr& node, const semantic::SemanticResult& semantics) {
+    llvm::Value* value = emit_expression(node, semantics);
+    if (value == nullptr) {
+        return nullptr;
+    }
+
+    if (value->getType()->isIntegerTy(1)) {
+        return value;
+    }
+
+    if (value->getType()->isIntegerTy()) {
+        return builder.CreateICmpNE(value, llvm::ConstantInt::get(value->getType(), 0), "condtmp");
+    }
+
+    if (value->getType()->isPointerTy()) {
+        return builder.CreateICmpNE(value, llvm::ConstantPointerNull::get(llvm::cast<llvm::PointerType>(value->getType())), "condptrtmp");
+    }
+
+    if (value->getType()->isFloatingPointTy()) {
+        return builder.CreateFCmpONE(value, llvm::ConstantFP::get(value->getType(), 0.0), "condfloattmp");
+    }
+
+    add_codegen_error(node, "Condition expression does not lower to a supported truthy type.");
+    return nullptr;
+}
+
+llvm::Constant* ClythLLVMCodegen::emit_global_constant_initializer(llvm::Type* type, const ast::NodePtr& node) {
+    const auto exprs = expression_children(node);
+    if (exprs.empty()) {
+        return nullptr;
+    }
+
+    const ast::NodePtr expr = exprs.front();
+    if (!expr || expr->kind != ast::NodeKind::LiteralExpr) {
+        add_codegen_error(node, "Global variable initializers currently support literals only.");
+        return nullptr;
+    }
+
+    const std::string literal = attr(expr, "literal").value_or(expr->text);
+
+    if (type->isIntegerTy(1)) {
+        if (literal == "true") {
+            return llvm::ConstantInt::get(type, 1);
+        }
+        if (literal == "false") {
+            return llvm::ConstantInt::get(type, 0);
+        }
+    }
+
+    if (type->isIntegerTy() && is_integer_literal(literal)) {
+        return llvm::ConstantInt::get(type, std::stoll(literal), true);
+    }
+
+    if (type->isFloatingPointTy()) {
+        try {
+            return llvm::ConstantFP::get(type, std::stod(literal));
+        } catch (const std::exception&) {
+            add_codegen_error(node, fmt::format("Invalid floating-point global initializer '{}'.", literal));
+            return nullptr;
+        }
+    }
+
+    if (type->isPointerTy()) {
+        if (literal == "null") {
+            return llvm::ConstantPointerNull::get(llvm::cast<llvm::PointerType>(type));
+        }
+
+        if (!literal.empty() && literal.front() == '"') {
+            const std::string unescaped = unescape_clyth_string_literal(literal);
+            llvm::Constant* raw_string = llvm::ConstantDataArray::getString(context, unescaped, true);
+            auto* global_string = new llvm::GlobalVariable(
+                *module,
+                raw_string->getType(),
+                true,
+                llvm::GlobalValue::PrivateLinkage,
+                raw_string,
+                ".global_string"
+            );
+            global_string->setUnnamedAddr(llvm::GlobalValue::UnnamedAddr::Global);
+            global_string->setAlignment(llvm::Align(1));
+
+            llvm::Constant* zero = llvm::ConstantInt::get(llvm::Type::getInt32Ty(context), 0);
+            llvm::Constant* indices[] = {zero, zero};
+            return llvm::ConstantExpr::getInBoundsGetElementPtr(raw_string->getType(), global_string, indices);
+        }
+    }
+
+    add_codegen_error(node, "Unsupported global variable initializer for this type.");
+    return nullptr;
 }
 
 llvm::Type* ClythLLVMCodegen::llvm_type_from_clyth_type(const std::string& type_name) {
@@ -973,6 +1705,19 @@ llvm::Type* ClythLLVMCodegen::llvm_type_from_clyth_type(const std::string& type_
         return llvm::Type::getDoubleTy(context);
     }
     if (type_name == "string") {
+        // Pass 2 still treats string values at extern-C boundaries as C string
+        // pointers. Native Clyth string layout is planned as char[]-backed
+        // runtime data in a later pass.
+        return llvm::PointerType::get(context, 0);
+    }
+    if (auto fixed_array = parse_fixed_array_type_name(type_name)) {
+        llvm::Type* element_type = llvm_type_from_clyth_type(fixed_array->element_type_name);
+        if (element_type == nullptr || fixed_array->length == 0) {
+            return nullptr;
+        }
+        return llvm::ArrayType::get(element_type, fixed_array->length);
+    }
+    if (is_dynamic_array_type_name(type_name) || is_pointer_generic_type_name(type_name)) {
         return llvm::PointerType::get(context, 0);
     }
 
@@ -988,6 +1733,83 @@ llvm::Type* ClythLLVMCodegen::llvm_type_from_clyth_type(const std::string& type_
 llvm::AllocaInst* ClythLLVMCodegen::create_entry_alloca(llvm::Function* function, llvm::Type* type, const std::string& name) {
     llvm::IRBuilder<> temporary_builder(&function->getEntryBlock(), function->getEntryBlock().begin());
     return temporary_builder.CreateAlloca(type, nullptr, name);
+}
+
+void ClythLLVMCodegen::push_local_scope() {
+    if (!current_scope) {
+        return;
+    }
+
+    current_scope->local_scopes.emplace_back();
+    current_scope->local_array_scopes.emplace_back();
+}
+
+void ClythLLVMCodegen::pop_local_scope() {
+    if (!current_scope || current_scope->local_scopes.empty()) {
+        return;
+    }
+
+    current_scope->local_scopes.pop_back();
+    if (!current_scope->local_array_scopes.empty()) {
+        current_scope->local_array_scopes.pop_back();
+    }
+}
+
+bool ClythLLVMCodegen::register_local(const std::string& name, llvm::AllocaInst* alloca) {
+    if (!current_scope || current_scope->local_scopes.empty()) {
+        diagnostics.add_error(SourceLocation{}, fmt::format("Internal codegen error: no local scope exists while registering '{}'.", name));
+        return false;
+    }
+
+    auto& scope = current_scope->local_scopes.back();
+    if (scope.find(name) != scope.end()) {
+        diagnostics.add_error(SourceLocation{}, fmt::format("Duplicate local variable '{}' in the same lexical scope.", name));
+        return false;
+    }
+
+    scope[name] = alloca;
+    return true;
+}
+
+
+bool ClythLLVMCodegen::register_local_array(const std::string& name, const LocalArrayInfo& info) {
+    if (!current_scope || current_scope->local_array_scopes.empty()) {
+        diagnostics.add_error(SourceLocation{}, fmt::format("Internal codegen error: no array scope exists while registering '{}'.", name));
+        return false;
+    }
+
+    current_scope->local_array_scopes.back()[name] = info;
+    return true;
+}
+
+std::optional<ClythLLVMCodegen::LocalArrayInfo> ClythLLVMCodegen::lookup_local_array(const std::string& name) const {
+    if (!current_scope) {
+        return std::nullopt;
+    }
+
+    for (auto it = current_scope->local_array_scopes.rbegin(); it != current_scope->local_array_scopes.rend(); ++it) {
+        auto found = it->find(name);
+        if (found != it->end()) {
+            return found->second;
+        }
+    }
+
+    return std::nullopt;
+}
+
+llvm::AllocaInst* ClythLLVMCodegen::lookup_local(const std::string& name) const {
+    if (!current_scope) {
+        return nullptr;
+    }
+
+    for (auto it = current_scope->local_scopes.rbegin(); it != current_scope->local_scopes.rend(); ++it) {
+        auto found = it->find(name);
+        if (found != it->end()) {
+            return found->second;
+        }
+    }
+
+    return nullptr;
 }
 
 bool ClythLLVMCodegen::write_ir_file(const std::filesystem::path& output_path) {

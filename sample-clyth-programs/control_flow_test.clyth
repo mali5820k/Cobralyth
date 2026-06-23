@@ -1,0 +1,17 @@
+extern C int32 printf(string fmt, ...)
+
+int32 main() {
+    int32 value = 0
+
+    while value < 5 {
+        value += 1
+
+        if value == 3 {
+            continue
+        }
+
+        printf("value=%d\n", value)
+    }
+
+    return value
+}

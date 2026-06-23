@@ -836,6 +836,15 @@ std::any ClythAST::visitFixedArrayType(ClythV1Parser::FixedArrayTypeContext* ctx
     return node;
 }
 
+
+std::any ClythAST::visitDynamicArrayType(ClythV1Parser::DynamicArrayTypeContext* ctx) {
+    auto node = build_generic(ast::NodeKind::Type, ctx, "dynamicArrayType");
+    node->attributes["name"] = ctx->getText();
+    node->attributes["container"] = "array";
+    node->attributes["array_kind"] = "dynamic";
+    return node;
+}
+
 std::any ClythAST::visitGenericType(ClythV1Parser::GenericTypeContext* ctx) {
     auto node = build_generic(ast::NodeKind::Type, ctx, "genericType");
     node->attributes["name"] = ctx->getText();

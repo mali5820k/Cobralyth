@@ -1,0 +1,25 @@
+extern C int32 printf(string formatted_string, ...)
+
+int32 main(string[] args) {
+    int32 x = 20
+    int32 y = 22
+    int32 total = add(x, y)
+
+    printf("program: %s\n", args[0])
+    printf("total before block: %d\n", total)
+
+    {
+        int32 total = 7
+        total += 5
+        printf("inner total: %d\n", total)
+    }
+
+    total += 1
+    printf("outer total: %d\n", total)
+
+    return total
+}
+
+int32 add(int32 a, int32 b) {
+    return a + b
+}
