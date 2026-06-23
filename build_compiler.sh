@@ -58,6 +58,7 @@ Usage: ./build_compiler.sh [options]
   --rebuild-antlr   Delete antlr4-cpp-runtime-lib and rebuild ANTLR runtime.
   --rebuild-all     Rebuild ANTLR runtime, LLVM, and Clyth compiler.
   --no-package      Skip creating dist-clyth distribution directory.
+  --skip-dist       Alias for --no-package; skip dist-clyth packaging for fast dev builds.
   -h, --help        Show this help.
 USAGE
 }
@@ -68,7 +69,7 @@ while [[ $# -gt 0 ]]; do
     --rebuild-llvm) REBUILD_LLVM=1 ;;
     --rebuild-antlr) REBUILD_ANTLR=1 ;;
     --rebuild-all) REBUILD_ALL=1; REBUILD_LLVM=1; REBUILD_ANTLR=1 ;;
-    --no-package) PACKAGE_DIST=0 ;;
+    --no-package|--skip-dist) PACKAGE_DIST=0 ;;
     -h|--help) usage; exit 0 ;;
     *) die "Unknown option: $1" ;;
   esac
@@ -354,7 +355,7 @@ Build summary:
   llc:           $LLVM_INSTALL/bin/llc
   lld:           $LLVM_INSTALL/bin/lld
   Clyth build:   $CLYTH_BUILD
-  Distribution:  $DIST_DIR
+  Distribution:  $([[ "$PACKAGE_DIST" -eq 1 ]] && echo "$DIST_DIR" || echo "skipped (--skip-dist/--no-package)")
 
 SUMMARY
   ok "Build completed successfully."

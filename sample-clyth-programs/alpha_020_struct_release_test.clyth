@@ -1,0 +1,25 @@
+extern C int32 printf(string fmt, ...)
+
+struct Counter {
+    private int32 value
+
+    constructor() {
+        value = 0
+    }
+
+    void add(int32 amount) {
+        value += amount
+    }
+
+    int32 get() {
+        return value
+    }
+}
+
+int32 main(string[] args) {
+    Counter counter
+    counter.add(40)
+    counter.add(2)
+    printf("counter: %d\n", counter.get())
+    return counter.get()
+}

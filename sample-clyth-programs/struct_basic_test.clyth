@@ -1,0 +1,21 @@
+extern C int32 printf(string fmt, ...)
+
+struct Point {
+    int32 x;
+    int32 y;
+}
+
+int32 sum_point(Point p) {
+    return p.x + p.y
+}
+
+int32 main(string[] args) {
+    Point p
+    p.x = 20
+    p.y = 22
+
+    printf("point.x: %d\n", p.x)
+    printf("point.y: %d\n", p.y)
+    printf("sum: %d\n", sum_point(p))
+    return 0
+}

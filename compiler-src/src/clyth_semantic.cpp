@@ -452,6 +452,10 @@ std::optional<std::string> declared_name(const ast::NodePtr& node) {
         return std::nullopt;
     }
 
+    if (auto explicit_name = attr(node, "name")) {
+        return *explicit_name;
+    }
+
     switch (node->kind) {
         case ast::NodeKind::FunctionDecl:
         case ast::NodeKind::VarDeclStmt:

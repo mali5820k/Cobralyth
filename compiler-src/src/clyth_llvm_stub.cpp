@@ -355,6 +355,62 @@ ast::NodePtr else_body_child(const ast::NodePtr& else_node) {
     return nullptr;
 }
 
+
+std::optional<std::string> member_name_from_member_access(const ast::NodePtr& node) {
+    if (!node) {
+        return std::nullopt;
+    }
+
+    if (!node->text.empty()) {
+        const std::size_t dot = node->text.rfind('.');
+        if (dot != std::string::npos && dot + 1 < node->text.size()) {
+            return node->text.substr(dot + 1);
+        }
+    }
+
+    std::optional<std::string> last_identifier;
+    for (const auto& child : node->children) {
+        if (!child) {
+            continue;
+        }
+        if (child->kind == ast::NodeKind::Token && !child->text.empty() && child->text != ".") {
+            last_identifier = child->text;
+        }
+    }
+    return last_identifier;
+}
+
+
+
+bool is_identifier_like(const std::string& token) {
+    if (token.empty()) {
+        return false;
+    }
+
+    const unsigned char first = static_cast<unsigned char>(token.front());
+    if (!(std::isalpha(first) || token.front() == '_')) {
+        return false;
+    }
+
+    for (char raw_char : token) {
+        const unsigned char c = static_cast<unsigned char>(raw_char);
+        if (!(std::isalnum(c) || raw_char == '_')) {
+            return false;
+        }
+    }
+
+    return true;
+}
+
+
+std::string method_key(const std::string& owner_type_name, const std::string& method_name) {
+    return owner_type_name + "." + method_name;
+}
+
+std::string lowered_method_name(const std::string& owner_type_name, const std::string& method_name) {
+    return owner_type_name + "." + method_name;
+}
+
 std::vector<ast::NodePtr> direct_top_level_nodes(const lowering::ClythLoweringPlan& plan) {
     std::vector<ast::NodePtr> result;
 
@@ -422,7 +478,22 @@ bool ClythLLVMCodegen::emit_program(
 ) {
     const std::vector<ast::NodePtr> top_level = direct_top_level_nodes(plan);
 
-    // First pass: create all externally callable/function symbols so calls can
+    // Pass 0: create opaque LLVM struct shells so field types can reference
+    // structs independent of top-level source order.
+    for (const auto& node : top_level) {
+        if (node && node->kind == ast::NodeKind::StructDecl && !declare_struct_shell(node)) {
+            return false;
+        }
+    }
+
+    // Pass 1: populate struct field layouts once all struct names are known.
+    for (const auto& node : top_level) {
+        if (node && node->kind == ast::NodeKind::StructDecl && !define_struct_body(node)) {
+            return false;
+        }
+    }
+
+    // Pass 2: create all externally callable/function/global symbols so calls
     // resolve independent of source order.
     for (const auto& node : top_level) {
         if (!node) {
@@ -435,6 +506,18 @@ bool ClythLLVMCodegen::emit_program(
             }
         } else if (node->kind == ast::NodeKind::FunctionDecl) {
             if (!declare_function_header(node)) {
+                return false;
+            }
+        } else if (node->kind == ast::NodeKind::MethodBlock) {
+            const std::string owner = attr(node, "owner").value_or("");
+            for (const auto& method : node->children) {
+                if (method && method->kind == ast::NodeKind::MethodDecl && !declare_method_header(method, owner)) {
+                    return false;
+                }
+            }
+        } else if (node->kind == ast::NodeKind::MethodDecl) {
+            const std::string owner = attr(node, "owner").value_or("");
+            if (!owner.empty() && !declare_method_header(node, owner)) {
                 return false;
             }
         } else if (node->kind == ast::NodeKind::VarDeclStmt) {
@@ -467,10 +550,25 @@ bool ClythLLVMCodegen::emit_top_level_node(const ast::NodePtr& node, const seman
             return emit_function_body(node, semantics);
 
         case ast::NodeKind::StructDecl:
-        case ast::NodeKind::MethodDecl:
-        case ast::NodeKind::MethodBlock:
-            // Parsed and semantically checked; full layout/method lowering comes later.
             return true;
+
+        case ast::NodeKind::MethodDecl: {
+            const std::string owner = attr(node, "owner").value_or("");
+            if (!owner.empty()) {
+                return emit_method_body(node, semantics, owner);
+            }
+            return true;
+        }
+
+        case ast::NodeKind::MethodBlock: {
+            const std::string owner = attr(node, "owner").value_or("");
+            for (const auto& method : node->children) {
+                if (method && method->kind == ast::NodeKind::MethodDecl && !emit_method_body(method, semantics, owner)) {
+                    return false;
+                }
+            }
+            return true;
+        }
 
         case ast::NodeKind::IncludeDecl:
             return true;
@@ -482,6 +580,78 @@ bool ClythLLVMCodegen::emit_top_level_node(const ast::NodePtr& node, const seman
             add_codegen_error(node, fmt::format("Unsupported top-level node '{}'.", ast::node_kind_name(node->kind)));
             return false;
     }
+}
+
+
+bool ClythLLVMCodegen::declare_struct_shell(const ast::NodePtr& node) {
+    const auto maybe_name = declared_name(node);
+    if (!maybe_name) {
+        add_codegen_error(node, "Struct declaration is missing a name.");
+        return false;
+    }
+
+    if (structs.find(*maybe_name) != structs.end()) {
+        return true;
+    }
+
+    StructInfo info;
+    info.name = *maybe_name;
+    info.type = llvm::StructType::create(context, fmt::format("struct.{}", *maybe_name));
+    structs[*maybe_name] = std::move(info);
+    return true;
+}
+
+bool ClythLLVMCodegen::define_struct_body(const ast::NodePtr& node) {
+    const auto maybe_name = declared_name(node);
+    if (!maybe_name) {
+        add_codegen_error(node, "Struct declaration is missing a name.");
+        return false;
+    }
+
+    auto struct_it = structs.find(*maybe_name);
+    if (struct_it == structs.end() || struct_it->second.type == nullptr) {
+        add_codegen_error(node, fmt::format("Struct '{}' was not declared before layout emission.", *maybe_name));
+        return false;
+    }
+
+    StructInfo& info = struct_it->second;
+    if (!info.field_names.empty() || !info.field_indices.empty()) {
+        return true;
+    }
+
+    std::vector<llvm::Type*> field_types;
+    for (const auto& child : node->children) {
+        if (!child || child->kind != ast::NodeKind::StructField) {
+            continue;
+        }
+
+        const auto maybe_field_name = declared_name(child);
+        if (!maybe_field_name) {
+            add_codegen_error(child, fmt::format("Struct '{}' contains a field without a name.", *maybe_name));
+            return false;
+        }
+
+        const std::string field_type_name = declared_type_name(child);
+        llvm::Type* field_type = llvm_type_from_clyth_type(field_type_name);
+        if (field_type == nullptr) {
+            add_codegen_error(child, fmt::format("Unsupported field type '{}' for '{}.{}'.", field_type_name, *maybe_name, *maybe_field_name));
+            return false;
+        }
+
+        if (field_type == info.type) {
+            add_codegen_error(child, fmt::format("Struct '{}' cannot contain itself by value; use pointer<{}> later if recursive layout is needed.", *maybe_name, *maybe_name));
+            return false;
+        }
+
+        const std::size_t index = info.field_names.size();
+        info.field_indices[*maybe_field_name] = index;
+        info.field_names.push_back(*maybe_field_name);
+        info.field_type_names.push_back(field_type_name);
+        field_types.push_back(field_type);
+    }
+
+    info.type->setBody(field_types, false);
+    return true;
 }
 
 bool ClythLLVMCodegen::declare_extern_function(const ast::NodePtr& node) {
@@ -602,6 +772,72 @@ bool ClythLLVMCodegen::declare_function_header(const ast::NodePtr& node) {
     return true;
 }
 
+
+bool ClythLLVMCodegen::declare_method_header(const ast::NodePtr& node, const std::string& owner_type_name) {
+    const std::string owner = !owner_type_name.empty() ? owner_type_name : attr(node, "owner").value_or("");
+    if (owner.empty()) {
+        add_codegen_error(node, "Method declaration is missing an owner type.");
+        return false;
+    }
+
+    auto struct_it = structs.find(owner);
+    if (struct_it == structs.end() || struct_it->second.type == nullptr) {
+        add_codegen_error(node, fmt::format("Method owner '{}' is not a known struct.", owner));
+        return false;
+    }
+
+    const auto maybe_name = declared_name(node);
+    if (!maybe_name) {
+        add_codegen_error(node, fmt::format("Method declaration for '{}' is missing a name.", owner));
+        return false;
+    }
+
+    const std::string name = *maybe_name;
+    const std::string key = method_key(owner, name);
+    const std::string lowered = lowered_method_name(owner, name);
+
+    if (functions.find(lowered) != functions.end()) {
+        return true;
+    }
+
+    const std::string return_type_name = declared_type_name(node);
+    llvm::Type* return_type = llvm_type_from_clyth_type(return_type_name);
+    if (return_type == nullptr) {
+        add_codegen_error(node, fmt::format("Unsupported method return type '{}'.", return_type_name));
+        return false;
+    }
+
+    std::vector<llvm::Type*> parameter_types;
+    parameter_types.push_back(llvm::PointerType::get(context, 0));
+    for (const auto& param : direct_params(node)) {
+        const std::string param_type_name = declared_type_name(param);
+        llvm::Type* param_type = llvm_type_from_clyth_type(param_type_name);
+        if (param_type == nullptr) {
+            add_codegen_error(param, fmt::format("Unsupported method parameter type '{}'.", param_type_name));
+            return false;
+        }
+        parameter_types.push_back(param_type);
+    }
+
+    llvm::FunctionType* function_type = llvm::FunctionType::get(return_type, parameter_types, false);
+    llvm::Function* function = llvm::Function::Create(
+        function_type,
+        llvm::Function::ExternalLinkage,
+        lowered,
+        module.get()
+    );
+
+    std::size_t index = 0;
+    for (llvm::Argument& arg : function->args()) {
+        arg.setName(index == 0 ? "this" : fmt::format("arg{}", index - 1));
+        ++index;
+    }
+
+    functions[lowered] = function;
+    methods[key] = MethodInfo{owner, name, lowered, node};
+    return true;
+}
+
 bool ClythLLVMCodegen::declare_global_variable(const ast::NodePtr& node) {
     const auto maybe_name = declared_name(node);
     if (!maybe_name) {
@@ -629,6 +865,8 @@ bool ClythLLVMCodegen::declare_global_variable(const ast::NodePtr& node) {
             initializer = llvm::ConstantFP::get(type, 0.0);
         } else if (type->isPointerTy()) {
             initializer = llvm::ConstantPointerNull::get(llvm::cast<llvm::PointerType>(type));
+        } else if (type->isStructTy() || type->isArrayTy()) {
+            initializer = llvm::ConstantAggregateZero::get(type);
         } else {
             add_codegen_error(node, fmt::format("Global variable '{}' has unsupported default initializer type.", name));
             return false;
@@ -645,6 +883,7 @@ bool ClythLLVMCodegen::declare_global_variable(const ast::NodePtr& node) {
     );
 
     globals[name] = global;
+    global_type_names[name] = type_name;
     return true;
 }
 
@@ -719,6 +958,11 @@ bool ClythLLVMCodegen::emit_function_body(const ast::NodePtr& node, const semant
         llvm::AllocaInst* alloca = create_entry_alloca(function, arg.getType(), name);
         builder.CreateStore(&arg, alloca);
         register_local(name, alloca);
+        if (modern_main && index == 1 && !params.empty()) {
+            register_local_type(name, declared_type_name(params.front()));
+        } else if (!modern_main && index < params.size()) {
+            register_local_type(name, declared_type_name(params[index]));
+        }
         ++index;
     }
 
@@ -738,6 +982,91 @@ bool ClythLLVMCodegen::emit_function_body(const ast::NodePtr& node, const semant
             builder.CreateRet(llvm::ConstantInt::get(current_scope->return_type, 0));
         } else {
             add_codegen_error(node, fmt::format("Function '{}' has no return and unsupported default return type.", *maybe_name));
+            current_scope.reset();
+            return false;
+        }
+    }
+
+    current_scope.reset();
+    return ok;
+}
+
+
+bool ClythLLVMCodegen::emit_method_body(
+    const ast::NodePtr& node,
+    const semantic::SemanticResult& semantics,
+    const std::string& owner_type_name
+) {
+    const std::string owner = !owner_type_name.empty() ? owner_type_name : attr(node, "owner").value_or("");
+    const auto maybe_name = declared_name(node);
+    if (owner.empty() || !maybe_name) {
+        add_codegen_error(node, "Method body is missing an owner or method name.");
+        return false;
+    }
+
+    const std::string lowered = lowered_method_name(owner, *maybe_name);
+    auto it = functions.find(lowered);
+    if (it == functions.end()) {
+        add_codegen_error(node, fmt::format("Method '{}.{}' was not declared before body emission.", owner, *maybe_name));
+        return false;
+    }
+
+    llvm::Function* function = it->second;
+    if (!function->empty()) {
+        return true;
+    }
+
+    llvm::BasicBlock* entry_block = llvm::BasicBlock::Create(context, "entry", function);
+    builder.SetInsertPoint(entry_block);
+
+    current_scope = std::make_unique<FunctionScope>();
+    current_scope->function = function;
+    current_scope->return_type = function->getReturnType();
+    current_scope->this_type_name = owner;
+    push_local_scope();
+
+    const std::vector<ast::NodePtr> params = direct_params(node);
+    std::size_t index = 0;
+    for (llvm::Argument& arg : function->args()) {
+        std::string name;
+        std::string type_name;
+        if (index == 0) {
+            name = "this";
+            type_name = owner;
+        } else {
+            const std::size_t param_index = index - 1;
+            name = fmt::format("arg{}", param_index);
+            if (param_index < params.size()) {
+                if (auto param_name = declared_name(params[param_index])) {
+                    name = *param_name;
+                }
+                type_name = declared_type_name(params[param_index]);
+            }
+        }
+
+        arg.setName(name);
+        llvm::AllocaInst* alloca = create_entry_alloca(function, arg.getType(), name);
+        builder.CreateStore(&arg, alloca);
+        register_local(name, alloca);
+        register_local_type(name, type_name);
+        ++index;
+    }
+
+    const ast::NodePtr body = first_child_of_kind(node, ast::NodeKind::BlockStmt);
+    if (!body) {
+        add_codegen_error(node, fmt::format("Method '{}.{}' is missing a body block.", owner, *maybe_name));
+        current_scope.reset();
+        return false;
+    }
+
+    const bool ok = emit_block(body, semantics);
+    if (ok && !builder.GetInsertBlock()->getTerminator()) {
+        if (current_scope->return_type->isVoidTy()) {
+            builder.CreateRetVoid();
+        } else if (current_scope->return_type->isIntegerTy()) {
+            builder.CreateRet(llvm::ConstantInt::get(current_scope->return_type, 0));
+        } else {
+            add_codegen_error(node, fmt::format("Method '{}.{}' has no return and unsupported default return type.", owner, *maybe_name));
             current_scope.reset();
             return false;
         }
@@ -831,6 +1160,7 @@ bool ClythLLVMCodegen::emit_statement(const ast::NodePtr& node, const semantic::
 
             llvm::AllocaInst* alloca = create_entry_alloca(current_scope->function, type, *maybe_name);
             if (!register_local(*maybe_name, alloca)) { return false; }
+            if (!register_local_type(*maybe_name, type_name)) { return false; }
 
             if (auto fixed_array = parse_fixed_array_type_name(type_name)) {
                 llvm::Type* element_type = llvm_type_from_clyth_type(fixed_array->element_type_name);
@@ -872,6 +1202,14 @@ bool ClythLLVMCodegen::emit_statement(const ast::NodePtr& node, const semantic::
                 builder.CreateStore(llvm::ConstantFP::get(type, 0.0), alloca);
             } else if (type->isPointerTy()) {
                 builder.CreateStore(llvm::ConstantPointerNull::get(llvm::cast<llvm::PointerType>(type)), alloca);
+            } else if (type->isStructTy() || type->isArrayTy()) {
+                builder.CreateStore(llvm::ConstantAggregateZero::get(type), alloca);
+            }
+
+            if (structs.find(type_name) != structs.end()) {
+                if (!maybe_emit_default_constructor_call(type_name, alloca, node)) {
+                    return false;
+                }
             }
 
             return true;
@@ -1106,7 +1444,11 @@ llvm::Value* ClythLLVMCodegen::emit_expression(const ast::NodePtr& node, const s
 
         case ast::NodeKind::Generic: {
             if (auto token = first_token_text(node)) {
-                if (current_scope && lookup_local(*token) != nullptr) {
+                // In expression position, a generic wrapper whose first token is an
+                // identifier should be lowered as an identifier.  That lets normal
+                // locals/globals resolve, and also lets method bodies fall through
+                // to implicit this.field lookup for field names such as `value`.
+                if (is_identifier_like(*token)) {
                     return emit_identifier(node);
                 }
             }
@@ -1123,7 +1465,6 @@ llvm::Value* ClythLLVMCodegen::emit_expression(const ast::NodePtr& node, const s
         case ast::NodeKind::ListLiteralExpr:
         case ast::NodeKind::CurlyLiteralExpr:
         case ast::NodeKind::AllocationExpr:
-        case ast::NodeKind::MemberAccessExpr:
         case ast::NodeKind::IndexExpr:
             add_codegen_error(node, fmt::format("Expression codegen for '{}' is not implemented yet.", ast::node_kind_name(node->kind)));
             return nullptr;
@@ -1191,6 +1532,19 @@ llvm::Value* ClythLLVMCodegen::emit_identifier(const ast::NodePtr& node) {
         return builder.CreateLoad(global->getValueType(), global, *maybe_name);
     }
 
+    if (current_scope && !current_scope->this_type_name.empty()) {
+        llvm::Type* field_type = nullptr;
+        llvm::Value* field_address = emit_this_field_address(*maybe_name, node, &field_type);
+        if (field_address != nullptr && field_type != nullptr) {
+            return builder.CreateLoad(field_type, field_address, fmt::format("this.{}", *maybe_name));
+        }
+        if (!diagnostics.has_errors()) {
+            // fall through to the ordinary unknown identifier diagnostic
+        } else {
+            return nullptr;
+        }
+    }
+
     add_codegen_error(node, fmt::format("Unknown identifier '{}'.", *maybe_name));
     return nullptr;
 }
@@ -1204,6 +1558,7 @@ llvm::Value* ClythLLVMCodegen::emit_postfix(const ast::NodePtr& node, const sema
 
     llvm::Value* current_value = nullptr;
     bool consumed_suffix = false;
+    std::string pending_method_name;
 
     for (const auto& child : node->children) {
         if (!child) {
@@ -1211,7 +1566,12 @@ llvm::Value* ClythLLVMCodegen::emit_postfix(const ast::NodePtr& node, const sema
         }
 
         if (child->kind == ast::NodeKind::CallExpr) {
-            current_value = emit_call_suffix(*maybe_base_name, child, semantics);
+            if (!pending_method_name.empty()) {
+                current_value = emit_method_call_suffix(*maybe_base_name, pending_method_name, child, semantics);
+                pending_method_name.clear();
+            } else {
+                current_value = emit_call_suffix(*maybe_base_name, child, semantics);
+            }
             consumed_suffix = true;
             continue;
         }
@@ -1256,8 +1616,8 @@ llvm::Value* ClythLLVMCodegen::emit_postfix(const ast::NodePtr& node, const sema
         }
 
         if (child->kind == ast::NodeKind::MemberAccessExpr) {
-            const std::string member_text = child->text;
-            if (member_text == ".length" || member_text == "length" || first_token_text(child).value_or("") == "length") {
+            const std::string member = member_name_from_member_access(child).value_or("");
+            if (member == "length") {
                 if (auto info = lookup_local_array(*maybe_base_name)) {
                     current_value = llvm::ConstantInt::get(llvm::Type::getInt64Ty(context), info->length);
                     consumed_suffix = true;
@@ -1265,8 +1625,23 @@ llvm::Value* ClythLLVMCodegen::emit_postfix(const ast::NodePtr& node, const sema
                 }
             }
 
-            add_codegen_error(child, fmt::format("Postfix suffix '{}' is not implemented yet.", ast::node_kind_name(child->kind)));
-            return nullptr;
+            if (auto receiver_type = lookup_symbol_type_name(*maybe_base_name)) {
+                if (methods.find(method_key(*receiver_type, member)) != methods.end()) {
+                    pending_method_name = member;
+                    consumed_suffix = true;
+                    continue;
+                }
+            }
+
+            llvm::Type* field_type = nullptr;
+            llvm::Value* field_address = emit_struct_field_address(*maybe_base_name, child, &field_type);
+            if (field_address == nullptr || field_type == nullptr) {
+                return nullptr;
+            }
+
+            current_value = builder.CreateLoad(field_type, field_address, fmt::format("{}.{}", *maybe_base_name, member));
+            consumed_suffix = true;
+            continue;
         }
     }
 
@@ -1277,6 +1652,144 @@ llvm::Value* ClythLLVMCodegen::emit_postfix(const ast::NodePtr& node, const sema
     return emit_identifier(node);
 }
 
+
+
+llvm::Value* ClythLLVMCodegen::emit_struct_field_address(
+    const std::string& base_name,
+    const ast::NodePtr& member_node,
+    llvm::Type** out_type
+) {
+    const auto maybe_type_name = lookup_symbol_type_name(base_name);
+    if (!maybe_type_name) {
+        add_codegen_error(member_node, fmt::format("Cannot resolve type for '{}'.", base_name));
+        return nullptr;
+    }
+
+    auto struct_it = structs.find(*maybe_type_name);
+    if (struct_it == structs.end()) {
+        add_codegen_error(member_node, fmt::format("Type '{}' for '{}' is not a struct.", *maybe_type_name, base_name));
+        return nullptr;
+    }
+
+    const std::string field_name = member_name_from_member_access(member_node).value_or("");
+    if (field_name.empty()) {
+        add_codegen_error(member_node, fmt::format("Member access on '{}' is missing a field name.", base_name));
+        return nullptr;
+    }
+
+    const StructInfo& info = struct_it->second;
+    auto field_it = info.field_indices.find(field_name);
+    if (field_it == info.field_indices.end()) {
+        add_codegen_error(member_node, fmt::format("Struct '{}' has no field named '{}'.", info.name, field_name));
+        return nullptr;
+    }
+
+    llvm::Value* base_address = nullptr;
+    if (llvm::AllocaInst* local = lookup_local(base_name)) {
+        if (local->getAllocatedType()->isPointerTy()) {
+            base_address = builder.CreateLoad(local->getAllocatedType(), local, fmt::format("{}.ptr", base_name));
+        } else {
+            base_address = local;
+        }
+    } else {
+        auto global_it = globals.find(base_name);
+        if (global_it != globals.end()) {
+            base_address = global_it->second;
+        }
+    }
+
+    if (base_address == nullptr) {
+        add_codegen_error(member_node, fmt::format("Unknown struct value '{}'.", base_name));
+        return nullptr;
+    }
+
+    llvm::Value* zero = llvm::ConstantInt::get(llvm::Type::getInt32Ty(context), 0);
+    llvm::Value* field_index = llvm::ConstantInt::get(llvm::Type::getInt32Ty(context), field_it->second);
+    llvm::Value* address = builder.CreateInBoundsGEP(
+        info.type,
+        base_address,
+        {zero, field_index},
+        fmt::format("{}.{}.addr", base_name, field_name)
+    );
+
+    if (out_type != nullptr) {
+        *out_type = info.type->getElementType(static_cast<unsigned>(field_it->second));
+    }
+
+    return address;
+}
+
+
+llvm::Value* ClythLLVMCodegen::emit_this_field_address(
+    const std::string& field_name,
+    const ast::NodePtr& node,
+    llvm::Type** out_type
+) {
+    if (!current_scope || current_scope->this_type_name.empty()) {
+        return nullptr;
+    }
+
+    auto struct_it = structs.find(current_scope->this_type_name);
+    if (struct_it == structs.end()) {
+        add_codegen_error(node, fmt::format("Current method receiver type '{}' is not a known struct.", current_scope->this_type_name));
+        return nullptr;
+    }
+
+    const StructInfo& info = struct_it->second;
+    auto field_it = info.field_indices.find(field_name);
+    if (field_it == info.field_indices.end()) {
+        return nullptr;
+    }
+
+    llvm::AllocaInst* this_alloca = lookup_local("this");
+    if (this_alloca == nullptr) {
+        add_codegen_error(node, "Internal codegen error: method scope has no 'this' value.");
+        return nullptr;
+    }
+
+    llvm::Value* this_address = builder.CreateLoad(this_alloca->getAllocatedType(), this_alloca, "this.ptr");
+    llvm::Value* zero = llvm::ConstantInt::get(llvm::Type::getInt32Ty(context), 0);
+    llvm::Value* field_index = llvm::ConstantInt::get(llvm::Type::getInt32Ty(context), field_it->second);
+    llvm::Value* address = builder.CreateInBoundsGEP(
+        info.type,
+        this_address,
+        {zero, field_index},
+        fmt::format("this.{}.addr", field_name)
+    );
+
+    if (out_type != nullptr) {
+        *out_type = info.type->getElementType(static_cast<unsigned>(field_it->second));
+    }
+
+    return address;
+}
+
+bool ClythLLVMCodegen::maybe_emit_default_constructor_call(
+    const std::string& type_name,
+    llvm::Value* receiver_address,
+    const ast::NodePtr& node
+) {
+    const std::string key = method_key(type_name, "constructor");
+    auto method_it = methods.find(key);
+    if (method_it == methods.end()) {
+        return true;
+    }
+
+    llvm::Function* constructor = functions[method_it->second.lowered_name];
+    if (constructor == nullptr) {
+        add_codegen_error(node, fmt::format("Constructor for '{}' was registered but not lowered.", type_name));
+        return false;
+    }
+
+    if (constructor->arg_size() != 1) {
+        // Only default constructors are auto-invoked by a bare local declaration
+        // in Alpha 0.2.0. Parameterized constructor syntax is future work.
+        return true;
+    }
+
+    builder.CreateCall(constructor, {receiver_address});
+    return true;
+}
 
 llvm::Value* ClythLLVMCodegen::emit_fixed_array_element_address(
     const std::string& name,
@@ -1325,7 +1838,13 @@ llvm::Value* ClythLLVMCodegen::emit_lvalue_address(
     }
 
     for (const auto& child : node->children) {
-        if (child && child->kind == ast::NodeKind::IndexExpr) {
+        if (!child) {
+            continue;
+        }
+        if (child->kind == ast::NodeKind::MemberAccessExpr) {
+            return emit_struct_field_address(*maybe_name, child, out_type);
+        }
+        if (child->kind == ast::NodeKind::IndexExpr) {
             return emit_fixed_array_element_address(*maybe_name, child, semantics, out_type);
         }
     }
@@ -1343,6 +1862,16 @@ llvm::Value* ClythLLVMCodegen::emit_lvalue_address(
             *out_type = global_it->second->getValueType();
         }
         return global_it->second;
+    }
+
+    if (current_scope && !current_scope->this_type_name.empty()) {
+        llvm::Value* field_address = emit_this_field_address(*maybe_name, node, out_type);
+        if (field_address != nullptr) {
+            return field_address;
+        }
+        if (diagnostics.has_errors()) {
+            return nullptr;
+        }
     }
 
     add_codegen_error(node, fmt::format("Unknown assignment target '{}'.", *maybe_name));
@@ -1415,7 +1944,71 @@ llvm::Value* ClythLLVMCodegen::emit_call_suffix(
         }
     }
 
-    return builder.CreateCall(function_it->second, args, callee_name == "printf" ? "" : "calltmp");
+    llvm::Function* callee = function_it->second;
+    return builder.CreateCall(callee, args, (callee_name == "printf" || callee->getReturnType()->isVoidTy()) ? "" : "calltmp");
+}
+
+
+llvm::Value* ClythLLVMCodegen::emit_method_call_suffix(
+    const std::string& receiver_name,
+    const std::string& method_name,
+    const ast::NodePtr& call_node,
+    const semantic::SemanticResult& semantics
+) {
+    const auto maybe_receiver_type = lookup_symbol_type_name(receiver_name);
+    if (!maybe_receiver_type) {
+        add_codegen_error(call_node, fmt::format("Cannot resolve receiver type for '{}.{}'.", receiver_name, method_name));
+        return nullptr;
+    }
+
+    const std::string key = method_key(*maybe_receiver_type, method_name);
+    auto method_it = methods.find(key);
+    if (method_it == methods.end()) {
+        add_codegen_error(call_node, fmt::format("Type '{}' has no method named '{}'.", *maybe_receiver_type, method_name));
+        return nullptr;
+    }
+
+    llvm::Value* receiver_address = nullptr;
+    if (llvm::AllocaInst* local = lookup_local(receiver_name)) {
+        if (local->getAllocatedType()->isPointerTy()) {
+            receiver_address = builder.CreateLoad(local->getAllocatedType(), local, fmt::format("{}.ptr", receiver_name));
+        } else {
+            receiver_address = local;
+        }
+    } else {
+        auto global_it = globals.find(receiver_name);
+        if (global_it != globals.end()) {
+            receiver_address = global_it->second;
+        }
+    }
+
+    if (receiver_address == nullptr) {
+        add_codegen_error(call_node, fmt::format("Unknown method receiver '{}'.", receiver_name));
+        return nullptr;
+    }
+
+    std::vector<llvm::Value*> args;
+    args.push_back(receiver_address);
+
+    const ast::NodePtr arg_list = first_child_with_label(call_node, "argumentList");
+    if (arg_list) {
+        for (const auto& arg : expression_children(arg_list)) {
+            llvm::Value* arg_value = emit_expression(arg, semantics);
+            if (arg_value == nullptr) {
+                return nullptr;
+            }
+            args.push_back(arg_value);
+        }
+    }
+
+    auto function_it = functions.find(method_it->second.lowered_name);
+    if (function_it == functions.end()) {
+        add_codegen_error(call_node, fmt::format("Lowered method '{}' was not declared.", method_it->second.lowered_name));
+        return nullptr;
+    }
+
+    llvm::Function* callee = function_it->second;
+    return builder.CreateCall(callee, args, callee->getReturnType()->isVoidTy() ? "" : "methodcalltmp");
 }
 
 llvm::Value* ClythLLVMCodegen::emit_unary(const ast::NodePtr& node, const semantic::SemanticResult& semantics) {
@@ -1704,6 +2297,11 @@ llvm::Type* ClythLLVMCodegen::llvm_type_from_clyth_type(const std::string& type_
     if (type_name == "float64" || type_name == "double") {
         return llvm::Type::getDoubleTy(context);
     }
+    auto struct_it = structs.find(type_name);
+    if (struct_it != structs.end()) {
+        return struct_it->second.type;
+    }
+
     if (type_name == "string") {
         // Pass 2 still treats string values at extern-C boundaries as C string
         // pointers. Native Clyth string layout is planned as char[]-backed
@@ -1741,6 +2339,7 @@ void ClythLLVMCodegen::push_local_scope() {
     }
 
     current_scope->local_scopes.emplace_back();
+    current_scope->local_type_scopes.emplace_back();
     current_scope->local_array_scopes.emplace_back();
 }
 
@@ -1750,6 +2349,9 @@ void ClythLLVMCodegen::pop_local_scope() {
     }
 
     current_scope->local_scopes.pop_back();
+    if (!current_scope->local_type_scopes.empty()) {
+        current_scope->local_type_scopes.pop_back();
+    }
     if (!current_scope->local_array_scopes.empty()) {
         current_scope->local_array_scopes.pop_back();
     }
@@ -1771,6 +2373,35 @@ bool ClythLLVMCodegen::register_local(const std::string& name, llvm::AllocaInst*
     return true;
 }
 
+
+
+bool ClythLLVMCodegen::register_local_type(const std::string& name, const std::string& type_name) {
+    if (!current_scope || current_scope->local_type_scopes.empty()) {
+        diagnostics.add_error(SourceLocation{}, fmt::format("Internal codegen error: no local type scope exists while registering '{}'.", name));
+        return false;
+    }
+
+    current_scope->local_type_scopes.back()[name] = type_name;
+    return true;
+}
+
+std::optional<std::string> ClythLLVMCodegen::lookup_symbol_type_name(const std::string& name) const {
+    if (current_scope) {
+        for (auto it = current_scope->local_type_scopes.rbegin(); it != current_scope->local_type_scopes.rend(); ++it) {
+            auto found = it->find(name);
+            if (found != it->end()) {
+                return found->second;
+            }
+        }
+    }
+
+    auto global_it = global_type_names.find(name);
+    if (global_it != global_type_names.end()) {
+        return global_it->second;
+    }
+
+    return std::nullopt;
+}
 
 bool ClythLLVMCodegen::register_local_array(const std::string& name, const LocalArrayInfo& info) {
     if (!current_scope || current_scope->local_array_scopes.empty()) {

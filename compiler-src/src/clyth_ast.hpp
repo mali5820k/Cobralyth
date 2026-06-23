@@ -180,6 +180,7 @@ public:
     // Requires grammar regeneration after adding methodBlock/methodDecl rules.
     std::any visitMethodBlock(ClythV1Parser::MethodBlockContext* ctx) override;
     std::any visitMethodDecl(ClythV1Parser::MethodDeclContext* ctx) override;
+    std::any visitMethodSimpleName(ClythV1Parser::MethodSimpleNameContext* ctx) override;
 
     std::any visitFunctionDecl(ClythV1Parser::FunctionDeclContext* ctx) override;
     std::any visitParamList(ClythV1Parser::ParamListContext* ctx) override;
