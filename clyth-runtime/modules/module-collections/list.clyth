@@ -1,0 +1,10 @@
+// Clyth Runtime Module: collections/list
+// License: MIT
+//
+// List<T> is intended to be implemented in Clyth-space on top of compiler-backed arrays.
+// Current compiler releases may still provide temporary scaffold lowering while generic
+// runtime collections are being completed.
+
+struct List<T> {
+    // Runtime implementation target for Alpha 0.3 consolidation.
+}

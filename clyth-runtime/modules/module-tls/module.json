@@ -1,0 +1,25 @@
+{
+  "name": "tls",
+  "version": "0.3.0-alpha",
+  "kind": "runtime-module",
+  "exports": [
+    "tls.clyth"
+  ],
+  "dependencies": [],
+  "status": "stub",
+  "wrapper": {
+    "license": "MIT"
+  },
+  "c_bindings": [
+    {
+      "name": "openssl",
+      "enabled": false,
+      "backend": "OpenSSL",
+      "license": "Apache-2.0",
+      "note": "Upstream TLS backend license applies when this backend is enabled.",
+      "architectures": {},
+      "source_directory": "../../c-bindings/openssl"
+    }
+  ],
+  "notes": "TLS termination is exposed through Clyth-space APIs while the C binding owns OpenSSL-specific handles, allocation rules, and cleanup."
+}

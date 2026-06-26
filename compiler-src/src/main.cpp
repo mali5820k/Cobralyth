@@ -9,6 +9,7 @@
 #include <algorithm>
 #include <array>
 #include <cctype>
+#include <cstdlib>
 #include <iterator>
 #include <regex>
 #include <set>
@@ -29,11 +30,16 @@ struct CompilerOptions {
     bool dump_codegen_plan = false;
     bool emit_ir_only = false;
     bool print_ir = false;
+    bool emit_ir = false;
+    bool emit_all = false;
 
     std::filesystem::path main_file;
     std::filesystem::path ast_json_file;
     std::filesystem::path ast_bytecode_file;
     std::string output_binary_name = "clyth_program.bin";
+    std::filesystem::path runtime_root;
+    std::filesystem::path compiler_invocation_path;
+    std::vector<std::filesystem::path> included_source_paths;
 };
 
 
@@ -46,10 +52,151 @@ static std::string strip_quotes(std::string value) {
     return value;
 }
 
+
+static std::filesystem::path locate_runtime_root(const std::filesystem::path& main_file, const std::filesystem::path& compiler_invocation_path) {
+    std::vector<std::filesystem::path> candidates;
+    std::error_code ec;
+
+    if (const char* env_runtime = std::getenv("CLYTH_RUNTIME_DIR")) {
+        candidates.push_back(std::filesystem::path(env_runtime));
+    }
+
+    if (!compiler_invocation_path.empty()) {
+        std::error_code exe_ec;
+        const auto exe_path = std::filesystem::weakly_canonical(compiler_invocation_path, exe_ec);
+        const auto exe_dir = (exe_ec ? compiler_invocation_path : exe_path).parent_path();
+        candidates.push_back(exe_dir / ".." / "share" / "clyth" / "runtime");
+        candidates.push_back(exe_dir / "share" / "clyth" / "runtime");
+        candidates.push_back(exe_dir / ".." / "clyth-runtime");
+    }
+
+    candidates.push_back(std::filesystem::current_path(ec) / "clyth-runtime");
+    candidates.push_back(std::filesystem::current_path(ec) / "share" / "clyth" / "runtime");
+    candidates.push_back(main_file.parent_path() / "clyth-runtime");
+    candidates.push_back(main_file.parent_path() / ".." / "clyth-runtime");
+    candidates.push_back(main_file.parent_path() / ".." / "share" / "clyth" / "runtime");
+
+    for (const auto& candidate : candidates) {
+        std::error_code candidate_ec;
+        std::filesystem::path normalized = std::filesystem::weakly_canonical(candidate, candidate_ec);
+        if (!candidate_ec && std::filesystem::exists(normalized)) {
+            return normalized;
+        }
+    }
+
+    return std::filesystem::path{};
+}
+
+static std::filesystem::path resolve_include_path(
+    const std::filesystem::path& base_dir,
+    const std::filesystem::path& runtime_root,
+    std::filesystem::path include_path
+) {
+    if (include_path.extension().empty()) {
+        include_path += ".clyth";
+    }
+
+    if (include_path.is_absolute()) {
+        return include_path;
+    }
+
+    const std::filesystem::path local_candidate = base_dir / include_path;
+    if (std::filesystem::exists(local_candidate)) {
+        return local_candidate;
+    }
+
+    if (!runtime_root.empty()) {
+        const std::filesystem::path runtime_candidate = runtime_root / include_path;
+        if (std::filesystem::exists(runtime_candidate)) {
+            return runtime_candidate;
+        }
+
+        // Runtime modules are the source of truth for bundled Clyth runtime APIs.
+        // A user-facing include such as `include "dma/dma.clyth"` resolves to
+        // `clyth-runtime/modules/module-dma/dma.clyth`.
+        auto it = include_path.begin();
+        if (it != include_path.end()) {
+            const std::string module_name = it->string();
+            ++it;
+            std::filesystem::path remainder;
+            for (; it != include_path.end(); ++it) {
+                remainder /= *it;
+            }
+            if (!module_name.empty() && !remainder.empty()) {
+                const std::filesystem::path module_candidate =
+                    runtime_root / "modules" / ("module-" + module_name) / remainder;
+                if (std::filesystem::exists(module_candidate)) {
+                    return module_candidate;
+                }
+            }
+        }
+    }
+
+    return local_candidate;
+}
+
+static bool path_is_inside(const std::filesystem::path& maybe_child, const std::filesystem::path& maybe_parent) {
+    if (maybe_child.empty() || maybe_parent.empty()) {
+        return false;
+    }
+
+    std::error_code ec_child;
+    std::error_code ec_parent;
+    const std::filesystem::path child = std::filesystem::weakly_canonical(maybe_child, ec_child);
+    const std::filesystem::path parent = std::filesystem::weakly_canonical(maybe_parent, ec_parent);
+    if (ec_child || ec_parent) {
+        return false;
+    }
+
+    auto child_it = child.begin();
+    auto parent_it = parent.begin();
+    for (; parent_it != parent.end(); ++parent_it, ++child_it) {
+        if (child_it == child.end() || *child_it != *parent_it) {
+            return false;
+        }
+    }
+    return true;
+}
+
+static std::vector<std::filesystem::path> runtime_link_inputs_for(
+    const std::filesystem::path& runtime_root,
+    const std::vector<std::filesystem::path>& included_paths
+) {
+    std::vector<std::filesystem::path> inputs;
+    if (runtime_root.empty()) {
+        return inputs;
+    }
+
+    const std::filesystem::path dma_module = runtime_root / "modules" / "module-dma" / "dma.clyth";
+    const std::filesystem::path dma_archive = runtime_root / "modules" / "module-dma" / "x86_64" / "libclyth_dma.a";
+    const std::filesystem::path legacy_dma_archive = runtime_root / "c-bindings" / "dma" / "libclyth_dma.a";
+
+    for (const auto& included : included_paths) {
+        std::error_code ec_a;
+        std::error_code ec_b;
+        const auto included_canonical = std::filesystem::weakly_canonical(included, ec_a);
+        const auto dma_canonical = std::filesystem::weakly_canonical(dma_module, ec_b);
+        if (!ec_a && !ec_b && included_canonical == dma_canonical) {
+            if (std::filesystem::exists(dma_archive)) {
+                inputs.push_back(dma_archive);
+            } else if (std::filesystem::exists(legacy_dma_archive)) {
+                inputs.push_back(legacy_dma_archive);
+            } else {
+                fmt::print(stderr, "ERROR: runtime module '{}' requires missing archive '{}'. Run ./build_compiler.sh first.\n", dma_module.string(), dma_archive.string());
+            }
+            break;
+        }
+    }
+
+    return inputs;
+}
+
 static bool read_clyth_source_with_includes_impl(
     const std::filesystem::path& file,
+    const std::filesystem::path& runtime_root,
     std::set<std::filesystem::path>& active_stack,
     std::set<std::filesystem::path>& already_included,
+    std::vector<std::filesystem::path>& included_paths,
     std::ostringstream& output
 ) {
     std::error_code ec;
@@ -73,6 +220,7 @@ static bool read_clyth_source_with_includes_impl(
 
     active_stack.insert(normalized);
     already_included.insert(normalized);
+    included_paths.push_back(normalized);
 
     const std::filesystem::path base_dir = normalized.parent_path();
     const std::regex include_pattern(R"(^\s*include\s+([^;\s]+)\s*;?\s*$)");
@@ -85,17 +233,9 @@ static bool read_clyth_source_with_includes_impl(
         std::smatch match;
         if (std::regex_match(line, match, include_pattern)) {
             std::string include_target = strip_quotes(match[1].str());
-            std::filesystem::path include_path(include_target);
+            std::filesystem::path include_path = resolve_include_path(base_dir, runtime_root, std::filesystem::path(include_target));
 
-            if (include_path.extension().empty()) {
-                include_path += ".clyth";
-            }
-
-            if (include_path.is_relative()) {
-                include_path = base_dir / include_path;
-            }
-
-            if (!read_clyth_source_with_includes_impl(include_path, active_stack, already_included, output)) {
+            if (!read_clyth_source_with_includes_impl(include_path, runtime_root, active_stack, already_included, included_paths, output)) {
                 return false;
             }
             continue;
@@ -290,6 +430,111 @@ static std::string normalize_constructor_item(std::string item) {
     return item;
 }
 
+
+static bool has_top_level_colon(const std::string& text) {
+    std::size_t depth_paren = 0;
+    std::size_t depth_brace = 0;
+    std::size_t depth_bracket = 0;
+    bool in_string = false;
+    bool escaped = false;
+
+    for (char ch : text) {
+        if (in_string) {
+            if (escaped) {
+                escaped = false;
+            } else if (ch == '\\') {
+                escaped = true;
+            } else if (ch == '"') {
+                in_string = false;
+            }
+            continue;
+        }
+        if (ch == '"') {
+            in_string = true;
+            continue;
+        }
+        if (ch == '(') { ++depth_paren; continue; }
+        if (ch == ')' && depth_paren > 0) { --depth_paren; continue; }
+        if (ch == '{') { ++depth_brace; continue; }
+        if (ch == '}' && depth_brace > 0) { --depth_brace; continue; }
+        if (ch == '[') { ++depth_bracket; continue; }
+        if (ch == ']' && depth_bracket > 0) { --depth_bracket; continue; }
+        if (ch == ':' && depth_paren == 0 && depth_brace == 0 && depth_bracket == 0) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+static std::size_t find_matching_bracket(const std::string& source, std::size_t open_pos) {
+    std::size_t depth = 0;
+    bool in_string = false;
+    bool escaped = false;
+
+    for (std::size_t i = open_pos; i < source.size(); ++i) {
+        const char ch = source[i];
+        if (in_string) {
+            if (escaped) {
+                escaped = false;
+            } else if (ch == '\\') {
+                escaped = true;
+            } else if (ch == '"') {
+                in_string = false;
+            }
+            continue;
+        }
+        if (ch == '"') {
+            in_string = true;
+            continue;
+        }
+        if (ch == '[') {
+            ++depth;
+        } else if (ch == ']') {
+            if (depth == 0) {
+                return std::string::npos;
+            }
+            --depth;
+            if (depth == 0) {
+                return i;
+            }
+        }
+    }
+
+    return std::string::npos;
+}
+
+static std::string normalize_keyed_array_literals(const std::string& source) {
+    std::ostringstream out;
+    std::size_t pos = 0;
+
+    while (pos < source.size()) {
+        if (source[pos] != '[') {
+            out << source[pos++];
+            continue;
+        }
+
+        const std::size_t close = find_matching_bracket(source, pos);
+        if (close == std::string::npos) {
+            out << source[pos++];
+            continue;
+        }
+
+        const std::string inner = source.substr(pos + 1, close - pos - 1);
+        if (has_top_level_colon(inner)) {
+            // Parser-compatible internal representation for keyed arrays.
+            // User-facing source remains `[key: value, ...]`; the parser already
+            // understands `{key: value, ...}` as a neutral key/value collection.
+            out << '{' << inner << '}';
+        } else {
+            out << '[' << inner << ']';
+        }
+        pos = close + 1;
+    }
+
+    return out.str();
+}
+
 static StructInlineDesugarResult desugar_inline_struct_methods(const std::string& source) {
     StructInlineDesugarResult result;
     std::ostringstream out;
@@ -376,13 +621,15 @@ static StructInlineDesugarResult desugar_inline_struct_methods(const std::string
 
 static bool read_clyth_source_with_includes(
     const std::filesystem::path& main_file,
+    const std::filesystem::path& runtime_root,
+    std::vector<std::filesystem::path>& included_paths,
     std::string& source_code
 ) {
     std::set<std::filesystem::path> active_stack;
     std::set<std::filesystem::path> already_included;
     std::ostringstream output;
 
-    if (!read_clyth_source_with_includes_impl(main_file, active_stack, already_included, output)) {
+    if (!read_clyth_source_with_includes_impl(main_file, runtime_root, active_stack, already_included, included_paths, output)) {
         return false;
     }
 
@@ -390,10 +637,10 @@ static bool read_clyth_source_with_includes(
     return true;
 }
 
-static int parse_clyth_file(const CompilerOptions& opts) {
+static int parse_clyth_file(CompilerOptions& opts) {
     std::string source_code;
 
-    if (!read_clyth_source_with_includes(opts.main_file, source_code)) {
+    if (!read_clyth_source_with_includes(opts.main_file, opts.runtime_root, opts.included_source_paths, source_code)) {
         return 1;
     }
 
@@ -407,7 +654,7 @@ static int parse_clyth_file(const CompilerOptions& opts) {
         fmt::print(stderr, "ERROR: Failed to desugar inline struct methods/constructors.\n");
         return 1;
     }
-    source_code = desugared.source;
+    source_code = normalize_keyed_array_literals(desugared.source);
 
     antlr4::ANTLRInputStream input(source_code);
     ClythV1Lexer lexer(&input);
@@ -518,6 +765,8 @@ static int parse_clyth_file(const CompilerOptions& opts) {
     codegen_config.output_ir_path = ir_output_path;
     codegen_config.compile_to_executable = !opts.emit_ir_only;
     codegen_config.print_ir_to_stdout = opts.print_ir || opts.debug_mode;
+    codegen_config.preserve_ir_file = opts.emit_ir_only || opts.emit_ir || opts.emit_all || opts.debug_mode;
+    codegen_config.extra_link_inputs = runtime_link_inputs_for(opts.runtime_root, opts.included_source_paths);
 
     if (!codegen.emit(lowering_plan, semantic_result, codegen_config) || diagnostics.has_errors()) {
         diagnostics.print_to_stderr(opts.main_file);
@@ -534,6 +783,9 @@ int main(int argc, char** argv) {
     cxxopts::Options options("clythcpp", compiler_version.c_str());
 
     CompilerOptions opts;
+    if (argc > 0 && argv[0]) {
+        opts.compiler_invocation_path = argv[0];
+    }
 
     options.add_options()
         ("d,debug", "Debug Mode enabled flag", cxxopts::value<bool>()->default_value("false"))
@@ -545,6 +797,8 @@ int main(int argc, char** argv) {
         ("dump-ast-bytecode", "Print Clyth AST bytecode/debug format to stdout", cxxopts::value<bool>()->default_value("false"))
         ("dump-codegen-plan", "Print LLVM codegen activity", cxxopts::value<bool>()->default_value("false"))
         ("emit-ir-only", "Write LLVM IR but do not link an executable", cxxopts::value<bool>()->default_value("false"))
+        ("emit-ir", "Preserve generated LLVM IR alongside the executable", cxxopts::value<bool>()->default_value("false"))
+        ("emit-all", "Preserve intermediate compiler outputs currently supported by this backend", cxxopts::value<bool>()->default_value("false"))
         ("print-ir", "Print generated LLVM IR to stdout", cxxopts::value<bool>()->default_value("false"))
         ("show-licenses", "Print Clyth and bundled third-party license text", cxxopts::value<bool>()->default_value("false"))
         ("v,version", "Version of compiler", cxxopts::value<bool>()->default_value("false"))
@@ -610,6 +864,8 @@ int main(int argc, char** argv) {
         opts.dump_ast_bytecode_stdout = result["dump-ast-bytecode"].as<bool>();
         opts.dump_codegen_plan = result["dump-codegen-plan"].as<bool>();
         opts.emit_ir_only = result["emit-ir-only"].as<bool>();
+        opts.emit_ir = result["emit-ir"].as<bool>();
+        opts.emit_all = result["emit-all"].as<bool>();
         opts.print_ir = result["print-ir"].as<bool>();
 
         const std::string ast_json = result["ast-json"].as<std::string>();
@@ -636,6 +892,11 @@ int main(int argc, char** argv) {
     if (opts.main_file.extension() != ".clyth") {
         fmt::print(stderr, "ERROR: Ensure the main program file contains the '.clyth' file extension.\n");
         return 1;
+    }
+
+    opts.runtime_root = locate_runtime_root(opts.main_file, opts.compiler_invocation_path);
+    if (opts.runtime_root.empty()) {
+        fmt::print(stderr, "WARN: clyth-runtime directory was not found near the current working directory or source file. Runtime includes may fail.\n");
     }
 
     fmt::print("Compiling {} -> {}\n", opts.main_file.string(), opts.output_binary_name);

@@ -1,0 +1,62 @@
+{
+  "format": "clyth-runtime-index-v1",
+  "generated_by": "build_compiler.sh or future `clyth rebuild-index`",
+  "note": "This file is an index/cache. Module source of truth lives in clyth-runtime/modules/*/module.json.",
+  "modules": {
+    "dma": {
+      "path": "modules/module-dma",
+      "exports": [
+        "dma/dma.clyth"
+      ],
+      "source_files": [
+        "modules/module-dma/dma.clyth"
+      ],
+      "link_when_included": [
+        "dma/dma.clyth"
+      ]
+    },
+    "collections": {
+      "path": "modules/module-collections",
+      "exports": [
+        "collections/list.clyth",
+        "collections/set.clyth",
+        "collections/map.clyth"
+      ],
+      "source_files": [
+        "modules/module-collections/list.clyth",
+        "modules/module-collections/set.clyth",
+        "modules/module-collections/map.clyth"
+      ]
+    },
+    "json": {
+      "path": "modules/module-json",
+      "exports": [
+        "json/json.clyth"
+      ],
+      "source_files": [
+        "modules/module-json/json.clyth"
+      ],
+      "status": "stub-native-clyth"
+    },
+    "web": {
+      "path": "modules/module-web",
+      "exports": [
+        "web/web.clyth"
+      ],
+      "source_files": [
+        "modules/module-web/web.clyth"
+      ],
+      "status": "stub"
+    },
+    "tls": {
+      "path": "modules/module-tls",
+      "exports": [
+        "tls/tls.clyth"
+      ],
+      "source_files": [
+        "modules/module-tls/tls.clyth"
+      ],
+      "status": "stub"
+    }
+  }
+}

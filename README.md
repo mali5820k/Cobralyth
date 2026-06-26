@@ -1,154 +1,101 @@
 # Clyth
 
-Clyth is an LLVM-based ahead-of-time (AOT) compiled systems programming language implemented in C++.
+Clyth is an LLVM-based ahead-of-time systems programming language implemented in C++.
 
-The language explores deterministic memory management and practical systems-programming ergonomics while preserving explicit control and predictable runtime behavior.
+Clyth's design goal is simple: keep the language small, keep the runtime powerful, and keep the compiler focused on understanding and lowering the language instead of owning every high-level feature directly.
 
-Clyth supports manual memory management by default and includes an optional memory-management model called **MECC**: **Managed Entanglement for Collapsible Collections**.
+Alpha 0.3.0 is the **Foundation Release**. It stabilizes the language/runtime boundary, introduces the runtime module layout, consolidates containers around array-backed runtime components, and establishes the shape of future Clyth modules.
 
-MECC explores deterministic memory management through scoped memory estates, estate-level ownership, and clustered reference counting. Instead of tracing an entire heap or reference-counting every object individually, MECC groups related allocations into estates and manages lifetime at the estate level.
+---
+
+## Why Clyth Exists
+
+Clyth explores a systems-language design that preserves explicit control and predictable performance while reducing unnecessary C/C++ ceremony.
+
+The long-term goal is a language that can write real systems applications, web services, embedded-facing runtime code, tooling, and eventually its own compiler/runtime ecosystem without forcing every feature into compiler internals.
+
+Clyth is designed around these principles:
+
+- Programs should express intent clearly.
+- Arrays and strings are core language primitives.
+- Containers and services should live in Clyth-space runtime modules.
+- The compiler should own syntax, typing, lowering, and analysis.
+- Runtime capabilities should be installable, replaceable, and license-trackable.
+- Memory management should eventually support deterministic estate-based ownership through MECC.
 
 ---
 
 ## Current Status
 
-Clyth has moved beyond the original `extern C printf` proof-of-concept and now compiles a larger Alpha 0.2.0 language subset into native Linux executables.
+Clyth currently compiles the Alpha 0.3.0 language subset into native Linux executables through LLVM IR and Zig/musl-based static linking.
 
-Implemented components include:
+Implemented or scaffolded areas include:
 
-- ANTLR4 grammar and generated C++ frontend.
-- Command-line compiler driver.
-- Syntax-error reporting through ANTLR error listeners.
-- Abstract Syntax Tree (AST) generation.
-- Human-readable AST dump support.
-- AST JSON output for visualization tooling.
-- AST bytecode/debug output for future interpreter/debugger tooling.
-- Semantic analysis pass infrastructure.
-- Symbol and scope analysis.
-- MECC semantic annotation scaffolding.
-- Linear lowering plan for code generation.
-- LLVM IR generation for the current Alpha language subset.
-- `extern C` interop for declarations such as `printf`.
-- `int32 main(string[] args)` startup lowering over the native C ABI.
-- Local variables, user functions, function hoisting, and global variable hoisting.
-- `if`/`else`, `while`, `break`, and `continue`.
-- Fixed arrays: initialization, indexing, assignment, and `.length`.
-- Struct declarations, field access, field assignment, methods, default constructors, and implicit `this` field access.
-- LLVM IR file emission through `--emit-ir-only`.
-- Optional executable linking through Zig/Clang targeting musl for statically linked Linux binaries.
-- Distribution packaging with compiler binary, useful LLVM tools, samples, README, and license files.
-
-Current work focuses on dynamic arrays, native strings, generics, runtime containers, manual allocation, and MECC runtime lowering.
-
----
-
-## Alpha 0.2.0 Release Candidate Highlights
-
-Alpha 0.1.0 proved that Clyth could compile a minimal `extern C printf` program end-to-end. Alpha 0.2.0 expands that proof into a substantially more complete base-language subset.
-
-New since Alpha 0.1.0:
-
-- Multi-file local includes.
-- Command-line arguments through `int32 main(string[] args)`.
-- User-defined functions and function calls.
-- Function and global declaration hoisting.
-- Local variables and lexical nested scopes.
-- Global variables with literal initializers.
-- Control flow: `if`, `else`, `while`, `break`, `continue`.
-- Fixed arrays: `T[N]`, list initialization, indexing, assignment, and `.length`.
-- Structs with fields and LLVM struct layout generation.
-- Struct field reads and writes.
-- Struct methods, method calls, default constructors, and implicit `this` field access.
-- Improved sample programs that act more like behavior tests.
-
-Still planned after Alpha 0.2.0:
-
-- Dynamic arrays: `T[]`.
-- Native Clyth strings backed by `char[]`.
-- `List<T>`, `Map<K,V>`, and `Set<T>`.
-- Generics and monomorphization.
-- Function references and dispatch metadata.
-- Async/thread-pool runtime support.
-- Manual memory APIs and MECC estates.
+- ANTLR4 lexer/parser frontend.
+- AST generation.
+- Semantic analysis infrastructure.
+- Linear lowering plan.
+- LLVM IR generation for the current Alpha subset.
+- `extern C` declarations and calls.
+- `int32 main(string[] args)` command-line argument support.
+- Local variables, global variables, user functions, function hoisting, and global hoisting.
+- `if`, `else`, `while`, `break`, and `continue`.
+- Fixed arrays and compact dynamic arrays.
+- Native string values.
+- Structs, fields, methods, constructors, and implicit `this`.
+- Runtime container scaffolds for `List<T>`, `Set<T>`, and `Map<K,V>`.
+- Keyed-array syntax for map-style initialization.
+- Runtime modules under `clyth-runtime/modules/`.
+- C binding source separation under `clyth-runtime/c-bindings/`.
+- DMA runtime module with C-backed static archive linking.
+- JSON, web, and TLS runtime module stubs.
+- Runtime module metadata and architecture-aware C binding metadata.
+- Program-specific license bundle groundwork.
+- Sample smoke-test runner.
+- Distribution packaging with compiler binary, runtime files, samples, and licenses.
 
 ---
 
-## Compiler Pipeline
+## Design Boundary
+
+Alpha 0.3.0 locks in an important architectural boundary.
+
+Compiler-backed:
 
 ```text
-Clyth source
-    ↓
-ANTLR4 lexer/parser
-    ↓
-Clyth AST generation
-    ↓
-Semantic analysis passes
-    ↓
-MECC analysis and annotation
-    ↓
-Linear lowering plan
-    ↓
+arrays
+strings
+structs
+functions
+generic syntax
+keyed-array literals
+lowering
 LLVM IR generation
-    ↓
-LLVM optimization
-    ↓
-Object file emission
-    ↓
-Linking
-    ↓
-Native executable
 ```
 
-The frontend is intentionally structured into separate stages so new language checks, MECC rules, and code-generation behavior can be added without intermixing parsing, semantic analysis, and backend lowering.
+Runtime-owned:
+
+```text
+List<T>
+Set<T>
+Map<K,V>
+JSON
+web/TLS wrappers
+DMA APIs
+estates
+allocation policies
+module packaging
+```
+
+The compiler should only own what cannot reasonably be implemented inside the language/runtime itself.
 
 ---
 
-## Design Goals
+## Language Examples
 
-Clyth is designed around the following goals:
+### Hello World
 
-- Explicit control over memory and runtime behavior.
-- Predictable performance.
-- Low runtime overhead.
-- Ahead-of-time compilation.
-- LLVM-based optimization and portability.
-- C interoperability.
-- Practical systems-programming ergonomics.
-- Optional deterministic memory-management support through MECC.
-- A compiler architecture that can support future tooling such as formatting, language-server features, debugging, and package management.
-
-Clyth is not designed to hide systems details from the programmer. Instead, it aims to make low-level programming easier to reason about while preserving control.
-
----
-
-## Core Language Characteristics
-
-- Ahead-of-time compiled.
-- LLVM IR backend.
-- C++ compiler implementation.
-- Manual memory management by default.
-- Optional MECC scopes and MECC functions.
-- Pass-by-reference semantics for objects.
-- Pass-by-value semantics for primitive types.
-- Optional semicolons.
-- C interoperability through `extern C`.
-- Built-in syntax for lists, fixed arrays, maps, and sets.
-- Struct declarations.
-- Method syntax for structs.
-- Function declarations.
-- Control flow.
-- Template-string token support.
-- AST output formats for visualization and future tooling.
-
----
-
-# Example Syntax
-
-> GitHub Markdown does not know Clyth syntax yet, so examples may use nearby language tags for highlighting.
-
-## Hello World with C Interop
-
-```c
+```clyth
 extern C int32 printf(string fmt, ...)
 
 int32 main() {
@@ -157,515 +104,284 @@ int32 main() {
 }
 ```
 
----
+### Command-Line Arguments
 
-## Structs and Manual Memory
+```clyth
+extern C int32 printf(string fmt, ...)
 
-```go
-struct Person {
-    string name,
-    int32 age,
-}
-
-int32 main() {
-    Person p = malloc(Person)
-
-    p.name = "Harry"
-    p.age = 30
-
-    print(p.name)
-
-    free(p)
-
+int32 main(string[] args) {
+    printf("program: %s\n", args[0])
     return 0
 }
 ```
 
-Manual memory management remains part of base Clyth. Developers can allocate and free memory explicitly when they want C-like control.
+### Structs, Constructors, Methods, and `this`
 
----
+```clyth
+extern C int32 printf(string fmt, ...)
 
-## Methods on Structs
+struct Counter {
+    private int32 value
 
-Clyth supports method declarations attached to struct names.
-
-```go
-struct Rectangle {
-    int32 width,
-    int32 height,
-}
-
-Rectangle {
-    Rectangle constructor() {
+    constructor() {
+        value = 0
     }
 
-    void destructor() {
+    void add(int32 amount) {
+        value += amount
     }
 
-    int32 area() {
-        return width * height
-    }
-
-    void _recalculateCache() {
+    int32 get() {
+        return value
     }
 }
 
-bool Rectangle.isSquare() {
-    return width == height
-}
-```
-
-Method blocks attach methods to an existing struct name.
-
-```go
-Rectangle {
-    int32 area() {
-        return width * height
-    }
-}
-```
-
-Qualified method declarations are also supported.
-
-```go
-bool Rectangle.isSquare() {
-    return width == height
-}
-```
-
-Underscore-prefixed method names are intended to represent private methods during semantic analysis.
-
----
-
-## Lists
-
-```go
-int32[] values = [1, 2, 3, 4]
-```
-
----
-
-## Fixed Arrays
-
-```go
-int32[10] fixed_values = []
-```
-
----
-
-## Maps
-
-```go
-numeric:string sample_map = {
-    1: "one",
-    2: "two",
-    1000: "thousand",
-}
-```
-
----
-
-## Sets
-
-```go
-int32() unique_values = {
-    1, 2, 3, 4, 5
-}
-```
-
----
-
-## Type Relationships
-
-```go
-if instance is drawable {
-    print("Drawable instance")
-}
-```
-
----
-
-## MECC Function Syntax
-
-```go
-mecc Person buildPerson() {
-    Person p = malloc(Person)
-    return p
-}
-```
-
----
-
-## MECC Block Syntax
-
-```go
 int32 main() {
-    mecc {
-        Person p = malloc(Person)
-    }
-
+    Counter counter
+    counter.add(42)
+    printf("counter: %d\n", counter.get())
     return 0
 }
 ```
 
----
+### Compact Arrays
 
-# Base Clyth Memory Model
+Plain `T[]` arrays are compact primitives. They track initialized elements through `.length`. Capacity belongs to growable runtime containers, not plain arrays.
 
-The base Clyth language uses manually managed memory similar to C.
+```clyth
+extern C int32 printf(string fmt, ...)
 
-Core allocation primitives include:
+int32 main() {
+    int32[] values = [10, 20, 30]
+    values[1] = 42
 
-- `malloc`
-- `free`
-
-Manual memory management is the default model because Clyth is intended to remain useful for low-level systems code, embedded-style development, runtime implementation, and performance-sensitive programming.
-
-When code does not opt into MECC, allocation behavior remains explicit.
-
-```go
-Person p = malloc(Person)
-free(p)
-```
-
-For allocations that need independent lifetimes when interacting with MECC-managed code, Clyth also reserves:
-
-- `iso_malloc`
-
-`iso_malloc` creates an allocation in its own independent estate.
-
----
-
-# Why MECC Exists
-
-Traditional systems programming usually forces developers to choose between several familiar memory-management tradeoffs.
-
-| Memory approach | Ownership unit | Main strength | Main tradeoff |
-|---|---:|---|---|
-| C manual memory | Individual allocation / programmer | Maximum control | Easy to leak or free incorrectly |
-| C++ `shared_ptr` / Rust `Arc` | Individual object | Shared ownership | Per-object reference counting overhead |
-| Java / C# / Go-style GC | Runtime heap | Developer ergonomics | Runtime tracing and pause/latency concerns |
-| Arena allocators | Region / arena | Very fast allocation and bulk free | Lifetime must be planned carefully |
-| **MECC** | **Estate / allocation cluster** | **Bulk allocation with clustered counting** | **Independent lifetimes may require `iso_malloc`** |
-
-MECC is not intended to replace manual memory management in Clyth.
-
-Base Clyth exists for explicit control.
-
-MECC exists for code where clustered allocation and deterministic reclamation make more sense than micromanaging every single object allocation.
-
-> Instead of counting every object, count the memory estate that owns related objects.
-
----
-
-# MECC Overview
-
-## Managed Entanglement for Collapsible Collections
-
-MECC is an optional memory-management model for Clyth.
-
-Rather than relying on tracing garbage collection or per-object ownership tracking, MECC groups related allocations into **estates**.
-
-An estate is a collection of allocations that share a common ownership boundary and lifetime relationship.
-
-Ownership is tracked through clustered counting, where reference counts are maintained at the estate level rather than the individual object level.
-
-Key design goals include:
-
-- Deterministic memory reclamation.
-- No tracing garbage collection.
-- No stop-the-world pauses.
-- Reduced ownership bookkeeping.
-- Bulk allocation and reclamation.
-- Predictable runtime behavior.
-- Systems-level performance characteristics.
-- Cleaner lifetime orchestration for groups of related allocations.
-
-MECC-managed memory cannot be manually freed on a per-object basis.
-
-Instead, estates are reclaimed when their clustered count reaches zero.
-
----
-
-# What an Estate Looks Like
-
-```mermaid
-flowchart TD
-    HandleA["Person Handle<br/>clustered_count = 2"] --> CurrentEstate
-
-    CurrentEstate["Current Estate<br/>MECC allocation estate"]
-    CurrentEstate --> Obj1["Person p"]
-    CurrentEstate --> Obj2["string p.name"]
-    CurrentEstate --> Obj3["int32 p.age"]
-    CurrentEstate --> Obj4["temporary helper allocations"]
-
-    Caller1["caller reference"] --> HandleA
-    Caller2["container reference"] --> HandleA
-```
-
-The estate is the ownership unit.
-
-References point into handles associated with an estate, while the estate manages the lifetime of the related allocation cluster.
-
----
-
-# Isolated Allocations
-
-Sometimes one value should survive independently from nearby allocations.
-
-```mermaid
-flowchart TD
-    CurrentEstate["Current Estate<br/>temporary function allocations"]
-    CurrentEstate --> Temp1["temporary buffer"]
-    CurrentEstate --> Temp2["temporary list"]
-    CurrentEstate --> Temp3["intermediate object"]
-
-    IndependentEstate["Independent Estate<br/>created via iso_malloc"]
-    IndependentEstate --> Result["Person result"]
-
-    Caller["caller reference"] --> IndependentEstate
-    Container["container reference"] --> IndependentEstate
-```
-
-The independent estate prevents one long-lived object from keeping an entire temporary estate alive.
-
-This prevents **memory bubbling**, where a small long-lived allocation unintentionally extends the lifetime of a much larger allocation cluster.
-
----
-
-# Example MECC Usage
-
-```go
-mecc Person[] buildPeople() {
-    Person p = malloc(Person)
-    Person p2 = iso_malloc(Person)
-
-    p.name = "Harry"
-    p.age = 30
-
-    p2.name = "Ron"
-    p2.age = 31
-
-    return [p, p2]
+    printf("length: %d\n", values.length)
+    printf("middle: %d\n", values[1])
+    return 0
 }
 ```
 
-Conceptually:
+Conceptual layout:
 
 ```text
-current_estate = estate_create()
-independent_estate = estate_create()
-
-p  = estate_alloc(current_estate, sizeof(Person))
-p2 = estate_alloc(independent_estate, sizeof(Person))
+T[]
+  data
+  length
 ```
 
-In this example:
+### Native Strings
 
-- `p` belongs to the current estate.
-- `p2` belongs to an independent estate.
-- `iso_malloc` prevents a long-lived allocation from keeping a large temporary estate alive.
+```clyth
+extern C int32 printf(string fmt, ...)
+
+int32 main() {
+    string message = "hello clyth"
+    printf("message: %s\n", message)
+    printf("length: %d\n", message.length)
+    printf("first char code: %d\n", message[0])
+
+    message = "strings are native now"
+    printf("updated: %s\n", message)
+    return 0
+}
+```
+
+### Lists
+
+`List<T>` is the growable runtime container layer. Capacity and growth policy belong here.
+
+```clyth
+extern C int32 printf(string fmt, ...)
+
+int32 main() {
+    List<int32> values = [3, 4]
+    values.push(35)
+
+    printf("length: %d\n", values.length)
+    printf("capacity: %d\n", values.capacity)
+    printf("last: %d\n", values[2])
+
+    int32 popped = values.pop()
+    printf("popped: %d\n", popped)
+
+    values[1] += 38
+    printf("middle after add: %d\n", values[1])
+    return 0
+}
+```
+
+Long-term runtime direction: `List<T>` should use head/tail indices over a backing array where possible, enabling efficient front/back operations without forcing full-array shifts for every pop/shift-style operation.
+
+### Sets
+
+`Set<T>` is a runtime container built on the same array/list storage foundation, with duplicate prevention.
+
+```clyth
+extern C int32 printf(string fmt, ...)
+
+int32 main() {
+    Set<int32> values = [3, 4]
+    values.insert(42)
+    values.insert(42)
+
+    printf("set length: %d\n", values.length)
+    printf("contains 42: %d\n", values.contains(42))
+    printf("contains 99: %d\n", values.contains(99))
+    return 0
+}
+```
+
+### Maps and Keyed Arrays
+
+Maps use normal `Map<K,V>` generic syntax and keyed-array initialization. The keyed array is a language-level collection literal; the Map behavior belongs in the runtime.
+
+```clyth
+extern C int32 printf(string fmt, ...)
+
+int32 main() {
+    Map<int32, int32> scores = [
+        3: 30,
+        4: 40,
+        42: 100
+    ]
+
+    scores.put(4, 44)
+
+    printf("value 3: %d\n", scores.get(3))
+    printf("value 4: %d\n", scores.get(4))
+    printf("has 99: %d\n", scores.contains_key(99))
+    return 0
+}
+```
+
+Long-term constructor direction:
+
+```clyth
+Map<string, int32> scores = new Map([
+    "one": 1,
+    "two": 2
+])
+```
+
+The compiler recognizes keyed-array literals and the runtime owns the Map implementation.
 
 ---
 
-# MECC Rules
+## Runtime Modules
 
-Inside a MECC function or block:
+Clyth runtime functionality is organized under `clyth-runtime/`.
 
-- `malloc(Type)` allocates into the current estate.
-- `iso_malloc(Type)` allocates into a separate independent estate.
-- `free(value)` is not allowed for MECC-owned values.
-- Estate lifetime is managed through clustered counting.
+```text
+clyth-runtime/
+├── c-bindings/
+│   ├── dma/
+│   ├── libwebsockets/
+│   └── openssl/
+├── modules/
+│   ├── module-collections/
+│   ├── module-dma/
+│   ├── module-json/
+│   ├── module-web/
+│   └── module-tls/
+├── runtime_libraries.json
+└── EXTERNAL_LIBRARIES_LICENSES.md
+```
 
-Outside MECC scopes:
+The `modules/` directory is the single source of truth for Clyth runtime module source and metadata. C binding source code remains under `c-bindings/`.
 
-- `malloc(Type)` behaves as a manual allocation.
-- `free(value)` behaves as manual reclamation.
-- MECC estate rules do not apply unless code crosses into MECC-managed ownership.
+`runtime_libraries.json` is a compiler-consumed index/cache. Future `clyth install`, `clyth uninstall`, and `clyth rebuild-index` commands should regenerate it from module metadata rather than expecting developers to edit it directly.
 
 ---
 
-# MECC and Base Clyth Together
+## Module Metadata
 
-```text
-Base Clyth:
-    manual malloc/free
-    explicit programmer control
+Each runtime module owns a `module.json` file. Clyth wrapper code and native C bindings are tracked separately so the compiler can eventually generate accurate license bundles for compiled programs.
 
-MECC Clyth:
-    estate allocation
-    clustered counting
-    no per-object manual free
-```
-
-This keeps low-level and performance-critical manual code possible while allowing higher-level systems code to use deterministic estate-based reclamation where it helps.
-
----
-
-# Compiler Architecture
-
-The compiler is structured into separate phases.
-
-## ANTLR4 Frontend
-
-The grammar is defined using ANTLR4 and compiled into C++ lexer/parser/visitor files.
-
-Generated ANTLR files are treated as generated artifacts and are not directly modified.
-
-## AST Builder
-
-The AST builder extends ANTLR's generated base visitor and converts the parse tree into Clyth's own AST representation.
-
-ANTLR parse tree:
-
-```text
-grammar-shaped
-```
-
-Clyth AST:
-
-```text
-compiler-shaped
-```
-
-## Semantic Analysis
-
-Semantic analysis is organized as a pass pipeline.
-
-Current and planned semantic passes include:
-
-- Top-level declaration collection.
-- Type validation.
-- Struct validation.
-- Method validation.
-- Function signature validation.
-- Scope and symbol analysis.
-- Control-flow validation.
-- MECC ownership and allocation analysis.
-- Future expression type-checking.
-- Future overload/method-resolution checks.
-
-This structure is intended to make new checks easy to add without modifying unrelated compiler stages.
-
-## Lowering Plan
-
-After semantic analysis, the AST is converted into a linear lowering plan.
-
-This provides a code-generation-friendly view of the program so LLVM IR generation can iterate over a stable sequence of compiler objects rather than repeatedly traversing the tree.
-
-## LLVM IR Generation
-
-LLVM IR generation is now active for an initial V1 subset.
-
-Currently supported backend behavior includes:
-
-1. Declaring `extern C` functions such as `printf`.
-2. Defining Clyth functions.
-3. Lowering integer, boolean, string, and null literals.
-4. Lowering return statements and expression statements.
-5. Lowering local variables, simple assignment, and compound assignment (`+=`, `-=`, `*=`, `/=`, `%=`).
-6. Lowering function calls.
-7. Lowering common integer/floating-point arithmetic, comparison, and boolean operations.
-8. Lowering `if`/`else`, `while`, `break`, `continue`, and MECC blocks as normal blocks until MECC runtime lowering exists.
-9. Expanding simple file-based `include "file.clyth"` declarations before parsing.
-10. Emitting `.ll` LLVM IR files.
-11. Invoking `zig cc` to link supported programs as statically linked musl-targeted executables.
-
-Unsupported language nodes are intentionally reported as diagnostics rather than silently ignored. Struct layout lowering, method lowering, manual allocation, runtime containers, `for` loop lowering, function references, async dispatch, and MECC runtime calls remain planned backend work.
-
----
-
-# AST Output and Tooling Formats
-
-Clyth can expose its AST in multiple formats for future tooling.
-
-## Human-Readable AST
-
-Used for compiler debugging.
-
-```text
-Program [program]
-  FunctionDecl [function]
-    ReturnStmt [return]
-      LiteralExpr [literal] text='42'
-```
-
-## AST JSON
-
-Used for visualization tooling, editor tooling, and external analysis.
+Example shape:
 
 ```json
 {
-  "kind": "Program",
-  "label": "program",
-  "children": []
+  "name": "dma",
+  "version": "0.3.0-alpha",
+  "kind": "runtime-module",
+  "exports": [
+    "dma.clyth"
+  ],
+  "wrapper": {
+    "license": "MIT"
+  },
+  "c_bindings": [
+    {
+      "name": "clyth_dma",
+      "enabled": true,
+      "backend": "Clyth DMA C Binding",
+      "license": "MIT",
+      "source_directory": "../../c-bindings/dma",
+      "architectures": {
+        "x86_64": {
+          "archive": "x86_64/libclyth_dma.a"
+        }
+      }
+    }
+  ]
 }
 ```
 
-## AST Bytecode / Debug Format
-
-Used as a future foundation for:
-
-- Custom debugger.
-- Interpreter experiments.
-- AST inspection tools.
-- Educational visualization.
-- Possible REPL support.
-
-This is not intended to replace LLVM IR. It is a tooling and introspection format.
+This format is intentionally architecture-aware so modules can eventually ship prebuilt archives or LLVM IR for multiple targets.
 
 ---
 
-# Planned Tooling
+## DMA Runtime Module
 
-Clyth's long-term tooling roadmap includes:
+DMA/MMIO is treated as runtime-backed functionality, not as raw pointer syntax.
 
-- VSCode extension.
-- Syntax highlighting.
-- Snippets.
-- Formatter.
-- Language Server Protocol support.
-- Diagnostics integration.
-- Go-to-definition.
-- Hover information.
-- Package manager.
-- Documentation generator.
-- AST visualizer.
-- AST bytecode interpreter/debugger.
-- REPL or JIT-facing tooling.
+Clyth code passes integer addresses to explicit runtime functions. The C binding owns the ugly platform-specific implementation details.
 
-A language is more than a compiler. Tooling is expected to become a first-class part of Clyth's development.
+```clyth
+include "dma/dma.clyth"
+
+int32 main() {
+    // Future embedded-facing code can call dma_read32/dma_write32 here.
+    return 0
+}
+```
+
+This keeps C pointer baggage out of the language surface while still allowing systems and embedded escape hatches through runtime modules.
 
 ---
 
-# Build and Toolchain Direction
+## JSON, Web, and TLS Direction
 
-Clyth is implemented in C++ and uses LLVM for backend code generation.
+Alpha 0.3.0 adds stubs and module metadata for future JSON, web, and TLS work.
 
-The Zig compiler toolchain is leveraged for portable static-linking support and as part of the broader toolchain strategy.
+- JSON is planned as a native Clyth implementation using strings, lists, maps, arrays, and keyed arrays.
+- The web runtime is planned as an ExpressJS-like Clyth-space API with replaceable C backends.
+- TLS is planned as a runtime module, with OpenSSL tracked as an Apache-2.0 backend candidate when enabled.
 
-Preferred portability and licensing direction includes:
+The public APIs should remain Clyth-owned even if lower-level libraries are used behind the scenes.
 
-- LLVM.
-- LLVM libc++ where appropriate.
-- musl-libc where appropriate.
-- Zig tooling for cross-platform build and linkage support.
+---
 
-The long-term goal is to provide a practical toolchain path that can produce native binaries while keeping external dependencies and licensing concerns understandable.
+## Building
 
-## Building and Compiling
-
-Build the compiler and bundled LLVM pieces:
+Build the compiler:
 
 ```bash
 ./build_compiler.sh
 ```
 
-Compile a supported Clyth program to a statically linked musl-targeted executable:
+Fast development build without packaging the distribution:
+
+```bash
+./build_compiler.sh --skip-dist
+```
+
+Compile a sample program:
 
 ```bash
 ./build-compiler/clyth_compiler_bin -c sample-clyth-programs/printf_test.clyth -o printf_test
 ./printf_test
+rm -f printf_test
 ```
 
 Emit LLVM IR only:
@@ -674,10 +390,10 @@ Emit LLVM IR only:
 ./build-compiler/clyth_compiler_bin -c sample-clyth-programs/printf_test.clyth -o printf_test --emit-ir-only
 ```
 
-Print generated IR to stdout while compiling:
+Preserve generated IR while also linking an executable:
 
 ```bash
-./build-compiler/clyth_compiler_bin -c sample-clyth-programs/printf_test.clyth -o printf_test --print-ir
+./build-compiler/clyth_compiler_bin -c sample-clyth-programs/printf_test.clyth -o printf_test --emit-ir
 ```
 
 Show bundled/project license text:
@@ -686,150 +402,136 @@ Show bundled/project license text:
 ./build-compiler/clyth_compiler_bin --show-licenses
 ```
 
-The build script also creates a `dist-clyth/` directory and `clyth-dist.tar.gz` distribution archive containing the compiler binary, useful LLVM tools, samples, README files, and license files. Zig is expected to remain installed on the host PATH for final executable linking.
-
 ---
 
-# Roadmap
+## Testing
 
-## Frontend
-
-- [x] ANTLR4 grammar.
-- [x] C++ parser integration.
-- [x] AST generation.
-- [x] Syntax diagnostics.
-- [x] Method grammar support.
-- [x] AST JSON output.
-- [x] AST bytecode/debug output.
-- [x] Semantic pass infrastructure.
-- [x] MECC semantic scaffolding.
-- [x] Lowering-plan scaffolding.
-
-## Backend
-
-- [x] LLVM IR generation for `main`.
-- [x] LLVM IR generation for literals.
-- [x] LLVM IR generation for arithmetic.
-- [x] LLVM IR generation for local variables.
-- [x] LLVM IR generation for function calls.
-- [x] `extern C` interop through LLVM.
-- [x] LLVM IR file output.
-- [x] Statically linked executable output through Zig/musl for supported programs.
-- [x] Basic include expansion for local `.clyth` files.
-- [x] Basic `if`/`else` and `while` control-flow lowering.
-- [ ] `for` loop lowering.
-- [ ] Struct layout lowering.
-- [ ] Method lowering.
-- [ ] Manual `malloc` / `free` lowering.
-- [ ] Runtime container lowering.
-- [ ] MECC runtime lowering.
-
-## Runtime
-
-- [ ] Base runtime support.
-- [ ] C interop helpers.
-- [ ] MECC estate runtime.
-- [ ] Estate allocation primitives.
-- [ ] Estate clustered counting.
-- [ ] Independent estate allocation through `iso_malloc`.
-
-## Tooling
-
-- [ ] VSCode extension.
-- [ ] Syntax highlighting.
-- [ ] Formatter.
-- [ ] Language server.
-- [ ] Package manager.
-- [ ] Documentation generator.
-- [ ] AST visualizer.
-- [ ] Debugger/interpreter experimentation.
-
----
-
-# AI-Assisted Development Philosophy
-
-Clyth is a personal systems programming language project exploring compiler construction, runtime design, and deterministic memory management.
-
-Modern AI-assisted development tools have been used throughout implementation to accelerate experimentation and reduce boilerplate, while language architecture, memory model design, runtime philosophy, and overall direction remain driven by the author's design goals.
-
-The project aims to remain transparent regarding the role of AI assistance.
-
-Neither of the following descriptions accurately reflects the nature of the work:
-
-- "I wrote every line myself."
-- "AI made the project."
-
-Architecture, design goals, tradeoffs, and overall direction are considered the primary authorship contribution, while AI tools are treated as accelerators that help reduce repetitive implementation effort.
-
-The goal is not to claim authorship through keystroke count, but through the ideas, constraints, and engineering decisions that shape the language.
-
----
-
-# Project Philosophy
-
-Clyth is built around a simple idea:
-
-> Systems programming should remain explicit and predictable, but that does not mean the developer experience must remain unnecessarily difficult.
-
-Clyth aims to preserve the power and control that make C-family systems programming valuable while exploring better abstractions for memory, ownership, tooling, and long-term maintainability.
-
----
-
-# Acknowledgements and Legal Notes
-
-- The Zig compiler toolchain is leveraged for portable static-linking support.
-- musl-libc and LLVM libc++ are preferred over glibc/libstdc++ for portability and licensing preferences.
-- External library licensing information is documented in:
-  - `EXTERNAL_LIBRARIES_LICENSES.md`
-
-## Legal Disclaimer
-
-The author of Clyth is not legally responsible for ensuring license compliance for programs written using the language or its tooling.
-
-Developers are responsible for verifying compliance with all third-party licenses included in their final binaries or distributions.
-
-Consult legal professionals where appropriate.
-
-
-### Current Backend Additions
-
-Recent backend passes now support multi-file include expansion, control flow lowering, while loops, break/continue, compound assignments, floating-point arithmetic, dynamic array type syntax (`T[]`), and the modern Clyth entrypoint form:
-
-```clyth
-int32 main(string[] args) {
-    printf("program name: %s\n", args[0])
-    return 0
-}
-```
-
-For this pass, `string[] args` is lowered through the native C ABI `argv` representation. The long-term runtime model is still a native Clyth string type backed by primitive `char[]` storage.
-
-## Backend Pass 4 Snapshot
-
-The current backend snapshot supports local lexical scopes, local variables, assignments, global/function hoisting, user-defined function calls, and `int32 main(string[] args)` command-line arguments.
-
-New behavior-focused sample:
+Run the language smoke-test suite:
 
 ```bash
-./build-compiler/clyth_compiler_bin -c sample-clyth-programs/variables_functions_test.clyth -o variables_functions_test
-./variables_functions_test
+./build_compiler.sh --skip-dist
+./sample-clyth-programs/run_language_samples.sh
+rm -rf sample-clyth-programs/.sample-bin
 ```
 
-## Backend Pass 6B: Struct Methods
+The test runner compiles each sample, runs the produced binary, checks expected stdout, prints a visible `[ OK ]` or `[ FAILED ]` result for every sample, and removes generated binaries after the run.
 
-This snapshot adds first-stage struct method lowering using method blocks:
+---
 
-```clyth
-struct Point {
-    int32 x;
-    int32 y;
-}
+## Distribution
 
-Point {
-    int32 sum() {
-        return this.x + this.y
-    }
-}
+The build script can create:
+
+```text
+dist-clyth/
+clyth-dist.tar.gz
 ```
 
-Methods lower to ordinary LLVM functions with an implicit `this` pointer. Inline methods inside `struct { ... }`, constructors, and visibility enforcement remain future passes.
+The distribution includes the compiler binary, sample programs, runtime files, useful LLVM tools, and license files.
+
+Zig is expected to remain installed on the host PATH for final executable linking.
+
+---
+
+## Future CLI Direction
+
+The long-term user-facing command should be `clyth`, with compiler and package-management behavior dispatched by subcommands.
+
+Planned shape:
+
+```bash
+clyth compile app.clyth -o app
+clyth install module-dma.tar.gz
+clyth uninstall dma
+clyth list
+clyth rebuild-index
+clyth module build module-dma/
+```
+
+Internally, compiler and package-manager code should remain separate even if they are invoked through the same user-facing executable.
+
+---
+
+## MECC Memory Model Direction
+
+MECC means **Managed Entanglement for Collapsible Collections**.
+
+MECC is Clyth's planned deterministic memory-management model. Rather than tracing the whole heap or reference-counting every object individually, MECC groups related allocations into estates and manages lifetime at the estate level.
+
+Current design direction:
+
+- `new Type()` is the normal construction/allocation gateway.
+- `estate.new(Type())` explicitly allocates into a specific estate.
+- Strong/weak estate relationships are compile-time graph metadata.
+- Strong cycles may be rejected or coalesced into shared lifetime groups when safe.
+- `malloc`, `free`, and lower-level allocation details are runtime implementation details unless intentionally exposed through low-level modules.
+
+MECC is not fully implemented yet. Alpha 0.3.0 focuses on stabilizing the runtime/module architecture that MECC will eventually use.
+
+---
+
+## Roadmap
+
+### Alpha 0.4.0 — The Language Release
+
+Planned focus:
+
+- First-class functions.
+- Function references.
+- Generic refinements.
+- Enums.
+- `switch` / `case`.
+- Exhaustiveness groundwork.
+
+### Later Releases
+
+Planned areas:
+
+- Thread spawning.
+- Thread pools.
+- Native JSON parser/writer.
+- HTTP/WebSocket runtime.
+- TLS runtime.
+- Package/module manager.
+- MECC estate runtime.
+- Debugger and LSP tooling.
+- Benchmark applications.
+
+---
+
+## AI-Assisted Development Philosophy
+
+Clyth is AI-assisted, not AI-authored.
+
+AI tools have been used to accelerate implementation, debugging, refactoring, and build-system work. The language philosophy, memory model direction, architecture decisions, and project goals are driven by the project author's design choices.
+
+The goal is not to claim authorship through keystroke count, but through the ideas, constraints, tradeoffs, and engineering decisions that shape the language.
+
+---
+
+## Legal Notes
+
+Clyth prefers permissive licensing for bundled runtime pieces and external dependencies.
+
+Preferred external dependency licenses:
+
+- MIT
+- BSD-2-Clause
+- BSD-3-Clause
+- Apache-2.0 only when appropriate and explicitly tracked
+
+Avoided unless absolutely necessary:
+
+- GPL
+- LGPL
+- AGPL
+- other licenses that complicate static distribution
+
+Runtime and external library license details are tracked in:
+
+```text
+clyth-runtime/EXTERNAL_LIBRARIES_LICENSES.md
+compiler-src/EXTERNAL_LIBRARIES_LICENSES.md
+```
+
+Developers are responsible for verifying license compliance for their distributed applications. Clyth's module metadata and future license-generation tooling are intended to make that process easier.

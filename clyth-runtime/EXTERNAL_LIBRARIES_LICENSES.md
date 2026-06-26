@@ -219,3 +219,37 @@ to be subject to copyright, resulting in confusion over whether it
 negated the permissions granted in the license. In the spirit of
 permissive licensing, and of not having licensing issues being an
 obstacle to adoption, that text has been removed.
+
+# Clyth DMA C Binding
+# MIT license:
+
+The Clyth DMA C binding is part of this repository and is distributed under the same MIT license terms as Clyth. See `c-bindings/dma/LICENSE.md` for the full license text.
+
+# Planned Web Runtime Binding: libwebsockets
+
+Clyth runtime wrapper/source license: MIT.
+
+Backing project: libwebsockets
+
+Selected use: future Clyth web runtime backend for HTTP/WebSocket/event-loop support.
+
+Upstream license: MIT, with retained notices for some compatible permissive components such as BSD/Zlib/CC0-style files as documented by upstream.
+
+Status: binding scaffold only. No libwebsockets source or compiled archive is currently vendored in this repository snapshot. When a compiled libwebsockets archive is bundled into a Clyth Module, the exact upstream license text and retained third-party notices must be included in that module's `license.md` and generated program license bundle.
+
+# Planned TLS Runtime Binding: OpenSSL
+
+Clyth runtime wrapper/source license: MIT.
+
+Backing project: OpenSSL
+
+Selected use: future TLS termination backend for Clyth web/runtime modules.
+
+Upstream license for current OpenSSL releases: Apache License 2.0.
+
+Status: binding scaffold only. No OpenSSL source or compiled archive is currently vendored in this repository snapshot. When a compiled OpenSSL archive is bundled into a Clyth Module, the exact OpenSSL license text, NOTICE requirements, and dependency notices must be included in that module's `license.md` and generated program license bundle.
+
+# JSON Runtime
+
+Clyth JSON is currently planned as a native Clyth-space runtime implementation under the Clyth MIT license. No external JSON C library is selected for the default runtime at this time.
+

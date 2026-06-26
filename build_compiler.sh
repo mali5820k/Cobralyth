@@ -36,6 +36,8 @@ CLYTH_SRC="${ROOT_DIR}/compiler-src"
 CLYTH_BUILD="${ROOT_DIR}/build-compiler"
 CLYTH_GRAMMAR_DIRECTORY="${ROOT_DIR}/Grammar-and-antlr4-files/"
 CLYTH_GRAMMAR_FILE="ClythV1.g4"
+CLYTH_RUNTIME_DIR="${ROOT_DIR}/clyth-runtime"
+CLYTH_RUNTIME_C_BINDINGS="${CLYTH_RUNTIME_DIR}/c-bindings"
 
 BUILD_LLVM=1
 REBUILD_LLVM=0
@@ -236,12 +238,40 @@ build_llvm(){
   ok "LLVM installed to $LLVM_INSTALL"
 }
 
+
+runtime_arch_name(){
+  case "$(uname -m)" in
+    x86_64|amd64) echo "x86_64" ;;
+    aarch64|arm64) echo "arm64" ;;
+    armv7*|armhf) echo "armv7" ;;
+    riscv64) echo "riscv64" ;;
+    *) uname -m ;;
+  esac
+}
+
+build_runtime_c_bindings(){
+  info "Building Clyth runtime C binding archives..."
+  local dma_dir="$CLYTH_RUNTIME_C_BINDINGS/dma"
+  local arch
+  arch="$(runtime_arch_name)"
+  local dma_module_dir="$CLYTH_RUNTIME_DIR/modules/module-dma/$arch"
+  if [[ -f "$dma_dir/dma.c" ]]; then
+    mkdir -p "$dma_dir/build" "$dma_module_dir"
+    "$ZIG_CC" -O2 -c "$dma_dir/dma.c" -o "$dma_dir/build/dma.o"
+    zig ar rcs "$dma_dir/libclyth_dma.a" "$dma_dir/build/dma.o"
+    cp "$dma_dir/libclyth_dma.a" "$dma_module_dir/libclyth_dma.a"
+    ok "Built runtime archive: $dma_module_dir/libclyth_dma.a"
+  else
+    warn "DMA runtime C binding source not found; skipping runtime DMA archive."
+  fi
+}
+
 package_distribution(){
   [[ "$PACKAGE_DIST" -eq 1 ]] || { info "Skipping distribution packaging."; return; }
 
   info "Creating Clyth distribution directory..."
   rm -rf "$DIST_DIR"
-  mkdir -p "$DIST_DIR/bin" "$DIST_DIR/licenses" "$DIST_DIR/share/clyth/samples"
+  mkdir -p "$DIST_DIR/bin" "$DIST_DIR/licenses" "$DIST_DIR/share/clyth/samples" "$DIST_DIR/share/clyth/runtime"
 
   local compiler_bin="$CLYTH_BUILD/clyth_compiler_bin"
   [[ -x "$compiler_bin" ]] || die "Compiler binary not found at $compiler_bin"
@@ -272,15 +302,20 @@ package_distribution(){
   fi
 
   cp "$ROOT_DIR/README.md" "$DIST_DIR/README.md" 2>/dev/null || true
+  cp "$ROOT_DIR/RELEASE_NOTES_ALPHA_0_3_0.md" "$DIST_DIR/RELEASE_NOTES_ALPHA_0_3_0.md" 2>/dev/null || true
+  cp "$ROOT_DIR/install.sh" "$DIST_DIR/install.sh" 2>/dev/null || true
+  cp "$ROOT_DIR/uninstall.sh" "$DIST_DIR/uninstall.sh" 2>/dev/null || true
+  chmod +x "$DIST_DIR/install.sh" "$DIST_DIR/uninstall.sh" 2>/dev/null || true
   cp "$CLYTH_SRC/release_info.json" "$DIST_DIR/release_info.json" 2>/dev/null || true
   cp "$ROOT_DIR/sample-clyth-programs"/*.clyth "$DIST_DIR/share/clyth/samples/" 2>/dev/null || true
+  cp -R "$ROOT_DIR/clyth-runtime"/. "$DIST_DIR/share/clyth/runtime/" 2>/dev/null || true
 
   cat > "$DIST_DIR/README_DIST.md" <<'TXT'
 # Clyth Distribution
 
 This directory contains the Clyth compiler binary, useful LLVM inspection tools,
-project documentation, sample programs, and license texts for bundled project
-components.
+project documentation, Alpha release notes, sample programs, runtime modules, and
+license texts for bundled project components.
 
 The compiler can emit LLVM IR and can invoke `zig cc` to produce a statically
 linked musl-targeted executable from supported Clyth programs:
@@ -292,6 +327,15 @@ bin/clyth_compiler_bin -c share/clyth/samples/printf_test.clyth -o printf_test
 
 Zig is expected to be installed and available on PATH for final executable
 linking. Use `--emit-ir-only` to stop after LLVM IR emission.
+
+For a user-local Linux install from this distribution directory:
+
+```bash
+./install.sh
+```
+
+This installs to `$HOME/.local/share/clyth` and symlinks `clyth` into
+`$HOME/.local/bin`.
 
 ```bash
 bin/clyth_compiler_bin -c input.clyth -o output --emit-ir-only
@@ -344,6 +388,7 @@ main(){
   build_antlr
   build_llvm
   build_clyth
+  build_runtime_c_bindings
   package_distribution
   cat <<SUMMARY
 
@@ -355,6 +400,7 @@ Build summary:
   llc:           $LLVM_INSTALL/bin/llc
   lld:           $LLVM_INSTALL/bin/lld
   Clyth build:   $CLYTH_BUILD
+  Runtime dir:   $CLYTH_RUNTIME_DIR
   Distribution:  $([[ "$PACKAGE_DIST" -eq 1 ]] && echo "$DIST_DIR" || echo "skipped (--skip-dist/--no-package)")
 
 SUMMARY

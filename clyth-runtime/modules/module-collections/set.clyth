@@ -1,0 +1,8 @@
+// Clyth Runtime Module: collections/set
+// License: MIT
+//
+// Set<T> is intended to be implemented in Clyth-space on top of List<T>.
+
+struct Set<T> {
+    // Runtime implementation target for Alpha 0.3 consolidation.
+}

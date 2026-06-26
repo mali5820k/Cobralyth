@@ -1,9 +1,49 @@
 # Clyth Runtime
 
-## Project files:
-- Clyth runtime consists of a C stack of libraries to provide common language runtime features, such as file-io, HTTP/HTTPS web-server, storage containers (ie vectors, maps, and sets), Clyth types, and MECC support.
-- The runtime hasn't been implemented yet at the time of writing this readme - however these are the expected libraries that will be incorporated into the implementation:
-    1. https://github.com/kraj/musl?tab=readme-ov-file (github mirror of original site https://git.musl-libc.org/cgit/musl/tree/README) - Musl-libc for standalone binaries via Zig - this is the backing of the C standard library used in this implementation due to it's permissive licensing and toolchain support for building lean-static binaries via the Zig compiler(s) toolchain. This effectively allows all Clyth programs to be standalone binaries once compiled for a target architecture and operating system.
-    The added benefits of a C-based runtime is name mangling won't interfere when calling functions in LLVM IR.
+The Clyth runtime is organized around installable/runtime modules. Runtime module source lives under `clyth-runtime/modules/`, while C binding source code lives under `clyth-runtime/c-bindings/`.
 
-    2. https://github.com/DaveGamble/cJSON?tab=readme-ov-file - for JSON support.
+`runtime_libraries.json` is a compiler-consumed index/cache generated from module metadata. The source of truth for each module is its `module.json`. Future commands such as `clyth install`, `clyth uninstall`, and `clyth rebuild-index` should update this index automatically.
+
+## Layout
+
+```text
+clyth-runtime/
+├── c-bindings/          # C source stubs used to build static binding archives
+├── modules/             # Clyth runtime modules and packaged module metadata
+├── runtime_libraries.json
+└── EXTERNAL_LIBRARIES_LICENSES.md
+```
+
+## Module Metadata
+
+Each module has a `module.json` file. Clyth wrapper code and native C bindings are licensed separately so generated program license bundles can be precise.
+
+```json
+{
+  "name": "dma",
+  "version": "0.3.0-alpha",
+  "kind": "runtime-module",
+  "exports": ["dma.clyth"],
+  "wrapper": { "license": "MIT" },
+  "c_bindings": [
+    {
+      "name": "clyth_dma",
+      "enabled": true,
+      "backend": "Clyth DMA C Binding",
+      "license": "MIT",
+      "source_directory": "../../c-bindings/dma",
+      "architectures": {
+        "x86_64": {
+          "archive": "x86_64/libclyth_dma.a"
+        }
+      }
+    }
+  ]
+}
+```
+
+## Boundary
+
+Compiler-backed primitives: arrays, strings, structs, functions, generic syntax, keyed-array literals, and lowering. Runtime-owned features: List, Set, Map, JSON, web/TLS wrappers, DMA APIs, estates, and future allocation policies.
+
+Arrays are compact primitives with `data` and `length`. Growable capacity belongs to runtime containers such as `List<T>`, `Set<T>`, and `Map<K,V>`.

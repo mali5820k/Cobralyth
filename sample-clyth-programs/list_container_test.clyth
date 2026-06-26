@@ -1,0 +1,21 @@
+extern C int32 printf(string format, ...)
+
+int32 main(string[] args) {
+    List<int32> numbers = [3, 4]
+
+    numbers.push(35)
+
+    printf("list length: %d\n", numbers.length)
+    printf("list capacity: %d\n", numbers.capacity)
+    printf("first: %d\n", numbers[0])
+    printf("last: %d\n", numbers[2])
+
+    int32 popped = numbers.pop()
+    printf("popped: %d\n", popped)
+    printf("length after pop: %d\n", numbers.length)
+
+    numbers[1] += 38
+    printf("middle after add: %d\n", numbers[1])
+
+    return 0
+}
