@@ -1,0 +1,17 @@
+{
+  "name": "json",
+  "version": "0.3.0-alpha",
+  "kind": "runtime-module",
+  "exports": [
+    "json.clyth"
+  ],
+  "dependencies": [
+    "collections"
+  ],
+  "status": "stub-native-clyth",
+  "wrapper": {
+    "license": "MIT"
+  },
+  "c_bindings": [],
+  "notes": "JSON is planned as a native Clyth implementation using string, List, Map, arrays, and keyed arrays."
+}

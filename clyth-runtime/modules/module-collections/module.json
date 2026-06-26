@@ -1,0 +1,16 @@
+{
+  "name": "collections",
+  "version": "0.3.0-alpha",
+  "kind": "runtime-module",
+  "exports": [
+    "list.clyth",
+    "set.clyth",
+    "map.clyth"
+  ],
+  "dependencies": [],
+  "wrapper": {
+    "license": "MIT"
+  },
+  "c_bindings": [],
+  "notes": "List, Set, and Map are intended to be Clyth-space runtime containers built on compiler-backed arrays and keyed arrays."
+}

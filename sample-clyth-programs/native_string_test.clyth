@@ -1,0 +1,16 @@
+extern C int32 printf(string formatted_string, ...)
+
+int32 main(string[] args) {
+    string message = "hello clyth"
+
+    printf("message: %s\n", message)
+    printf("length: %ld\n", message.length)
+    printf("capacity: %ld\n", message.capacity)
+    printf("first char code: %d\n", message[0])
+
+    message = "strings are native now"
+    printf("updated: %s\n", message)
+    printf("updated length: %ld\n", message.length)
+
+    return 0
+}

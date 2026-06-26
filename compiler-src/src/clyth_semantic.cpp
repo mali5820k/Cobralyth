@@ -10,6 +10,7 @@ namespace {
 const std::unordered_set<std::string>& builtin_type_names() {
     static const std::unordered_set<std::string> types {
         "uint8", "uint16", "uint32", "uint64", "uint",
+        "uintptr", "usize", "size_t",
         "int8", "int16", "int32", "int64", "int",
         "numeric",
         "float32", "float64", "float", "double",

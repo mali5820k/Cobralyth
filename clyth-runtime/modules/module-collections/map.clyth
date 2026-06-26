@@ -1,0 +1,19 @@
+// Clyth Runtime Module: collections/map
+// License: MIT
+//
+// Map<K,V> is intended to be implemented in Clyth-space using keyed arrays,
+// MapEntry<K,V>, and List/array-backed storage.
+
+struct MapEntry<K, V> {
+    K key
+    V value
+
+    constructor(K input_key, V input_value) {
+        key = input_key
+        value = input_value
+    }
+}
+
+struct Map<K, V> {
+    // Runtime implementation target for Alpha 0.3 consolidation.
+}

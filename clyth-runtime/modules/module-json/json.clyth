@@ -1,0 +1,16 @@
+// Clyth Runtime Module: json
+//
+// Status:
+//   Stub / API placeholder for a future native Clyth JSON implementation.
+//
+// License:
+//   MIT as part of the Clyth runtime.
+//
+// Design note:
+//   JSON is intentionally planned as Clyth-space runtime code built from
+//   native strings, arrays, keyed arrays, List, Map, and Set. No external C
+//   dependency is selected for JSON at this time.
+
+struct JsonValue {
+    int32 kind
+}

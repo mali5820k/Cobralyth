@@ -1,0 +1,32 @@
+{
+  "name": "dma",
+  "version": "0.3.0-alpha",
+  "kind": "runtime-module",
+  "exports": [
+    "dma.clyth"
+  ],
+  "wrapper": {
+    "license": "MIT"
+  },
+  "c_bindings": [
+    {
+      "name": "clyth_dma",
+      "enabled": true,
+      "backend": "Clyth DMA C Binding",
+      "license": "MIT",
+      "architectures": {
+        "x86_64": {
+          "archive": "x86_64/libclyth_dma.a"
+        },
+        "aarch64": {
+          "archive": "aarch64/libclyth_dma.a"
+        },
+        "arm64": {
+          "archive": "arm64/libclyth_dma.a"
+        }
+      },
+      "source_directory": "../../c-bindings/dma"
+    }
+  ],
+  "notes": "DMA/MMIO escape-hatch functions are backed by C stubs; Clyth code passes integer addresses, not raw pointer syntax."
+}

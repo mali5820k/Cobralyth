@@ -1,0 +1,20 @@
+extern C int32 printf(string format, ...)
+
+int32 main(string[] args) {
+    Map<int32,int32> scores = [
+        3: 30,
+        4: 40,
+        42: 100,
+        4: 44
+    ]
+
+    printf("map length: %d\n", scores.length)
+    printf("map capacity: %d\n", scores.capacity)
+    printf("value 3: %d\n", scores.get(3))
+    printf("value 4: %d\n", scores.get(4))
+    printf("value 42: %d\n", scores.get(42))
+    printf("contains 42: %d\n", scores.contains_key(42))
+    printf("contains 99: %d\n", scores.contains_key(99))
+
+    return 0
+}

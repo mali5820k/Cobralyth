@@ -1,0 +1,24 @@
+// Clyth Runtime Module: tls
+//
+// Status:
+//   Stub / API placeholder for the future TLS runtime module.
+//
+// Intended backing library:
+//   OpenSSL, through clyth-runtime/c-bindings/openssl.
+//
+// License:
+//   Clyth wrapper/source: MIT.
+//   Backing library: OpenSSL Apache License 2.0.
+//   See clyth-runtime/c-bindings/openssl/LICENSE.md and
+//   clyth-runtime/EXTERNAL_LIBRARIES_LICENSES.md.
+//
+// Design note:
+//   TLS termination should be exposed through Clyth-space APIs while the C
+//   binding handles OpenSSL-specific handles, allocation rules, and cleanup.
+//   Program license generation must include OpenSSL notices when this module
+//   links an OpenSSL archive.
+
+struct TlsConfig {
+    string cert_path
+    string key_path
+}
