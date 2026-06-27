@@ -175,6 +175,7 @@ private:
     llvm::StructType* map_entry_type_for(llvm::Type* key_type, llvm::Type* value_type, const std::string& key_type_name, const std::string& value_type_name);
     llvm::StructType* string_type_for();
     bool emit_string_literal_initializer(const std::string& name, const ast::NodePtr& literal_node);
+    bool emit_string_literal_initializer_at_address(llvm::Value* string_address, const std::string& name_hint, const ast::NodePtr& literal_node);
     llvm::Value* emit_string_data_pointer(llvm::Value* string_value, const std::string& name_hint = "string.data");
     llvm::Value* emit_string_field_load(const LocalStringInfo& info, std::uint32_t field_index, const std::string& name_hint);
     llvm::Value* emit_string_index_address(const std::string& name, const ast::NodePtr& index_node, const semantic::SemanticResult& semantics, llvm::Type** out_type = nullptr);
@@ -187,6 +188,8 @@ private:
     bool dynamic_array_has_capacity(const LocalDynamicArrayInfo& info) const;
     bool emit_dynamic_array_push(const std::string& name, const ast::NodePtr& call_node, const semantic::SemanticResult& semantics);
     llvm::Value* emit_dynamic_array_pop(const std::string& name, const ast::NodePtr& call_node, const semantic::SemanticResult& semantics);
+    llvm::Value* emit_dynamic_array_get(const std::string& name, const ast::NodePtr& call_node, const semantic::SemanticResult& semantics);
+    bool emit_dynamic_array_set(const std::string& name, const ast::NodePtr& call_node, const semantic::SemanticResult& semantics);
     llvm::Value* emit_dynamic_array_contains(const std::string& name, const ast::NodePtr& call_node, const semantic::SemanticResult& semantics);
     bool emit_set_insert(const std::string& name, const ast::NodePtr& call_node, const semantic::SemanticResult& semantics);
     bool emit_map_initializer(const std::string& name, const ast::NodePtr& keyed_literal_node, const semantic::SemanticResult& semantics);

@@ -470,6 +470,21 @@ MECC is not fully implemented yet. Alpha 0.3.0 focuses on stabilizing the runtim
 
 ---
 
+### Alpha 0.4 Generic Runtime Instantiation Direction
+
+Alpha 0.4 is moving generics into the semantic pipeline rather than treating `List<T>`, `Set<T>`, or `Map<K,V>` as compiler-owned special cases. Generic templates are intended to behave like compile-time type generators:
+
+```text
+struct Box<T> { ... }
+Box<int32>
+
+semantic analysis discovers Box<int32>
+semantic analysis instantiates Box__int32
+lowering sees a concrete struct
+```
+
+The generic system must apply to ordinary user-defined structs, not only bundled runtime containers. Runtime collections are expected to become normal clients of this same generic-instantiation machinery.
+
 ## Roadmap
 
 ### Alpha 0.4.0 — The Language Release

@@ -85,6 +85,9 @@ main() {
     run_case "map_container_test" "map_container_test.clyth" "value 4: 44" || true
     run_case "struct_release_test" "alpha_020_struct_release_test.clyth" "counter: 42" || true
     run_case "runtime_dma_include_test" "runtime_dma_include_test.clyth" "dma runtime include linked" || true
+    run_case "generic_runtime_template_include_test" "generic_runtime_template_include_test.clyth" "generic runtime templates accepted" || true
+    run_case "runtime_collection_constructor_test" "runtime_collection_constructor_test.clyth" "constructor map value 10: 101" || true
+    run_case "generic_user_template_test" "generic_user_template_test.clyth" "generic pair value: generic" || true
 
     echo "$SEPARATOR"
     echo "Test Summary"

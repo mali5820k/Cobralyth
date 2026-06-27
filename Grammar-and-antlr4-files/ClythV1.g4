@@ -57,11 +57,20 @@ externParam
     ;
 
 structDecl
-    : STRUCT IDENTIFIER LBRACE structField* RBRACE SEMI?
+    : STRUCT IDENTIFIER genericParamList? LBRACE structField* RBRACE SEMI?
+    ;
+
+genericParamList
+    : LT IDENTIFIER (COMMA IDENTIFIER)* GT
     ;
 
 structField
-    : type IDENTIFIER commaOrSemi?
+    : visibilityModifier? type IDENTIFIER commaOrSemi?
+    ;
+
+visibilityModifier
+    : PUBLIC
+    | PRIVATE
     ;
 
 // -----------------------------
@@ -383,6 +392,8 @@ commaOrSemi
 INCLUDE : 'include';
 EXTERN  : 'extern';
 C_ABI   : 'C';
+PUBLIC  : 'public';
+PRIVATE : 'private';
 STRUCT  : 'struct';
 
 MECC       : 'mecc';

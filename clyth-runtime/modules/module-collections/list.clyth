@@ -1,10 +1,153 @@
 // Clyth Runtime Module: collections/list
 // License: MIT
 //
-// List<T> is intended to be implemented in Clyth-space on top of compiler-backed arrays.
-// Current compiler releases may still provide temporary scaffold lowering while generic
-// runtime collections are being completed.
+// Alpha 0.4 migration target:
+//   List<T> is a Clyth-space growable container built on compact compiler-backed
+//   T[] arrays. The compiler should eventually only monomorphize this template
+//   and lower ordinary method calls; push/pop/shift behavior belongs here.
+//
+// Runtime design:
+//   data     -> backing compact array
+//   head     -> logical index 0 maps to data[head]
+//   tail     -> one-past-last logical element
+//   length   -> initialized logical elements
+//   capacity -> allocated backing slots
+//
+// The head/tail layout lets the runtime grow toward efficient push/pop from
+// either side without forcing full-array shifts for every front operation.
 
 struct List<T> {
-    // Runtime implementation target for Alpha 0.3 consolidation.
+    private T[] data
+    private int64 head
+    private int64 tail
+    int64 length
+    int64 capacity
+
+    constructor() {
+        data = []
+        head = 0
+        tail = 0
+        length = 0
+        capacity = 0
+    }
+
+    constructor(T[] initial_values) {
+        data = initial_values
+        head = 0
+        tail = initial_values.length
+        length = initial_values.length
+        capacity = initial_values.length
+    }
+
+
+    bool empty() {
+        return length == 0
+    }
+
+    int64 physical_index(int64 logical_index) {
+        if capacity == 0 {
+            return 0
+        }
+        return (head + logical_index) % capacity
+    }
+
+    T get(int64 index) {
+        return data[physical_index(index)]
+    }
+
+    void set(int64 index, T value) {
+        data[physical_index(index)] = value
+    }
+
+    void push(T value) {
+        ensure_capacity(length + 1)
+        data[tail] = value
+        tail = physical_index(length + 1)
+        length += 1
+    }
+
+    T pop() {
+        tail = physical_index(length - 1)
+        T value = data[tail]
+        length -= 1
+        return value
+    }
+
+    void push_front(T value) {
+        ensure_capacity(length + 1)
+        if head == 0 {
+            head = capacity - 1
+        } else {
+            head -= 1
+        }
+        data[head] = value
+        length += 1
+    }
+
+    T pop_front() {
+        T value = data[head]
+        head = physical_index(1)
+        length -= 1
+        return value
+    }
+
+
+    bool remove_index(int64 index) {
+        if index < 0 {
+            return false
+        }
+        if index >= length {
+            return false
+        }
+
+        int64 i = index
+        while i < length - 1 {
+            set(i, get(i + 1))
+            i += 1
+        }
+
+        pop()
+        return true
+    }
+
+    bool remove_value(T value) {
+        int64 i = 0
+        while i < length {
+            if get(i) == value {
+                return remove_index(i)
+            }
+            i += 1
+        }
+        return false
+    }
+
+    void clear() {
+        head = 0
+        tail = 0
+        length = 0
+    }
+
+    void ensure_capacity(int64 required_capacity) {
+        if capacity >= required_capacity {
+            return
+        }
+
+        int64 next_capacity = capacity
+        if next_capacity == 0 {
+            next_capacity = 4
+        }
+
+        while next_capacity < required_capacity {
+            next_capacity *= 2
+        }
+
+        grow_to(next_capacity)
+    }
+
+    void grow_to(int64 new_capacity) {
+        // Future monomorphization pass: allocate a new T[] with new_capacity,
+        // copy logical elements from head..tail into contiguous order, then
+        // replace data/head/tail/capacity. This body is intentionally written in
+        // Clyth-space so compiler-owned container growth can be removed.
+    }
 }

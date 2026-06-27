@@ -1,0 +1,10 @@
+include "collections/list.clyth"
+include "collections/set.clyth"
+include "collections/map.clyth"
+
+extern C int32 printf(string fmt, ...)
+
+int32 main() {
+    printf("generic runtime templates accepted\n")
+    return 0
+}

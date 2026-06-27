@@ -11,6 +11,7 @@
 #include <cctype>
 #include <cstdlib>
 #include <iterator>
+#include <map>
 #include <regex>
 #include <set>
 #include <sstream>
@@ -270,8 +271,66 @@ static std::size_t skip_ws(const std::string& source, std::size_t pos) {
     return pos;
 }
 
+static bool is_position_in_comment_or_string(const std::string& source, std::size_t pos) {
+    bool in_string = false;
+    bool escaped = false;
+    bool in_line_comment = false;
+    bool in_block_comment = false;
+
+    for (std::size_t i = 0; i < pos && i < source.size(); ++i) {
+        const char ch = source[i];
+        const char next = (i + 1 < source.size()) ? source[i + 1] : '\0';
+
+        if (in_line_comment) {
+            if (ch == '\n' || ch == '\r') {
+                in_line_comment = false;
+            }
+            continue;
+        }
+
+        if (in_block_comment) {
+            if (ch == '*' && next == '/') {
+                in_block_comment = false;
+                ++i;
+            }
+            continue;
+        }
+
+        if (in_string) {
+            if (escaped) {
+                escaped = false;
+            } else if (ch == '\\') {
+                escaped = true;
+            } else if (ch == '"') {
+                in_string = false;
+            }
+            continue;
+        }
+
+        if (ch == '/' && next == '/') {
+            in_line_comment = true;
+            ++i;
+            continue;
+        }
+        if (ch == '/' && next == '*') {
+            in_block_comment = true;
+            ++i;
+            continue;
+        }
+        if (ch == '"') {
+            in_string = true;
+            continue;
+        }
+    }
+
+    return in_string || in_line_comment || in_block_comment;
+}
+
 static bool starts_keyword_at(const std::string& source, std::size_t pos, const std::string& keyword) {
     if (pos + keyword.size() > source.size() || source.compare(pos, keyword.size(), keyword) != 0) {
+        return false;
+    }
+    if (is_position_in_comment_or_string(source, pos)) {
         return false;
     }
     const bool left_ok = pos == 0 || !is_ident_continue(source[pos - 1]);
@@ -504,6 +563,760 @@ static std::size_t find_matching_bracket(const std::string& source, std::size_t 
     return std::string::npos;
 }
 
+
+static std::size_t find_matching_angle(const std::string& source, std::size_t open_pos) {
+    std::size_t depth = 0;
+    bool in_string = false;
+    bool escaped = false;
+
+    for (std::size_t i = open_pos; i < source.size(); ++i) {
+        const char ch = source[i];
+        if (in_string) {
+            if (escaped) {
+                escaped = false;
+            } else if (ch == '\\') {
+                escaped = true;
+            } else if (ch == '"') {
+                in_string = false;
+            }
+            continue;
+        }
+        if (ch == '"') {
+            in_string = true;
+            continue;
+        }
+        if (ch == '<') {
+            ++depth;
+        } else if (ch == '>') {
+            if (depth == 0) {
+                return std::string::npos;
+            }
+            --depth;
+            if (depth == 0) {
+                return i;
+            }
+        }
+    }
+
+    return std::string::npos;
+}
+
+static bool looks_like_generic_parameter_list(const std::string& text) {
+    std::string trimmed = trim_copy(text);
+    if (trimmed.empty()) {
+        return false;
+    }
+
+    std::size_t start = 0;
+    while (start < trimmed.size()) {
+        start = skip_ws(trimmed, start);
+        if (start >= trimmed.size() || !is_ident_start(trimmed[start])) {
+            return false;
+        }
+        while (start < trimmed.size() && is_ident_continue(trimmed[start])) {
+            ++start;
+        }
+        start = skip_ws(trimmed, start);
+        if (start >= trimmed.size()) {
+            return true;
+        }
+        if (trimmed[start] != ',') {
+            return false;
+        }
+        ++start;
+    }
+    return false;
+}
+
+
+
+struct GenericStructTemplateInfo {
+    std::string name;
+    std::vector<std::string> parameters;
+    std::string body;
+};
+
+struct ConcreteGenericUseInfo {
+    std::string template_name;
+    std::vector<std::string> arguments;
+};
+
+static std::vector<std::string> split_generic_parameter_names(const std::string& text) {
+    std::vector<std::string> params;
+    std::string current;
+    for (char ch : text) {
+        if (ch == ',') {
+            const std::string trimmed = trim_copy(current);
+            if (!trimmed.empty()) {
+                params.push_back(trimmed);
+            }
+            current.clear();
+            continue;
+        }
+        current.push_back(ch);
+    }
+    const std::string trimmed = trim_copy(current);
+    if (!trimmed.empty()) {
+        params.push_back(trimmed);
+    }
+    return params;
+}
+
+static std::vector<GenericStructTemplateInfo> collect_generic_struct_templates(const std::string& source) {
+    std::vector<GenericStructTemplateInfo> templates;
+    std::size_t pos = 0;
+
+    while (pos < source.size()) {
+        if (!starts_keyword_at(source, pos, "struct")) {
+            ++pos;
+            continue;
+        }
+
+        std::size_t cursor = skip_ws(source, pos + 6);
+        if (cursor >= source.size() || !is_ident_start(source[cursor])) {
+            ++pos;
+            continue;
+        }
+
+        const std::size_t name_start = cursor;
+        while (cursor < source.size() && is_ident_continue(source[cursor])) {
+            ++cursor;
+        }
+        const std::string struct_name = source.substr(name_start, cursor - name_start);
+
+        cursor = skip_ws(source, cursor);
+        if (cursor >= source.size() || source[cursor] != '<') {
+            ++pos;
+            continue;
+        }
+
+        const std::size_t angle_open = cursor;
+        const std::size_t angle_close = find_matching_angle(source, angle_open);
+        if (angle_close == std::string::npos) {
+            ++pos;
+            continue;
+        }
+
+        const std::string params_text = source.substr(angle_open + 1, angle_close - angle_open - 1);
+        if (!looks_like_generic_parameter_list(params_text)) {
+            ++pos;
+            continue;
+        }
+
+        cursor = skip_ws(source, angle_close + 1);
+        if (cursor >= source.size() || source[cursor] != '{') {
+            ++pos;
+            continue;
+        }
+
+        const std::size_t open_brace = cursor;
+        const std::size_t close_brace = find_matching_brace(source, open_brace);
+        if (close_brace == std::string::npos) {
+            ++pos;
+            continue;
+        }
+
+        templates.push_back(GenericStructTemplateInfo{
+            struct_name,
+            split_generic_parameter_names(params_text),
+            source.substr(open_brace + 1, close_brace - open_brace - 1),
+        });
+
+        pos = close_brace + 1;
+    }
+
+    return templates;
+}
+
+static bool is_known_generic_template_name(
+    const std::vector<GenericStructTemplateInfo>& templates,
+    const std::string& name,
+    std::size_t* parameter_count = nullptr
+) {
+    for (const auto& templ : templates) {
+        if (templ.name == name) {
+            if (parameter_count != nullptr) {
+                *parameter_count = templ.parameters.size();
+            }
+            return true;
+        }
+    }
+    return false;
+}
+
+static std::string join_strings(const std::vector<std::string>& values, const std::string& separator) {
+    std::ostringstream out;
+    for (std::size_t i = 0; i < values.size(); ++i) {
+        if (i != 0) {
+            out << separator;
+        }
+        out << values[i];
+    }
+    return out.str();
+}
+
+
+static std::string sanitize_generic_type_fragment_for_symbol(std::string value) {
+    for (char& ch : value) {
+        if (!(std::isalnum(static_cast<unsigned char>(ch)) || ch == '_')) {
+            ch = '_';
+        }
+    }
+    return value;
+}
+
+static std::vector<std::string> split_top_level_generic_arguments_main(const std::string& text) {
+    std::vector<std::string> result;
+    std::string current;
+    int depth = 0;
+    bool in_string = false;
+
+    for (char ch : text) {
+        if (in_string) {
+            current.push_back(ch);
+            if (ch == '"') {
+                in_string = false;
+            }
+            continue;
+        }
+        if (ch == '"') {
+            in_string = true;
+            current.push_back(ch);
+            continue;
+        }
+        if (ch == '<' || ch == '[' || ch == '(') {
+            ++depth;
+            current.push_back(ch);
+            continue;
+        }
+        if (ch == '>' || ch == ']' || ch == ')') {
+            --depth;
+            current.push_back(ch);
+            continue;
+        }
+        if ((ch == ',' || ch == ':') && depth == 0) {
+            const std::string trimmed = trim_copy(current);
+            if (!trimmed.empty()) {
+                result.push_back(trimmed);
+            }
+            current.clear();
+            continue;
+        }
+        current.push_back(ch);
+    }
+
+    const std::string trimmed = trim_copy(current);
+    if (!trimmed.empty()) {
+        result.push_back(trimmed);
+    }
+    return result;
+}
+
+static std::string stable_generic_concrete_name(const std::string& template_name, const std::vector<std::string>& args) {
+    std::ostringstream out;
+    out << template_name;
+    for (const auto& arg : args) {
+        out << "__" << sanitize_generic_type_fragment_for_symbol(arg);
+    }
+    return out.str();
+}
+
+static std::string substitute_generic_parameters(
+    std::string text,
+    const std::vector<std::string>& params,
+    const std::vector<std::string>& args
+) {
+    const std::size_t count = std::min(params.size(), args.size());
+    for (std::size_t i = 0; i < count; ++i) {
+        const std::regex param_pattern("\\b" + params[i] + "\\b");
+        text = std::regex_replace(text, param_pattern, args[i]);
+    }
+    return text;
+}
+
+static bool generic_args_are_template_parameters(
+    const GenericStructTemplateInfo& templ,
+    const std::vector<std::string>& args
+) {
+    for (const auto& arg : args) {
+        for (const auto& param : templ.parameters) {
+            if (trim_copy(arg) == param) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+static const GenericStructTemplateInfo* find_generic_template(
+    const std::vector<GenericStructTemplateInfo>& templates,
+    const std::string& name
+) {
+    for (const auto& templ : templates) {
+        if (templ.name == name) {
+            return &templ;
+        }
+    }
+    return nullptr;
+}
+
+static std::vector<ConcreteGenericUseInfo> collect_concrete_generic_uses(
+    const std::string& source,
+    const std::vector<GenericStructTemplateInfo>& templates
+) {
+    std::vector<ConcreteGenericUseInfo> uses;
+    std::set<std::string> seen;
+    std::size_t pos = 0;
+
+    while (pos < source.size()) {
+        if (!is_ident_start(source[pos])) {
+            ++pos;
+            continue;
+        }
+
+        const std::size_t name_start = pos;
+        while (pos < source.size() && is_ident_continue(source[pos])) {
+            ++pos;
+        }
+        const std::string name = source.substr(name_start, pos - name_start);
+
+        const GenericStructTemplateInfo* templ = find_generic_template(templates, name);
+        if (templ == nullptr) {
+            continue;
+        }
+
+        std::size_t cursor = skip_ws(source, pos);
+        if (cursor >= source.size() || source[cursor] != '<') {
+            continue;
+        }
+
+        const std::size_t close = find_matching_angle(source, cursor);
+        if (close == std::string::npos) {
+            continue;
+        }
+
+        const std::string inner = source.substr(cursor + 1, close - cursor - 1);
+        std::vector<std::string> args = split_top_level_generic_arguments_main(inner);
+        if (args.size() != templ->parameters.size()) {
+            pos = close + 1;
+            continue;
+        }
+
+        for (auto& arg : args) {
+            arg = trim_copy(arg);
+        }
+
+        // A template declaration such as `struct Box<T>` or a generic template body
+        // reference such as `List<T>` is not a concrete instantiation. Concrete
+        // monomorphization starts only when all generic parameters have been
+        // replaced by real types, e.g. `Box<int32>`.
+        if (generic_args_are_template_parameters(*templ, args)) {
+            pos = close + 1;
+            continue;
+        }
+
+        const std::string key = name + "<" + join_strings(args, ",") + ">";
+        if (seen.insert(key).second) {
+            uses.push_back(ConcreteGenericUseInfo{name, args});
+        }
+        pos = close + 1;
+    }
+
+    return uses;
+}
+
+static std::string build_generic_instantiation_manifest_comment(
+    const std::vector<GenericStructTemplateInfo>& templates,
+    const std::vector<ConcreteGenericUseInfo>& uses
+) {
+    if (uses.empty()) {
+        return {};
+    }
+
+    std::ostringstream out;
+    out << "\n// Alpha 0.4 pass 5A generic instantiation manifest.\n";
+    out << "// Concrete runtime generic uses detected before template stripping.\n";
+
+    for (const auto& use : uses) {
+        const GenericStructTemplateInfo* templ = nullptr;
+        for (const auto& candidate : templates) {
+            if (candidate.name == use.template_name) {
+                templ = &candidate;
+                break;
+            }
+        }
+        if (templ == nullptr) {
+            continue;
+        }
+
+        const std::string concrete_name = stable_generic_concrete_name(use.template_name, use.arguments);
+        out << "// instantiate " << use.template_name << "<" << join_strings(use.arguments, ", ")
+            << "> -> " << concrete_name << "\n";
+
+        const std::string substituted_body = substitute_generic_parameters(templ->body, templ->parameters, use.arguments);
+        std::istringstream body_stream(substituted_body);
+        std::string line;
+        out << "// preview struct " << concrete_name << " {\n";
+        while (std::getline(body_stream, line)) {
+            out << "// " << line << "\n";
+        }
+        out << "// }\n";
+    }
+
+    return out.str();
+}
+
+static std::string append_generic_instantiation_manifest(const std::string& source) {
+    const auto templates = collect_generic_struct_templates(source);
+    if (templates.empty()) {
+        return source;
+    }
+    const auto uses = collect_concrete_generic_uses(source, templates);
+    const std::string manifest = build_generic_instantiation_manifest_comment(templates, uses);
+    if (manifest.empty()) {
+        return source;
+    }
+    return source + manifest;
+}
+
+
+static std::string defer_generic_struct_templates_for_legacy_backend(const std::string& source);
+
+static std::string replace_generic_type_applications_with_concrete_names(
+    const std::string& source,
+    const std::vector<GenericStructTemplateInfo>& templates,
+    const std::vector<ConcreteGenericUseInfo>& uses
+) {
+    if (templates.empty() || uses.empty()) {
+        return source;
+    }
+
+    std::map<std::string, std::string> concrete_names;
+    for (const auto& use : uses) {
+        concrete_names[use.template_name + "<" + join_strings(use.arguments, ",") + ">"] =
+            stable_generic_concrete_name(use.template_name, use.arguments);
+    }
+
+    std::ostringstream out;
+    std::size_t pos = 0;
+    while (pos < source.size()) {
+        if (!is_ident_start(source[pos])) {
+            out << source[pos++];
+            continue;
+        }
+
+        const std::size_t name_start = pos;
+        while (pos < source.size() && is_ident_continue(source[pos])) {
+            ++pos;
+        }
+        const std::string name = source.substr(name_start, pos - name_start);
+
+        const GenericStructTemplateInfo* templ = find_generic_template(templates, name);
+        if (templ == nullptr) {
+            out << name;
+            continue;
+        }
+
+        std::size_t cursor = skip_ws(source, pos);
+        if (cursor >= source.size() || source[cursor] != '<') {
+            out << name;
+            continue;
+        }
+
+        const std::size_t close = find_matching_angle(source, cursor);
+        if (close == std::string::npos) {
+            out << name;
+            continue;
+        }
+
+        const std::string inner = source.substr(cursor + 1, close - cursor - 1);
+        std::vector<std::string> args = split_top_level_generic_arguments_main(inner);
+        if (args.size() != templ->parameters.size()) {
+            out << name;
+            continue;
+        }
+        for (auto& arg : args) {
+            arg = trim_copy(arg);
+        }
+
+        if (generic_args_are_template_parameters(*templ, args)) {
+            out << name;
+            continue;
+        }
+
+        const std::string key = name + "<" + join_strings(args, ",") + ">";
+        const auto found = concrete_names.find(key);
+        if (found == concrete_names.end()) {
+            out << name;
+            continue;
+        }
+
+        out << found->second;
+        pos = close + 1;
+    }
+
+    return out.str();
+}
+
+
+static std::string normalize_generic_instantiated_body_for_backend(const std::string& body) {
+    // The frontend accepts visibility markers inside structs, but the current
+    // legacy struct-field parser consumes concrete struct bodies after generic
+    // instantiation. Normalize instantiated template bodies the same way the
+    // inline-struct desugar path normalizes ordinary struct members: visibility
+    // is a semantic concern later, not syntax the current backend should lower.
+    std::ostringstream out;
+    std::istringstream in(body);
+    std::string line;
+    while (std::getline(in, line)) {
+        const std::string trimmed = trim_copy(line);
+        if (trimmed.empty()) {
+            out << "\n";
+            continue;
+        }
+        const std::string normalized = strip_visibility_prefix(trimmed);
+        out << "    " << normalized << "\n";
+    }
+    return out.str();
+}
+
+static std::string instantiate_generic_struct_templates_for_current_backend(const std::string& source) {
+    const auto templates = collect_generic_struct_templates(source);
+    if (templates.empty()) {
+        return source;
+    }
+
+    const auto uses = collect_concrete_generic_uses(source, templates);
+    std::ostringstream generated;
+    generated << "\n// Alpha 0.4 semantic template instantiation output.\n";
+
+    for (const auto& use : uses) {
+        const GenericStructTemplateInfo* templ = find_generic_template(templates, use.template_name);
+        if (templ == nullptr) {
+            continue;
+        }
+
+        const std::string concrete_name = stable_generic_concrete_name(use.template_name, use.arguments);
+        const std::string substituted_body = substitute_generic_parameters(templ->body, templ->parameters, use.arguments);
+        const std::string backend_body = normalize_generic_instantiated_body_for_backend(substituted_body);
+        generated << "\nstruct " << concrete_name << " {\n";
+        generated << backend_body;
+        if (!backend_body.empty() && backend_body.back() != '\n') {
+            generated << "\n";
+        }
+        generated << "}\n";
+    }
+
+    // AST-template path: keep original generic declarations in the parser/AST.
+    // They are represented as GenericStructDecl and ignored by concrete LLVM lowering,
+    // while generated concrete structs are prepended for current backend execution.
+    // Do not strip/defer the original generic template source here.
+    std::string rewritten = replace_generic_type_applications_with_concrete_names(source, templates, uses);
+
+    if (uses.empty()) {
+        return rewritten;
+    }
+    return generated.str() + "\n" + rewritten;
+}
+
+static bool source_uses_runtime_collections(const std::string& source) {
+    static const std::regex container_pattern(R"(\b(List|Set|Map)\s*<)");
+    return std::regex_search(source, container_pattern);
+}
+
+static void append_runtime_collection_templates(
+    const std::filesystem::path& runtime_root,
+    std::vector<std::filesystem::path>& included_paths,
+    std::string& source_code
+) {
+    // Alpha 0.4 migration bridge: if user code mentions List<T>, Set<T>, or
+    // Map<K,V>, pull the bundled collections module sources into the combined
+    // source stream before generic templates are stripped. This makes runtime
+    // module compilation/resolution explicit without changing the current
+    // legacy scaffold-backed container lowering until runtime monomorphization fully replaces it.
+    if (runtime_root.empty() || !source_uses_runtime_collections(source_code)) {
+        return;
+    }
+
+    const std::array<std::filesystem::path, 3> module_files = {
+        runtime_root / "modules" / "module-collections" / "list.clyth",
+        runtime_root / "modules" / "module-collections" / "set.clyth",
+        runtime_root / "modules" / "module-collections" / "map.clyth",
+    };
+
+    for (const auto& module_file : module_files) {
+        std::error_code ec;
+        const auto canonical = std::filesystem::weakly_canonical(module_file, ec);
+        const auto normalized = ec ? module_file.lexically_normal() : canonical;
+        bool already_seen = false;
+        for (const auto& included : included_paths) {
+            std::error_code inc_ec;
+            const auto inc_norm = std::filesystem::weakly_canonical(included, inc_ec);
+            if (!inc_ec && !ec && inc_norm == canonical) {
+                already_seen = true;
+                break;
+            }
+        }
+        if (already_seen || !std::filesystem::exists(module_file)) {
+            continue;
+        }
+
+        Scanner scanner;
+        if (!scanner.read_file(module_file.string())) {
+            continue;
+        }
+
+        included_paths.push_back(normalized);
+        source_code += "\n// begin implicit runtime module: " + normalized.string() + "\n";
+        source_code += scanner.to_string();
+        if (!source_code.empty() && source_code.back() != '\n') {
+            source_code += "\n";
+        }
+        source_code += "// end implicit runtime module: " + normalized.string() + "\n";
+    }
+}
+
+
+static bool is_collection_runtime_unit_marker(const std::string& marker_line) {
+    return marker_line.find("clyth-runtime") != std::string::npos
+        && marker_line.find("module-collections") != std::string::npos
+        && (marker_line.find("list.clyth") != std::string::npos
+            || marker_line.find("set.clyth") != std::string::npos
+            || marker_line.find("map.clyth") != std::string::npos);
+}
+
+static std::string strip_collection_runtime_template_units_for_current_backend(const std::string& source) {
+    // Alpha 0.4 migration bridge safety valve:
+    // The bundled collection module sources are the intended Clyth-space home
+    // for List/Set/Map, but the current executable backend still relies on the
+    // legacy scaffold while generic monomorphization is being completed. Feeding
+    // nested generic runtime templates such as List<List<MapEntry<K,V>>> into the
+    // present parser causes syntax errors before those templates can be lowered.
+    // Until the runtime generic compile path is complete, keep module inclusion
+    // visible to the compiler/linker metadata but remove the raw template source
+    // from the parse stream.
+    std::ostringstream out;
+    std::istringstream in(source);
+    std::string line;
+    bool skipping = false;
+    std::string skipped_marker;
+
+    while (std::getline(in, line)) {
+        const bool is_begin_include = line.rfind("// begin include unit:", 0) == 0;
+        const bool is_end_include = line.rfind("// end include unit:", 0) == 0;
+        const bool is_begin_implicit = line.rfind("// begin implicit runtime module:", 0) == 0;
+        const bool is_end_implicit = line.rfind("// end implicit runtime module:", 0) == 0;
+
+        if (!skipping && (is_begin_include || is_begin_implicit) && is_collection_runtime_unit_marker(line)) {
+            skipping = true;
+            skipped_marker = line;
+            out << "// collection runtime template deferred until generic runtime instantiation: " << line << "\n";
+            continue;
+        }
+
+        if (skipping) {
+            if ((is_end_include || is_end_implicit) && is_collection_runtime_unit_marker(line)) {
+                out << "// end deferred collection runtime template: " << line << "\n";
+                skipping = false;
+                skipped_marker.clear();
+            }
+            continue;
+        }
+
+        out << line << "\n";
+    }
+
+    return out.str();
+}
+
+static std::string normalize_runtime_collection_constructor_initializers(const std::string& source) {
+    // Alpha 0.4 migration bridge: accept explicit stack-style construction syntax
+    // for scaffold-backed containers while generic runtime construction is being
+    // brought online. Examples normalized for the existing backend:
+    //   List<int32> xs = List([1, 2])  -> List<int32> xs = [1, 2]
+    //   Set<int32> xs = Set([1, 2])    -> Set<int32> xs = [1, 2]
+    //   Map<int32,int32> m = Map({1:2}) -> Map<int32,int32> m = {1:2}
+    std::string result = source;
+    const std::array<std::pair<const char*, const char*>, 3> patterns = {{
+        {R"(((?:^|\n)\s*List\s*<[^\n=]+>\s+[A-Za-z_][A-Za-z0-9_]*\s*=\s*)List\s*\((\[[^\n;]*\])\))", "$1$2"},
+        {R"(((?:^|\n)\s*Set\s*<[^\n=]+>\s+[A-Za-z_][A-Za-z0-9_]*\s*=\s*)Set\s*\((\[[^\n;]*\])\))", "$1$2"},
+        {R"(((?:^|\n)\s*Map\s*<[^\n=]+>\s+[A-Za-z_][A-Za-z0-9_]*\s*=\s*)Map\s*\((\{[^\n;]*\})\))", "$1$2"},
+    }};
+
+    for (const auto& [pattern, replacement] : patterns) {
+        result = std::regex_replace(result, std::regex(pattern), replacement);
+    }
+    return result;
+}
+
+static std::string defer_generic_struct_templates_for_legacy_backend(const std::string& source) {
+    // Alpha 0.4 transition bridge: generic templates are now a semantic/AST
+    // concept. The current LLVM backend is still concrete-only, so generic
+    // template declarations are deferred after concrete instantiations are
+    // generated. This is the remaining legacy bridge, not the long-term generic
+    // architecture.
+    std::ostringstream out;
+    std::size_t pos = 0;
+
+    while (pos < source.size()) {
+        if (!starts_keyword_at(source, pos, "struct")) {
+            out << source[pos++];
+            continue;
+        }
+
+        const std::size_t struct_start = pos;
+        std::size_t cursor = skip_ws(source, pos + 6);
+        if (cursor >= source.size() || !is_ident_start(source[cursor])) {
+            out << source[pos++];
+            continue;
+        }
+
+        const std::size_t name_start = cursor;
+        while (cursor < source.size() && is_ident_continue(source[cursor])) {
+            ++cursor;
+        }
+        const std::string struct_name = source.substr(name_start, cursor - name_start);
+
+        cursor = skip_ws(source, cursor);
+        if (cursor >= source.size() || source[cursor] != '<') {
+            out << source[pos++];
+            continue;
+        }
+
+        const std::size_t angle_open = cursor;
+        const std::size_t angle_close = find_matching_angle(source, angle_open);
+        if (angle_close == std::string::npos) {
+            out << source[pos++];
+            continue;
+        }
+
+        const std::string params = trim_copy(source.substr(angle_open + 1, angle_close - angle_open - 1));
+        cursor = skip_ws(source, angle_close + 1);
+        if (cursor >= source.size() || source[cursor] != '{') {
+            out << source[pos++];
+            continue;
+        }
+
+        const std::size_t close_brace = find_matching_brace(source, cursor);
+        if (close_brace == std::string::npos) {
+            out << source[pos++];
+            continue;
+        }
+
+        std::size_t after = close_brace + 1;
+        if (after < source.size() && source[after] == ';') {
+            ++after;
+        }
+
+        out << "\n// generic template accepted for runtime instantiation: struct "
+            << struct_name << "<" << params << ">\n";
+        pos = after;
+        (void)struct_start;
+    }
+
+    return out.str();
+}
+
 static std::string normalize_keyed_array_literals(const std::string& source) {
     std::ostringstream out;
     std::size_t pos = 0;
@@ -559,6 +1372,47 @@ static StructInlineDesugarResult desugar_inline_struct_methods(const std::string
         }
         const std::string struct_name = source.substr(name_start, cursor - name_start);
         cursor = skip_ws(source, cursor);
+
+        // Generic struct templates are now owned by the AST/semantic template
+        // pipeline. Do not run the legacy inline-method desugar over them: that
+        // path only understands concrete `struct Name { ... }` declarations and
+        // will corrupt `struct Name<T> { ... }` by streaming one character at a
+        // time until the final `}` is left behind for the parser.
+        //
+        // Generic template methods will be supported by the template
+        // instantiation pipeline later. For now, keep the entire generic struct
+        // declaration unchanged so the parser can produce GenericStructDecl.
+        if (cursor < source.size() && source[cursor] == '<') {
+            const std::size_t angle_close = find_matching_angle(source, cursor);
+            if (angle_close == std::string::npos) {
+                result.ok = false;
+                result.source = source;
+                return result;
+            }
+
+            std::size_t generic_cursor = skip_ws(source, angle_close + 1);
+            if (generic_cursor >= source.size() || source[generic_cursor] != '{') {
+                out << source[pos++];
+                continue;
+            }
+
+            const std::size_t generic_close_brace = find_matching_brace(source, generic_cursor);
+            if (generic_close_brace == std::string::npos) {
+                result.ok = false;
+                result.source = source;
+                return result;
+            }
+
+            std::size_t after_generic = generic_close_brace + 1;
+            if (after_generic < source.size() && source[after_generic] == ';') {
+                ++after_generic;
+            }
+
+            out << source.substr(pos, after_generic - pos);
+            pos = after_generic;
+            continue;
+        }
+
         if (cursor >= source.size() || source[cursor] != '{') {
             out << source[pos++];
             continue;
@@ -648,6 +1502,16 @@ static int parse_clyth_file(CompilerOptions& opts) {
         fmt::print(stderr, "ERROR: Source file is empty: {}\n", opts.main_file.string());
         return 1;
     }
+
+    append_runtime_collection_templates(opts.runtime_root, opts.included_source_paths, source_code);
+    source_code = strip_collection_runtime_template_units_for_current_backend(source_code);
+    source_code = normalize_keyed_array_literals(source_code);
+    source_code = normalize_runtime_collection_constructor_initializers(source_code);
+    // Keep diagnostic generic-instantiation previews out of the parse/desugar stream.
+    // The manifest contains commented `struct ... { ... }` snippets; the legacy
+    // text rewriters intentionally operate before ANTLR, so feeding those comments
+    // back into the source stream can make them look like real declarations.
+    source_code = instantiate_generic_struct_templates_for_current_backend(source_code);
 
     StructInlineDesugarResult desugared = desugar_inline_struct_methods(source_code);
     if (!desugared.ok) {

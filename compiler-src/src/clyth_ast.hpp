@@ -82,6 +82,7 @@ enum class NodeKind {
     IncludeDecl,
     ExternDecl,
     StructDecl,
+    GenericStructDecl,
     StructField,
     MethodBlock,
     MethodDecl,
@@ -175,7 +176,9 @@ public:
     std::any visitExternParamList(ClythV1Parser::ExternParamListContext* ctx) override;
     std::any visitExternParam(ClythV1Parser::ExternParamContext* ctx) override;
     std::any visitStructDecl(ClythV1Parser::StructDeclContext* ctx) override;
+    std::any visitGenericParamList(ClythV1Parser::GenericParamListContext* ctx) override;
     std::any visitStructField(ClythV1Parser::StructFieldContext* ctx) override;
+    std::any visitVisibilityModifier(ClythV1Parser::VisibilityModifierContext* ctx) override;
 
     // Requires grammar regeneration after adding methodBlock/methodDecl rules.
     std::any visitMethodBlock(ClythV1Parser::MethodBlockContext* ctx) override;

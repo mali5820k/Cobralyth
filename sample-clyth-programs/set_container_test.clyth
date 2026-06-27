@@ -9,9 +9,9 @@ int32 main(string[] args) {
 
     printf("set length: %d\n", values.length)
     printf("set capacity: %d\n", values.capacity)
-    printf("first: %d\n", values[0])
-    printf("second: %d\n", values[1])
-    printf("third: %d\n", values[2])
+    printf("first: %d\n", values.get(0))
+    printf("second: %d\n", values.get(1))
+    printf("third: %d\n", values.get(2))
     printf("contains 42: %d\n", values.contains(42))
     printf("contains 99: %d\n", values.contains(99))
 

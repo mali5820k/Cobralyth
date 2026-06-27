@@ -1,16 +1,18 @@
 {
   "name": "collections",
-  "version": "0.3.0-alpha",
+  "version": "0.4.0-alpha",
   "kind": "runtime-module",
   "exports": [
     "list.clyth",
     "set.clyth",
     "map.clyth"
   ],
-  "dependencies": [],
+  "dependencies": [
+    "hash"
+  ],
   "wrapper": {
     "license": "MIT"
   },
   "c_bindings": [],
-  "notes": "List, Set, and Map are intended to be Clyth-space runtime containers built on compiler-backed arrays and keyed arrays."
+  "notes": "List, Set, and Map are intended to be Clyth-space runtime containers built on compiler-backed arrays and keyed arrays. Alpha 0.4 pass 5A detects concrete generic uses and generates stable instantiation names as the first step toward runtime execution. Set/Map hashing is runtime-owned through module-hash; compiler scaffolding remains temporary until 5B/5C/5D remove it safely."
 }

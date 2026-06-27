@@ -1,8 +1,72 @@
 // Clyth Runtime Module: collections/set
 // License: MIT
 //
-// Set<T> is intended to be implemented in Clyth-space on top of List<T>.
+// Alpha 0.4 migration target:
+//   Set<T> is a Clyth-space runtime container. The initial implementation uses
+//   List<T> with duplicate prevention. The planned hash-backed version should
+//   depend on module-hash and keep the public API unchanged.
 
 struct Set<T> {
-    // Runtime implementation target for Alpha 0.3 consolidation.
+    private List<T> values
+
+    constructor() {
+        values = List([])
+        length = 0
+        capacity = values.capacity
+    }
+
+    constructor(T[] initial_values) {
+        values = List([])
+        length = 0
+        capacity = values.capacity
+        int64 i = 0
+        while i < initial_values.length {
+            insert(initial_values[i])
+            i += 1
+        }
+    }
+
+    int64 length
+    int64 capacity
+
+    bool empty() {
+        return values.empty()
+    }
+
+    T get(int64 index) {
+        return values.get(index)
+    }
+
+    bool contains(T value) {
+        int64 i = 0
+        while i < values.length {
+            if values.get(i) == value {
+                return true
+            }
+            i += 1
+        }
+        return false
+    }
+
+    void insert(T value) {
+        if contains(value) {
+            return
+        }
+        values.push(value)
+        length = values.length
+        capacity = values.capacity
+    }
+
+    bool remove(T value) {
+        bool removed = values.remove_value(value)
+        length = values.length
+        capacity = values.capacity
+        return removed
+    }
+
+    void clear() {
+        values.clear()
+        length = 0
+        capacity = values.capacity
+    }
 }

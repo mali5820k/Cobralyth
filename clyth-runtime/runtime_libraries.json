@@ -57,6 +57,16 @@
         "modules/module-tls/tls.clyth"
       ],
       "status": "stub"
+    },
+    "hash": {
+      "path": "modules/module-hash",
+      "exports": [
+        "hash/hash.clyth"
+      ],
+      "source_files": [
+        "modules/module-hash/hash.clyth"
+      ],
+      "status": "stub-rapidhash-backend-disabled"
     }
   }
 }
