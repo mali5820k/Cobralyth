@@ -1,6 +1,4 @@
-include "collections/list.clyth"
-include "collections/set.clyth"
-include "collections/map.clyth"
+include "collections"
 
 extern C int32 printf(string fmt, ...)
 

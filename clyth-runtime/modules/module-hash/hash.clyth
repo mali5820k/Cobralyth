@@ -1,21 +1,16 @@
 // Clyth Runtime Module: hash
 // License: MIT wrapper
 //
-// Alpha 0.4 migration target:
-//   Hashing is runtime-owned. Map<K,V> and Set<T> should depend on this module
-//   rather than compiler-specific hash behavior.
-//
-// Planned backend:
-//   rapidhash C binding, selected for permissive licensing and strong adoption
-//   in performance-sensitive systems.
-
-extern C uint64 clyth_rapidhash_bytes(uintptr data_address, uint64 length, uint64 seed)
-extern C uint64 clyth_rapidhash_u64(uint64 value, uint64 seed)
+// Alpha 0.4 status:
+//   Hashing is runtime-owned. This safe Clyth-only bootstrap implementation keeps
+//   modules depending on `hash` linkable until the rapidhash C binding is enabled.
+//   The future rapidhash backend should replace these bodies without changing the
+//   public Clyth API.
 
 uint64 hash_u64(uint64 value) {
-    return clyth_rapidhash_u64(value, 0)
+    return value
 }
 
 uint64 hash_i64(int64 value) {
-    return clyth_rapidhash_u64(value, 0)
+    return 0
 }

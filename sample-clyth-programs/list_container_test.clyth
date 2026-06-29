@@ -1,7 +1,9 @@
+include "collections"
+
 extern C int32 printf(string format, ...)
 
 int32 main(string[] args) {
-    List<int32> numbers = [3, 4]
+    List<int32> numbers = List([3, 4])
 
     numbers.push(35)
 

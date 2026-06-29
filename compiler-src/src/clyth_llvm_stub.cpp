@@ -293,49 +293,6 @@ std::optional<std::string> parse_dynamic_array_element_type_name(const std::stri
     return element;
 }
 
-std::optional<std::string> parse_list_element_type_name(const std::string& type_name) {
-    constexpr std::string_view prefix = "List<";
-    if (type_name.rfind(std::string(prefix), 0) != 0 || type_name.empty() || type_name.back() != '>') {
-        return std::nullopt;
-    }
-
-    std::string element = type_name.substr(prefix.size(), type_name.size() - prefix.size() - 1);
-    if (element.empty()) {
-        return std::nullopt;
-    }
-
-    return element;
-}
-
-bool is_list_type_name(const std::string& type_name) {
-    return parse_list_element_type_name(type_name).has_value();
-}
-
-std::optional<std::string> parse_set_element_type_name(const std::string& type_name) {
-    std::size_t prefix_size = 0;
-    if (type_name.rfind("Set<", 0) == 0) {
-        prefix_size = 4;
-    } else if (type_name.rfind("set<", 0) == 0) {
-        prefix_size = 4;
-    } else {
-        return std::nullopt;
-    }
-    if (type_name.empty() || type_name.back() != '>') {
-        return std::nullopt;
-    }
-
-    std::string element = type_name.substr(prefix_size, type_name.size() - prefix_size - 1);
-    if (element.empty()) {
-        return std::nullopt;
-    }
-
-    return element;
-}
-
-bool is_set_type_name(const std::string& type_name) {
-    return parse_set_element_type_name(type_name).has_value();
-}
-
 std::vector<std::string> split_top_level_generic_args(const std::string& text) {
     std::vector<std::string> result;
     std::string current;
@@ -369,36 +326,6 @@ std::vector<std::string> split_top_level_generic_args(const std::string& text) {
     }
 
     return result;
-}
-
-struct MapTypeInfo {
-    std::string key_type_name;
-    std::string value_type_name;
-};
-
-std::optional<MapTypeInfo> parse_map_type_name(const std::string& type_name) {
-    std::size_t prefix_size = 0;
-    if (type_name.rfind("Map<", 0) == 0) {
-        prefix_size = 4;
-    } else {
-        return std::nullopt;
-    }
-
-    if (type_name.empty() || type_name.back() != '>') {
-        return std::nullopt;
-    }
-
-    const std::string inner = type_name.substr(prefix_size, type_name.size() - prefix_size - 1);
-    const auto args = split_top_level_generic_args(inner);
-    if (args.size() != 2 || args[0].empty() || args[1].empty()) {
-        return std::nullopt;
-    }
-
-    return MapTypeInfo{args[0], args[1]};
-}
-
-bool is_map_type_name(const std::string& type_name) {
-    return parse_map_type_name(type_name).has_value();
 }
 
 std::string sanitize_type_fragment_for_symbol(std::string value) {
@@ -1170,9 +1097,13 @@ bool ClythLLVMCodegen::emit_function_body(const ast::NodePtr& node, const semant
         builder.CreateStore(&arg, alloca);
         register_local(name, alloca);
         if (modern_main && index == 1 && !params.empty()) {
-            register_local_type(name, declared_type_name(params.front()));
+            const std::string param_type_name = declared_type_name(params.front());
+            register_local_type(name, param_type_name);
+            register_parameter_backing(name, param_type_name, alloca);
         } else if (!modern_main && index < params.size()) {
-            register_local_type(name, declared_type_name(params[index]));
+            const std::string param_type_name = declared_type_name(params[index]);
+            register_local_type(name, param_type_name);
+            register_parameter_backing(name, param_type_name, alloca);
         }
         ++index;
     }
@@ -1260,6 +1191,7 @@ bool ClythLLVMCodegen::emit_method_body(
         builder.CreateStore(&arg, alloca);
         register_local(name, alloca);
         register_local_type(name, type_name);
+        register_parameter_backing(name, type_name, alloca);
         ++index;
     }
 
@@ -1445,111 +1377,18 @@ bool ClythLLVMCodegen::emit_statement(const ast::NodePtr& node, const semantic::
                 return true;
             }
 
-            if (auto list_element = parse_list_element_type_name(type_name)) {
-                llvm::Type* element_type = llvm_type_from_clyth_type(*list_element);
-                if (element_type == nullptr) {
-                    add_codegen_error(node, fmt::format("Unsupported List element type '{}'.", *list_element));
-                    return false;
-                }
-                llvm::StructType* list_type = dynamic_array_type_for(element_type, *list_element, true);
-                if (list_type == nullptr) {
-                    add_codegen_error(node, fmt::format("Unable to create List storage for '{}'.", type_name));
-                    return false;
-                }
-                if (!register_local_dynamic_array(*maybe_name, LocalDynamicArrayInfo{alloca, list_type, element_type, *list_element, true})) {
-                    return false;
-                }
-
-                const auto exprs = expression_children(node);
-                if (!exprs.empty()) {
-                    ast::NodePtr list_initializer = first_descendant_of_kind(exprs.front(), ast::NodeKind::ListLiteralExpr);
-                    if (!list_initializer) {
-                        add_codegen_error(exprs.front(), "List initializer must be a list literal in this backend pass.");
-                        return false;
-                    }
-                    return emit_dynamic_array_initializer(*maybe_name, list_initializer, semantics);
-                }
-
-                builder.CreateStore(llvm::ConstantAggregateZero::get(type), alloca);
-                return true;
-            }
-
-            if (auto set_element = parse_set_element_type_name(type_name)) {
-                llvm::Type* element_type = llvm_type_from_clyth_type(*set_element);
-                if (element_type == nullptr) {
-                    add_codegen_error(node, fmt::format("Unsupported Set element type '{}'.", *set_element));
-                    return false;
-                }
-                llvm::StructType* set_type = dynamic_array_type_for(element_type, *set_element, true);
-                if (set_type == nullptr) {
-                    add_codegen_error(node, fmt::format("Unable to create Set storage for '{}'.", type_name));
-                    return false;
-                }
-                if (!register_local_dynamic_array(*maybe_name, LocalDynamicArrayInfo{alloca, set_type, element_type, *set_element, true})) {
-                    return false;
-                }
-
-                const auto exprs = expression_children(node);
-                if (!exprs.empty()) {
-                    ast::NodePtr list_initializer = first_descendant_of_kind(exprs.front(), ast::NodeKind::ListLiteralExpr);
-                    if (!list_initializer) {
-                        add_codegen_error(exprs.front(), "Set initializer must be a list literal in this backend pass.");
-                        return false;
-                    }
-                    if (!emit_dynamic_array_initializer(*maybe_name, list_initializer, semantics)) {
-                        return false;
-                    }
-                    // Alpha 0.3 Set<T> validates uniqueness for insert(); literal initializers are accepted as-is for now.
-                    return true;
-                }
-
-                builder.CreateStore(llvm::ConstantAggregateZero::get(type), alloca);
-                return true;
-            }
-
-            if (auto map_info = parse_map_type_name(type_name)) {
-                llvm::Type* key_type = llvm_type_from_clyth_type(map_info->key_type_name);
-                llvm::Type* value_type = llvm_type_from_clyth_type(map_info->value_type_name);
-                if (key_type == nullptr || value_type == nullptr) {
-                    add_codegen_error(node, fmt::format("Unsupported Map key/value types '{}', '{}'.", map_info->key_type_name, map_info->value_type_name));
-                    return false;
-                }
-                llvm::StructType* entry_type = map_entry_type_for(key_type, value_type, map_info->key_type_name, map_info->value_type_name);
-                if (entry_type == nullptr) {
-                    add_codegen_error(node, fmt::format("Unable to create Map entry storage for '{}'.", type_name));
-                    return false;
-                }
-                const std::string entry_name = "MapEntry<" + map_info->key_type_name + ":" + map_info->value_type_name + ">";
-                llvm::StructType* map_type = dynamic_array_type_for(entry_type, entry_name, true);
-                if (map_type == nullptr) {
-                    add_codegen_error(node, fmt::format("Unable to create Map storage for '{}'.", type_name));
-                    return false;
-                }
-                LocalDynamicArrayInfo dynamic_info{alloca, map_type, entry_type, entry_name, true};
-                if (!register_local_dynamic_array(*maybe_name, dynamic_info)) {
-                    return false;
-                }
-                if (!register_local_map(*maybe_name, LocalMapInfo{alloca, map_type, entry_type, key_type, value_type, map_info->key_type_name, map_info->value_type_name})) {
-                    return false;
-                }
-
-                builder.CreateStore(llvm::ConstantAggregateZero::get(type), alloca);
-
-                const auto exprs = expression_children(node);
-                if (!exprs.empty()) {
-                    ast::NodePtr keyed_initializer = first_descendant_of_kind(exprs.front(), ast::NodeKind::CurlyLiteralExpr);
-                    if (!keyed_initializer) {
-                        add_codegen_error(exprs.front(), "Map initializer must be a keyed-array literal like [key: value, ...] in this backend pass.");
-                        return false;
-                    }
-                    return emit_map_initializer(*maybe_name, keyed_initializer, semantics);
-                }
-
-                return true;
-            }
+            // Runtime containers are ordinary structs after generic instantiation;
+            // storage is lowered through the same struct/constructor path as user types.
 
             const auto exprs = expression_children(node);
             if (!exprs.empty()) {
+                if (structs.find(type_name) != structs.end()) {
+                    builder.CreateStore(llvm::ConstantAggregateZero::get(type), alloca);
+                    if (maybe_emit_constructor_initializer(type_name, alloca, exprs.front(), semantics)) {
+                        return !diagnostics.has_errors();
+                    }
+                }
+
                 llvm::Value* initializer = emit_expression(exprs.front(), semantics);
                 if (initializer == nullptr) {
                     return false;
@@ -1568,7 +1407,7 @@ bool ClythLLVMCodegen::emit_statement(const ast::NodePtr& node, const semantic::
                 builder.CreateStore(llvm::ConstantAggregateZero::get(type), alloca);
             }
 
-            if (structs.find(type_name) != structs.end()) {
+            if (exprs.empty() && structs.find(type_name) != structs.end()) {
                 if (!maybe_emit_default_constructor_call(type_name, alloca, node)) {
                     return false;
                 }
@@ -1603,6 +1442,8 @@ bool ClythLLVMCodegen::emit_statement(const ast::NodePtr& node, const semantic::
                 return false;
             }
 
+            const auto maybe_target_type_name = resolve_lvalue_type_name(assignable);
+
             if (target_type == string_type_for()) {
                 std::string string_assignment_operator = "=";
                 if (const ast::NodePtr op_node = first_child_with_label(node, "assignmentOp")) {
@@ -1626,16 +1467,32 @@ bool ClythLLVMCodegen::emit_statement(const ast::NodePtr& node, const semantic::
                 return true;
             }
 
-            llvm::Value* value = emit_expression(exprs.back(), semantics);
-            if (value == nullptr) {
-                return false;
-            }
-
             std::string assignment_operator = "=";
             if (const ast::NodePtr op_node = first_child_with_label(node, "assignmentOp")) {
                 if (auto op_text = attr(op_node, "operator")) {
                     assignment_operator = *op_text;
                 }
+            }
+
+            llvm::Value* value = nullptr;
+            if (assignment_operator == "=" && maybe_target_type_name) {
+                if (auto dynamic_element = parse_dynamic_array_element_type_name(*maybe_target_type_name)) {
+                    ast::NodePtr literal_initializer = first_descendant_of_kind(exprs.back(), ast::NodeKind::ListLiteralExpr);
+                    if (literal_initializer != nullptr) {
+                        value = emit_dynamic_array_literal_value(*dynamic_element, literal_initializer, semantics);
+                    }
+                } else if (structs.find(*maybe_target_type_name) != structs.end()) {
+                    if (maybe_emit_constructor_initializer(*maybe_target_type_name, target_address, exprs.back(), semantics)) {
+                        return !diagnostics.has_errors();
+                    }
+                }
+            }
+
+            if (value == nullptr) {
+                value = emit_expression(exprs.back(), semantics);
+            }
+            if (value == nullptr) {
+                return false;
             }
 
             if (assignment_operator != "=") {
@@ -1934,6 +1791,28 @@ llvm::Value* ClythLLVMCodegen::emit_identifier(const ast::NodePtr& node) {
     return nullptr;
 }
 
+
+namespace {
+llvm::Value* emit_dynamic_array_element_address_from_address_impl(
+    llvm::IRBuilder<>& builder,
+    llvm::LLVMContext& context,
+    llvm::Value* array_address,
+    llvm::StructType* array_type,
+    llvm::Type* element_type,
+    llvm::Value* index_value,
+    const std::string& name_hint
+);
+
+llvm::Value* emit_dynamic_array_field_load_impl(
+    llvm::IRBuilder<>& builder,
+    llvm::LLVMContext& context,
+    llvm::Value* array_address,
+    llvm::StructType* array_type,
+    std::uint32_t field_index,
+    const std::string& name_hint
+);
+} // namespace
+
 llvm::Value* ClythLLVMCodegen::emit_postfix(const ast::NodePtr& node, const semantic::SemanticResult& semantics) {
     const auto maybe_base_name = first_token_text(node);
     if (!maybe_base_name) {
@@ -1952,58 +1831,7 @@ llvm::Value* ClythLLVMCodegen::emit_postfix(const ast::NodePtr& node, const sema
 
         if (child->kind == ast::NodeKind::CallExpr) {
             if (!pending_method_name.empty()) {
-                if (lookup_local_map(*maybe_base_name)) {
-                    if (pending_method_name == "put") {
-                        if (!emit_map_put(*maybe_base_name, child, semantics)) {
-                            return nullptr;
-                        }
-                        current_value = llvm::Constant::getNullValue(llvm::Type::getInt32Ty(context));
-                    } else if (pending_method_name == "get") {
-                        current_value = emit_map_get(*maybe_base_name, child, semantics);
-                    } else if (pending_method_name == "contains_key") {
-                        current_value = emit_map_contains_key(*maybe_base_name, child, semantics);
-                    } else {
-                        add_codegen_error(child, fmt::format("Map '{}' has no method named '{}'.", *maybe_base_name, pending_method_name));
-                        return nullptr;
-                    }
-                } else if (auto dynamic_container_info = lookup_local_dynamic_array(*maybe_base_name)) {
-                    if (!dynamic_container_info->has_capacity) {
-                        add_codegen_error(child, fmt::format("'{}' is an array; mutating container methods are available on List<T> and Set<T>, not plain T[].", *maybe_base_name));
-                        return nullptr;
-                    }
-                    if (pending_method_name == "push") {
-                        if (!emit_dynamic_array_push(*maybe_base_name, child, semantics)) {
-                            return nullptr;
-                        }
-                        current_value = llvm::Constant::getNullValue(llvm::Type::getInt32Ty(context));
-                    } else if (pending_method_name == "insert") {
-                        auto receiver_type = lookup_symbol_type_name(*maybe_base_name);
-                        if (!receiver_type || !parse_set_element_type_name(*receiver_type)) {
-                            add_codegen_error(child, fmt::format("insert(value) is currently available on Set<T>; '{}' is '{}'.", *maybe_base_name, receiver_type.value_or("<unknown>")));
-                            return nullptr;
-                        }
-                        if (!emit_set_insert(*maybe_base_name, child, semantics)) {
-                            return nullptr;
-                        }
-                        current_value = llvm::Constant::getNullValue(llvm::Type::getInt32Ty(context));
-                    } else if (pending_method_name == "pop") {
-                        current_value = emit_dynamic_array_pop(*maybe_base_name, child, semantics);
-                    } else if (pending_method_name == "get") {
-                        current_value = emit_dynamic_array_get(*maybe_base_name, child, semantics);
-                    } else if (pending_method_name == "set") {
-                        if (!emit_dynamic_array_set(*maybe_base_name, child, semantics)) {
-                            return nullptr;
-                        }
-                        current_value = llvm::Constant::getNullValue(llvm::Type::getInt32Ty(context));
-                    } else if (pending_method_name == "contains") {
-                        current_value = emit_dynamic_array_contains(*maybe_base_name, child, semantics);
-                    } else {
-                        add_codegen_error(child, fmt::format("Dynamic array/List/Set '{}' has no method named '{}'.", *maybe_base_name, pending_method_name));
-                        return nullptr;
-                    }
-                } else {
-                    current_value = emit_method_call_suffix(*maybe_base_name, pending_method_name, child, semantics);
-                }
+                current_value = emit_method_call_suffix(*maybe_base_name, pending_method_name, child, semantics);
                 pending_method_name.clear();
             } else {
                 current_value = emit_call_suffix(*maybe_base_name, child, semantics);
@@ -2067,6 +1895,9 @@ llvm::Value* ClythLLVMCodegen::emit_postfix(const ast::NodePtr& node, const sema
 
         if (child->kind == ast::NodeKind::MemberAccessExpr) {
             const std::string member = member_name_from_member_access(child).value_or("");
+
+            // Native compiler-owned properties remain valid for language primitives:
+            // fixed arrays, dynamic arrays, and strings.
             if (member == "length") {
                 if (auto string_info = lookup_local_string(*maybe_base_name)) {
                     current_value = emit_string_field_load(*string_info, 1, *maybe_base_name + ".length");
@@ -2083,6 +1914,18 @@ llvm::Value* ClythLLVMCodegen::emit_postfix(const ast::NodePtr& node, const sema
                     consumed_suffix = true;
                     continue;
                 }
+                if (auto base_type = lookup_symbol_type_name(*maybe_base_name)) {
+                    if (auto dynamic_element = parse_dynamic_array_element_type_name(*base_type)) {
+                        llvm::Type* element_type = llvm_type_from_clyth_type(*dynamic_element);
+                        llvm::StructType* array_type = element_type == nullptr ? nullptr : dynamic_array_type_for(element_type, *dynamic_element, false);
+                        llvm::Value* array_address = emit_this_field_address(*maybe_base_name, child, nullptr);
+                        if (array_address != nullptr && array_type != nullptr) {
+                            current_value = emit_dynamic_array_field_load_impl(builder, context, array_address, array_type, 1, "this." + *maybe_base_name + ".length");
+                            consumed_suffix = true;
+                            continue;
+                        }
+                    }
+                }
             }
 
             if (member == "capacity") {
@@ -2092,42 +1935,34 @@ llvm::Value* ClythLLVMCodegen::emit_postfix(const ast::NodePtr& node, const sema
                     continue;
                 }
                 if (auto dynamic_info = lookup_local_dynamic_array(*maybe_base_name)) {
-                    if (!dynamic_info->has_capacity) {
-                        add_codegen_error(child, fmt::format("'{}' is an array; capacity is available on List<T>, Set<T>, and Map<K,V> containers, not plain T[].", *maybe_base_name));
-                        return nullptr;
-                    }
                     current_value = emit_dynamic_array_capacity(*dynamic_info);
                     consumed_suffix = true;
                     continue;
                 }
-            }
-
-            if (auto map_info = lookup_local_map(*maybe_base_name)) {
-                (void)map_info;
-                if (member == "put" || member == "get" || member == "contains_key") {
-                    pending_method_name = member;
-                    consumed_suffix = true;
-                    continue;
-                }
-            }
-
-            if (auto dynamic_info = lookup_local_dynamic_array(*maybe_base_name)) {
-                (void)dynamic_info;
-                if (member == "push" || member == "pop" || member == "contains" || member == "get" || member == "set") {
-                    pending_method_name = member;
-                    consumed_suffix = true;
-                    continue;
-                }
-                if (member == "insert") {
-                    auto receiver_type = lookup_symbol_type_name(*maybe_base_name);
-                    if (receiver_type && parse_set_element_type_name(*receiver_type)) {
-                        pending_method_name = member;
-                        consumed_suffix = true;
-                        continue;
+                if (auto base_type = lookup_symbol_type_name(*maybe_base_name)) {
+                    if (auto dynamic_element = parse_dynamic_array_element_type_name(*base_type)) {
+                        llvm::Type* element_type = llvm_type_from_clyth_type(*dynamic_element);
+                        llvm::StructType* array_type = element_type == nullptr ? nullptr : dynamic_array_type_for(element_type, *dynamic_element, false);
+                        llvm::Value* array_address = emit_this_field_address(*maybe_base_name, child, nullptr);
+                        if (array_address != nullptr && array_type != nullptr) {
+                            current_value = llvm::ConstantInt::get(llvm::Type::getInt64Ty(context), 0);
+                            consumed_suffix = true;
+                            continue;
+                        }
                     }
                 }
+                if (auto info = lookup_local_array(*maybe_base_name)) {
+                    // Fixed/native arrays do not carry a separate capacity field;
+                    // their capacity is their compile-time length.
+                    current_value = llvm::ConstantInt::get(llvm::Type::getInt64Ty(context), info->length);
+                    consumed_suffix = true;
+                    continue;
+                }
             }
 
+            // Method lookup must be attempted for every member name, not only
+            // for the native `length` pseudo-property. Otherwise `counter.add()`
+            // and `counter.get()` incorrectly fall through to struct-field access.
             if (auto receiver_type = lookup_symbol_type_name(*maybe_base_name)) {
                 if (methods.find(method_key(*receiver_type, member)) != methods.end()) {
                     pending_method_name = member;
@@ -2201,6 +2036,10 @@ llvm::Value* ClythLLVMCodegen::emit_struct_field_address(
         }
     }
 
+    if (base_address == nullptr && current_scope && !current_scope->this_type_name.empty()) {
+        base_address = emit_this_field_address(base_name, member_node, nullptr);
+    }
+
     if (base_address == nullptr) {
         add_codegen_error(member_node, fmt::format("Unknown struct value '{}'.", base_name));
         return nullptr;
@@ -2267,6 +2106,222 @@ llvm::Value* ClythLLVMCodegen::emit_this_field_address(
     return address;
 }
 
+
+void ClythLLVMCodegen::register_parameter_backing(const std::string& name, const std::string& type_name, llvm::AllocaInst* alloca) {
+    if (name.empty() || type_name.empty() || alloca == nullptr || current_scope == nullptr) {
+        return;
+    }
+    if (type_name == "string") {
+        register_local_string(name, LocalStringInfo{alloca});
+        return;
+    }
+    if (auto fixed = parse_fixed_array_type_name(type_name)) {
+        llvm::Type* element_type = llvm_type_from_clyth_type(fixed->element_type_name);
+        if (element_type != nullptr) {
+            register_local_array(name, LocalArrayInfo{alloca, element_type, fixed->length, true});
+        }
+        return;
+    }
+    if (auto dynamic = parse_dynamic_array_element_type_name(type_name)) {
+        llvm::Type* element_type = llvm_type_from_clyth_type(*dynamic);
+        if (element_type != nullptr) {
+            llvm::StructType* array_type = dynamic_array_type_for(element_type, *dynamic, false);
+            if (array_type != nullptr) {
+                register_local_dynamic_array(name, LocalDynamicArrayInfo{alloca, array_type, element_type, *dynamic, false});
+            }
+        }
+    }
+}
+
+llvm::Value* ClythLLVMCodegen::emit_dynamic_array_literal_value(
+    const std::string& element_type_name,
+    const ast::NodePtr& list_node,
+    const semantic::SemanticResult& semantics
+) {
+    if (list_node == nullptr || list_node->kind != ast::NodeKind::ListLiteralExpr || current_scope == nullptr) {
+        return nullptr;
+    }
+    llvm::Type* element_type = llvm_type_from_clyth_type(element_type_name);
+    if (element_type == nullptr) {
+        add_codegen_error(list_node, fmt::format("Unsupported dynamic-array literal element type '{}'.", element_type_name));
+        return nullptr;
+    }
+    llvm::StructType* array_type = dynamic_array_type_for(element_type, element_type_name, false);
+    if (array_type == nullptr) {
+        add_codegen_error(list_node, fmt::format("Unable to create dynamic-array literal type for '{}[]'.", element_type_name));
+        return nullptr;
+    }
+    static std::uint64_t literal_counter = 0;
+    const std::string temp_name = fmt::format("__clyth_array_literal_{}", literal_counter++);
+    llvm::AllocaInst* temp_alloca = create_entry_alloca(current_scope->function, array_type, temp_name);
+    register_local_dynamic_array(temp_name, LocalDynamicArrayInfo{temp_alloca, array_type, element_type, element_type_name, false});
+    if (!emit_dynamic_array_initializer(temp_name, list_node, semantics)) {
+        return nullptr;
+    }
+    return builder.CreateLoad(array_type, temp_alloca, temp_name + ".value");
+}
+
+
+llvm::Value* ClythLLVMCodegen::emit_keyed_dynamic_array_literal_value(
+    const std::string& element_type_name,
+    const ast::NodePtr& keyed_node,
+    const semantic::SemanticResult& semantics
+) {
+    if (keyed_node == nullptr || keyed_node->kind != ast::NodeKind::CurlyLiteralExpr || current_scope == nullptr) {
+        return nullptr;
+    }
+
+    llvm::Type* element_type = llvm_type_from_clyth_type(element_type_name);
+    if (element_type == nullptr) {
+        add_codegen_error(keyed_node, fmt::format("Unsupported keyed dynamic-array element type '{}'.", element_type_name));
+        return nullptr;
+    }
+    llvm::StructType* array_type = dynamic_array_type_for(element_type, element_type_name, false);
+    if (array_type == nullptr) {
+        add_codegen_error(keyed_node, fmt::format("Unable to create keyed dynamic-array literal type for '{}[]'.", element_type_name));
+        return nullptr;
+    }
+
+    const auto entries = keyed_literal_entries(keyed_node);
+    static std::uint64_t literal_counter = 0;
+    const std::string temp_name = fmt::format("__clyth_keyed_array_literal_{}", literal_counter++);
+    llvm::AllocaInst* temp_alloca = create_entry_alloca(current_scope->function, array_type, temp_name);
+    register_local_dynamic_array(temp_name, LocalDynamicArrayInfo{temp_alloca, array_type, element_type, element_type_name, false});
+
+    llvm::Type* i64 = llvm::Type::getInt64Ty(context);
+    llvm::Value* zero32 = llvm::ConstantInt::get(llvm::Type::getInt32Ty(context), 0);
+    llvm::Value* data_index = llvm::ConstantInt::get(llvm::Type::getInt32Ty(context), 0);
+    llvm::Value* length_index = llvm::ConstantInt::get(llvm::Type::getInt32Ty(context), 1);
+    const std::uint64_t allocation_count = static_cast<std::uint64_t>(entries.size());
+    llvm::Value* data_ptr = llvm::ConstantPointerNull::get(llvm::PointerType::get(context, 0));
+    if (allocation_count > 0) {
+        const std::uint64_t element_bytes = conservative_element_size_bytes(element_type);
+        llvm::Value* byte_count = llvm::ConstantInt::get(i64, element_bytes * allocation_count);
+        data_ptr = builder.CreateCall(declare_libc_malloc(), {byte_count}, temp_name + ".data");
+    }
+
+    llvm::Value* data_address = builder.CreateInBoundsGEP(array_type, temp_alloca, {zero32, data_index}, temp_name + ".data.addr");
+    llvm::Value* length_address = builder.CreateInBoundsGEP(array_type, temp_alloca, {zero32, length_index}, temp_name + ".length.addr");
+    builder.CreateStore(data_ptr, data_address);
+    builder.CreateStore(llvm::ConstantInt::get(i64, allocation_count), length_address);
+
+    const std::string ctor_key = method_key(element_type_name, "constructor__2");
+    auto ctor_it = methods.find(ctor_key);
+    llvm::Function* ctor = nullptr;
+    if (ctor_it != methods.end()) {
+        auto fn_it = functions.find(ctor_it->second.lowered_name);
+        if (fn_it != functions.end()) {
+            ctor = fn_it->second;
+        }
+    }
+    if (ctor == nullptr && !entries.empty()) {
+        add_codegen_error(keyed_node, fmt::format("Keyed array element type '{}' needs a two-argument constructor.", element_type_name));
+        return nullptr;
+    }
+
+    for (std::size_t index = 0; index < entries.size(); ++index) {
+        const auto& entry = entries[index];
+        if (attr(entry, "entry_kind") != "pair") {
+            add_codegen_error(entry, "Keyed-array constructor argument requires key: value entries only.");
+            return nullptr;
+        }
+        auto [key_node, value_node] = keyed_entry_expressions(entry);
+        if (!key_node || !value_node) {
+            add_codegen_error(entry, "Malformed keyed-array constructor entry.");
+            return nullptr;
+        }
+
+        llvm::Value* slot = builder.CreateGEP(
+            element_type,
+            data_ptr,
+            llvm::ConstantInt::get(i64, index),
+            fmt::format("{}.entry{}", temp_name, index)
+        );
+        builder.CreateStore(llvm::ConstantAggregateZero::get(element_type), slot);
+
+        llvm::Value* key_value = emit_expression(key_node, semantics);
+        llvm::Value* stored_value = emit_expression(value_node, semantics);
+        if (key_value == nullptr || stored_value == nullptr) {
+            return nullptr;
+        }
+
+        builder.CreateCall(ctor, {slot, key_value, stored_value});
+    }
+
+    return builder.CreateLoad(array_type, temp_alloca, temp_name + ".value");
+}
+
+bool ClythLLVMCodegen::maybe_emit_constructor_initializer(
+    const std::string& type_name,
+    llvm::Value* receiver_address,
+    const ast::NodePtr& initializer,
+    const semantic::SemanticResult& semantics
+) {
+    if (receiver_address == nullptr || initializer == nullptr || structs.find(type_name) == structs.end()) {
+        return false;
+    }
+    ast::NodePtr call_node = first_descendant_of_kind(initializer, ast::NodeKind::CallExpr);
+    if (call_node == nullptr) {
+        return false;
+    }
+    const auto args = call_arguments(call_node);
+    const std::string constructor_name = args.empty() ? "constructor" : fmt::format("constructor__{}", args.size());
+    const std::string key = method_key(type_name, constructor_name);
+    auto method_it = methods.find(key);
+    if (method_it == methods.end()) {
+        return false;
+    }
+    llvm::Function* constructor = functions[method_it->second.lowered_name];
+    if (constructor == nullptr) {
+        add_codegen_error(initializer, fmt::format("Constructor for '{}' was registered but not lowered.", type_name));
+        return true;
+    }
+    std::vector<llvm::Value*> lowered_args;
+    lowered_args.push_back(receiver_address);
+    const auto params = direct_params(method_it->second.declaration);
+    if (params.size() != args.size()) {
+        add_codegen_error(initializer, fmt::format("Constructor '{}' expects {} argument(s), got {}.", type_name, params.size(), args.size()));
+        return true;
+    }
+    for (std::size_t i = 0; i < args.size(); ++i) {
+        const std::string param_type_name = declared_type_name(params[i]);
+        llvm::Type* param_type = llvm_type_from_clyth_type(param_type_name);
+        if (param_type == nullptr) {
+            add_codegen_error(params[i], fmt::format("Unsupported constructor parameter type '{}'.", param_type_name));
+            return true;
+        }
+        llvm::Value* arg_value = nullptr;
+        if (auto dynamic_element = parse_dynamic_array_element_type_name(param_type_name)) {
+            ast::NodePtr literal = first_descendant_of_kind(args[i], ast::NodeKind::ListLiteralExpr);
+            if (literal != nullptr) {
+                arg_value = emit_dynamic_array_literal_value(*dynamic_element, literal, semantics);
+            }
+            if (arg_value == nullptr) {
+                ast::NodePtr keyed_literal = first_descendant_of_kind(args[i], ast::NodeKind::CurlyLiteralExpr);
+                if (keyed_literal != nullptr) {
+                    arg_value = emit_keyed_dynamic_array_literal_value(*dynamic_element, keyed_literal, semantics);
+                }
+            }
+        }
+        if (arg_value == nullptr) {
+            arg_value = emit_expression(args[i], semantics);
+        }
+        if (arg_value == nullptr) {
+            return true;
+        }
+        if (arg_value->getType() != param_type && arg_value->getType()->isIntegerTy() && param_type->isIntegerTy()) {
+            arg_value = builder.CreateIntCast(arg_value, param_type, true, "ctorargcast");
+        }
+        if (arg_value->getType() != param_type) {
+            add_codegen_error(args[i], fmt::format("Constructor argument {} for '{}' has incompatible type.", i, type_name));
+            return true;
+        }
+        lowered_args.push_back(arg_value);
+    }
+    builder.CreateCall(constructor, lowered_args);
+    return true;
+}
+
 bool ClythLLVMCodegen::maybe_emit_default_constructor_call(
     const std::string& type_name,
     llvm::Value* receiver_address,
@@ -2327,6 +2382,67 @@ llvm::Value* ClythLLVMCodegen::emit_fixed_array_element_address(
     }
 
     return element_address;
+}
+
+std::optional<std::string> ClythLLVMCodegen::resolve_lvalue_type_name(const ast::NodePtr& node) const {
+    const auto maybe_name = first_token_text(node);
+    if (!maybe_name) {
+        return std::nullopt;
+    }
+
+    for (const auto& child : node->children) {
+        if (!child) {
+            continue;
+        }
+        if (child->kind == ast::NodeKind::MemberAccessExpr) {
+            const std::string field_name = member_name_from_member_access(child).value_or("");
+            if (field_name.empty()) {
+                return std::nullopt;
+            }
+            const auto maybe_base_type = lookup_symbol_type_name(*maybe_name);
+            if (!maybe_base_type) {
+                return std::nullopt;
+            }
+            auto struct_it = structs.find(*maybe_base_type);
+            if (struct_it == structs.end()) {
+                return std::nullopt;
+            }
+            const StructInfo& info = struct_it->second;
+            auto field_it = info.field_indices.find(field_name);
+            if (field_it == info.field_indices.end() || field_it->second >= info.field_type_names.size()) {
+                return std::nullopt;
+            }
+            return info.field_type_names[field_it->second];
+        }
+        if (child->kind == ast::NodeKind::IndexExpr) {
+            if (auto base_type = lookup_symbol_type_name(*maybe_name)) {
+                if (auto fixed = parse_fixed_array_type_name(*base_type)) {
+                    return fixed->element_type_name;
+                }
+                if (auto dynamic = parse_dynamic_array_element_type_name(*base_type)) {
+                    return *dynamic;
+                }
+            }
+            return std::nullopt;
+        }
+    }
+
+    if (auto direct = lookup_symbol_type_name(*maybe_name)) {
+        return direct;
+    }
+
+    if (current_scope && !current_scope->this_type_name.empty()) {
+        auto struct_it = structs.find(current_scope->this_type_name);
+        if (struct_it != structs.end()) {
+            const StructInfo& info = struct_it->second;
+            auto field_it = info.field_indices.find(*maybe_name);
+            if (field_it != info.field_indices.end() && field_it->second < info.field_type_names.size()) {
+                return info.field_type_names[field_it->second];
+            }
+        }
+    }
+
+    return std::nullopt;
 }
 
 llvm::Value* ClythLLVMCodegen::emit_lvalue_address(
@@ -2434,6 +2550,16 @@ llvm::Value* ClythLLVMCodegen::emit_call_suffix(
 ) {
     auto function_it = functions.find(callee_name);
     if (function_it == functions.end()) {
+        // Inside a method body, an unqualified call to another method on the
+        // same receiver is language-level method resolution, not a free
+        // function lookup. This keeps runtime structs such as List/Set/Map
+        // ordinary structs while allowing bodies to write `physical_index(i)`
+        // or `insert(x)` instead of spelling `this.physical_index(i)`.
+        if (current_scope && !current_scope->this_type_name.empty()) {
+            if (methods.find(method_key(current_scope->this_type_name, callee_name)) != methods.end()) {
+                return emit_method_call_suffix("this", callee_name, call_node, semantics);
+            }
+        }
         add_codegen_error(call_node, fmt::format("Unknown function '{}'.", callee_name));
         return nullptr;
     }
@@ -2452,7 +2578,12 @@ llvm::Value* ClythLLVMCodegen::emit_call_suffix(
             if (arg_value->getType() == string_type_for()) {
                 arg_value = emit_string_data_pointer(arg_value, "call.string.data");
             }
-            if (is_vararg && args.size() >= fixed_param_count) {
+            if (args.size() < fixed_param_count) {
+                llvm::Type* param_type = callee->getFunctionType()->getParamType(args.size());
+                if (arg_value->getType() != param_type && arg_value->getType()->isIntegerTy() && param_type->isIntegerTy()) {
+                    arg_value = builder.CreateIntCast(arg_value, param_type, true, "callargcast");
+                }
+            } else if (is_vararg && args.size() >= fixed_param_count) {
                 if (arg_value->getType()->isIntegerTy() && arg_value->getType()->getIntegerBitWidth() < 32) {
                     arg_value = builder.CreateIntCast(arg_value, llvm::Type::getInt32Ty(context), true, "vararg_int_promote");
                 } else if (arg_value->getType()->isFloatTy()) {
@@ -2500,11 +2631,22 @@ llvm::Value* ClythLLVMCodegen::emit_method_call_suffix(
         }
     }
 
+    if (receiver_address == nullptr && current_scope && !current_scope->this_type_name.empty()) {
+        receiver_address = emit_this_field_address(receiver_name, call_node, nullptr);
+    }
+
     if (receiver_address == nullptr) {
         add_codegen_error(call_node, fmt::format("Unknown method receiver '{}'.", receiver_name));
         return nullptr;
     }
 
+    auto function_it = functions.find(method_it->second.lowered_name);
+    if (function_it == functions.end()) {
+        add_codegen_error(call_node, fmt::format("Lowered method '{}' was not declared.", method_it->second.lowered_name));
+        return nullptr;
+    }
+
+    llvm::Function* callee = function_it->second;
     std::vector<llvm::Value*> args;
     args.push_back(receiver_address);
 
@@ -2515,17 +2657,17 @@ llvm::Value* ClythLLVMCodegen::emit_method_call_suffix(
             if (arg_value == nullptr) {
                 return nullptr;
             }
+            const std::size_t param_index = args.size();
+            if (param_index < callee->getFunctionType()->getNumParams()) {
+                llvm::Type* param_type = callee->getFunctionType()->getParamType(param_index);
+                if (arg_value->getType() != param_type && arg_value->getType()->isIntegerTy() && param_type->isIntegerTy()) {
+                    arg_value = builder.CreateIntCast(arg_value, param_type, true, "methodargcast");
+                }
+            }
             args.push_back(arg_value);
         }
     }
 
-    auto function_it = functions.find(method_it->second.lowered_name);
-    if (function_it == functions.end()) {
-        add_codegen_error(call_node, fmt::format("Lowered method '{}' was not declared.", method_it->second.lowered_name));
-        return nullptr;
-    }
-
-    llvm::Function* callee = function_it->second;
     return builder.CreateCall(callee, args, callee->getReturnType()->isVoidTy() ? "" : "methodcalltmp");
 }
 
@@ -2833,8 +2975,7 @@ llvm::Type* ClythLLVMCodegen::llvm_type_from_clyth_type(const std::string& type_
     if (auto dynamic_element = parse_dynamic_array_element_type_name(type_name)) {
         // Modern process startup still treats string[] args specially as argv in
         // main lowering. Plain T[] arrays now use the compact runtime array
-        // layout: { data, length }; growable containers such as List<T>,
-        // Set<T>, and Map<K,V> use { data, length, capacity }.
+        // layout: { data, length }.
         llvm::Type* element_type = llvm_type_from_clyth_type(*dynamic_element);
         if (element_type == nullptr) {
             return nullptr;
@@ -2842,34 +2983,9 @@ llvm::Type* ClythLLVMCodegen::llvm_type_from_clyth_type(const std::string& type_
         return dynamic_array_type_for(element_type, *dynamic_element, false);
     }
 
-    if (auto list_element = parse_list_element_type_name(type_name)) {
-        llvm::Type* element_type = llvm_type_from_clyth_type(*list_element);
-        if (element_type == nullptr) {
-            return nullptr;
-        }
-        return dynamic_array_type_for(element_type, *list_element, true);
-    }
-
-    if (auto set_element = parse_set_element_type_name(type_name)) {
-        llvm::Type* element_type = llvm_type_from_clyth_type(*set_element);
-        if (element_type == nullptr) {
-            return nullptr;
-        }
-        return dynamic_array_type_for(element_type, *set_element, true);
-    }
-
-    if (auto map_info = parse_map_type_name(type_name)) {
-        llvm::Type* key_type = llvm_type_from_clyth_type(map_info->key_type_name);
-        llvm::Type* value_type = llvm_type_from_clyth_type(map_info->value_type_name);
-        if (key_type == nullptr || value_type == nullptr) {
-            return nullptr;
-        }
-        llvm::StructType* entry_type = map_entry_type_for(key_type, value_type, map_info->key_type_name, map_info->value_type_name);
-        if (entry_type == nullptr) {
-            return nullptr;
-        }
-        return dynamic_array_type_for(entry_type, "MapEntry<" + map_info->key_type_name + ":" + map_info->value_type_name + ">", true);
-    }
+    // Generic runtime/library types must arrive here as concrete structs after
+    // template instantiation (for example List__int32), not as privileged
+    // compiler-owned container layouts.
 
     if (is_pointer_generic_type_name(type_name)) {
         return llvm::PointerType::get(context, 0);
@@ -2907,24 +3023,6 @@ llvm::StructType* ClythLLVMCodegen::dynamic_array_type_for(llvm::Type* element_t
     dynamic_array_types[type_symbol] = array_type;
     return array_type;
 }
-
-llvm::StructType* ClythLLVMCodegen::map_entry_type_for(llvm::Type* key_type, llvm::Type* value_type, const std::string& key_type_name, const std::string& value_type_name) {
-    if (key_type == nullptr || value_type == nullptr) {
-        return nullptr;
-    }
-
-    const std::string type_symbol = "clyth.map.entry." + sanitize_type_fragment_for_symbol(key_type_name) + "." + sanitize_type_fragment_for_symbol(value_type_name);
-    auto found = map_entry_types.find(type_symbol);
-    if (found != map_entry_types.end()) {
-        return found->second;
-    }
-
-    llvm::StructType* entry_type = llvm::StructType::create(context, type_symbol);
-    entry_type->setBody({key_type, value_type}, false);
-    map_entry_types[type_symbol] = entry_type;
-    return entry_type;
-}
-
 
 llvm::StructType* ClythLLVMCodegen::string_type_for() {
     if (native_string_type != nullptr) {
@@ -3117,40 +3215,115 @@ bool ClythLLVMCodegen::emit_dynamic_array_initializer(const std::string& name, c
     return true;
 }
 
+
+namespace {
+llvm::Value* emit_dynamic_array_element_address_from_address_impl(
+    llvm::IRBuilder<>& builder,
+    llvm::LLVMContext& context,
+    llvm::Value* array_address,
+    llvm::StructType* array_type,
+    llvm::Type* element_type,
+    llvm::Value* index_value,
+    const std::string& name_hint
+) {
+    if (array_address == nullptr || array_type == nullptr || element_type == nullptr || index_value == nullptr) {
+        return nullptr;
+    }
+    if (!index_value->getType()->isIntegerTy(64)) {
+        index_value = builder.CreateIntCast(index_value, llvm::Type::getInt64Ty(context), true, name_hint + ".idxcast");
+    }
+
+    llvm::Value* zero = llvm::ConstantInt::get(llvm::Type::getInt32Ty(context), 0);
+    llvm::Value* data_index = llvm::ConstantInt::get(llvm::Type::getInt32Ty(context), 0);
+    llvm::Value* data_address = builder.CreateInBoundsGEP(array_type, array_address, {zero, data_index}, name_hint + ".data.addr");
+    llvm::Value* data_ptr = builder.CreateLoad(llvm::PointerType::get(context, 0), data_address, name_hint + ".data");
+    return builder.CreateGEP(element_type, data_ptr, index_value, name_hint + ".element.addr");
+}
+
+llvm::Value* emit_dynamic_array_field_load_impl(
+    llvm::IRBuilder<>& builder,
+    llvm::LLVMContext& context,
+    llvm::Value* array_address,
+    llvm::StructType* array_type,
+    std::uint32_t field_index,
+    const std::string& name_hint
+) {
+    if (array_address == nullptr || array_type == nullptr) {
+        return nullptr;
+    }
+    llvm::Value* zero = llvm::ConstantInt::get(llvm::Type::getInt32Ty(context), 0);
+    llvm::Value* idx = llvm::ConstantInt::get(llvm::Type::getInt32Ty(context), field_index);
+    llvm::Value* addr = builder.CreateInBoundsGEP(array_type, array_address, {zero, idx}, name_hint + ".addr");
+    return builder.CreateLoad(array_type->getElementType(field_index), addr, name_hint);
+}
+} // namespace
+
 llvm::Value* ClythLLVMCodegen::emit_dynamic_array_element_address(
     const std::string& name,
     const ast::NodePtr& index_node,
     const semantic::SemanticResult& semantics,
     llvm::Type** out_type
 ) {
-    auto info = lookup_local_dynamic_array(name);
-    if (!info || info->alloca == nullptr || info->element_type == nullptr || info->array_type == nullptr) {
-        return nullptr;
-    }
-
     llvm::Value* index_value = emit_expression(first_expression_like_child(index_node), semantics);
     if (index_value == nullptr) {
         return nullptr;
     }
-    if (!index_value->getType()->isIntegerTy(64)) {
-        index_value = builder.CreateIntCast(index_value, llvm::Type::getInt64Ty(context), true, "dynarrayidxcast");
+
+    if (auto info = lookup_local_dynamic_array(name)) {
+        if (info->alloca == nullptr || info->element_type == nullptr || info->array_type == nullptr) {
+            return nullptr;
+        }
+        if (out_type != nullptr) {
+            *out_type = info->element_type;
+        }
+        return emit_dynamic_array_element_address_from_address_impl(
+            builder,
+            context,
+            info->alloca,
+            info->array_type,
+            info->element_type,
+            index_value,
+            name
+        );
     }
 
-    llvm::Value* zero = llvm::ConstantInt::get(llvm::Type::getInt32Ty(context), 0);
-    llvm::Value* data_index = llvm::ConstantInt::get(llvm::Type::getInt32Ty(context), 0);
-    llvm::Value* data_address = builder.CreateInBoundsGEP(info->array_type, info->alloca, {zero, data_index}, name + ".data.addr");
-    llvm::Value* data_ptr = builder.CreateLoad(llvm::PointerType::get(context, 0), data_address, name + ".data");
-
-    if (out_type != nullptr) {
-        *out_type = info->element_type;
+    // In methods, runtime containers are ordinary structs whose methods often
+    // index their own dynamic-array fields directly (for example data[i] inside
+    // List<T>). Treat an unqualified dynamic-array field as this.field rather
+    // than requiring collection-specific compiler backing.
+    if (current_scope && !current_scope->this_type_name.empty()) {
+        auto maybe_type = lookup_symbol_type_name(name);
+        if (maybe_type) {
+            if (auto dynamic_element = parse_dynamic_array_element_type_name(*maybe_type)) {
+                llvm::Type* element_type = llvm_type_from_clyth_type(*dynamic_element);
+                llvm::StructType* array_type = element_type == nullptr ? nullptr : dynamic_array_type_for(element_type, *dynamic_element, false);
+                llvm::Value* array_address = emit_this_field_address(name, index_node, nullptr);
+                if (array_address != nullptr && array_type != nullptr && element_type != nullptr) {
+                    if (out_type != nullptr) {
+                        *out_type = element_type;
+                    }
+                    return emit_dynamic_array_element_address_from_address_impl(
+                        builder,
+                        context,
+                        array_address,
+                        array_type,
+                        element_type,
+                        index_value,
+                        "this." + name
+                    );
+                }
+            }
+        }
     }
-    return builder.CreateGEP(info->element_type, data_ptr, index_value, name + ".element.addr");
+
+    return nullptr;
 }
+
 
 bool ClythLLVMCodegen::emit_dynamic_array_push(const std::string& name, const ast::NodePtr& call_node, const semantic::SemanticResult& semantics) {
     auto info = lookup_local_dynamic_array(name);
     if (!info || info->alloca == nullptr || info->element_type == nullptr || info->array_type == nullptr || !info->has_capacity) {
-        add_codegen_error(call_node, fmt::format("'{}' is not a growable List/Set container.", name));
+        add_codegen_error(call_node, fmt::format("'{}' is not a growable dynamic array.", name));
         return false;
     }
 
@@ -3213,7 +3386,7 @@ llvm::Value* ClythLLVMCodegen::emit_dynamic_array_pop(const std::string& name, c
     (void)semantics;
     auto info = lookup_local_dynamic_array(name);
     if (!info || info->alloca == nullptr || info->element_type == nullptr || info->array_type == nullptr || !info->has_capacity) {
-        add_codegen_error(call_node, fmt::format("'{}' is not a growable List/Set container.", name));
+        add_codegen_error(call_node, fmt::format("'{}' is not a growable dynamic array.", name));
         return nullptr;
     }
     llvm::Type* i64 = llvm::Type::getInt64Ty(context);
@@ -3234,7 +3407,7 @@ llvm::Value* ClythLLVMCodegen::emit_dynamic_array_pop(const std::string& name, c
 llvm::Value* ClythLLVMCodegen::emit_dynamic_array_get(const std::string& name, const ast::NodePtr& call_node, const semantic::SemanticResult& semantics) {
     auto info = lookup_local_dynamic_array(name);
     if (!info || info->alloca == nullptr || info->element_type == nullptr || info->array_type == nullptr) {
-        add_codegen_error(call_node, fmt::format("'{}' is not a dynamic array/List/Set.", name));
+        add_codegen_error(call_node, fmt::format("'{}' is not a dynamic array.", name));
         return nullptr;
     }
 
@@ -3249,7 +3422,7 @@ llvm::Value* ClythLLVMCodegen::emit_dynamic_array_get(const std::string& name, c
         return nullptr;
     }
     if (!index_value->getType()->isIntegerTy(64)) {
-        index_value = builder.CreateIntCast(index_value, llvm::Type::getInt64Ty(context), true, "container.get.index");
+        index_value = builder.CreateIntCast(index_value, llvm::Type::getInt64Ty(context), true, "dynamic_array.get.index");
     }
 
     llvm::Value* zero32 = llvm::ConstantInt::get(llvm::Type::getInt32Ty(context), 0);
@@ -3263,7 +3436,7 @@ llvm::Value* ClythLLVMCodegen::emit_dynamic_array_get(const std::string& name, c
 bool ClythLLVMCodegen::emit_dynamic_array_set(const std::string& name, const ast::NodePtr& call_node, const semantic::SemanticResult& semantics) {
     auto info = lookup_local_dynamic_array(name);
     if (!info || info->alloca == nullptr || info->element_type == nullptr || info->array_type == nullptr) {
-        add_codegen_error(call_node, fmt::format("'{}' is not a dynamic array/List/Set.", name));
+        add_codegen_error(call_node, fmt::format("'{}' is not a dynamic array.", name));
         return false;
     }
 
@@ -3278,7 +3451,7 @@ bool ClythLLVMCodegen::emit_dynamic_array_set(const std::string& name, const ast
         return false;
     }
     if (!index_value->getType()->isIntegerTy(64)) {
-        index_value = builder.CreateIntCast(index_value, llvm::Type::getInt64Ty(context), true, "container.set.index");
+        index_value = builder.CreateIntCast(index_value, llvm::Type::getInt64Ty(context), true, "dynamic_array.set.index");
     }
 
     llvm::Value* value = emit_expression(args[1], semantics);
@@ -3286,7 +3459,7 @@ bool ClythLLVMCodegen::emit_dynamic_array_set(const std::string& name, const ast
         return false;
     }
     if (value->getType() != info->element_type && value->getType()->isIntegerTy() && info->element_type->isIntegerTy()) {
-        value = builder.CreateIntCast(value, info->element_type, true, "container.set.cast");
+        value = builder.CreateIntCast(value, info->element_type, true, "dynamic_array.set.cast");
     }
     if (value->getType() != info->element_type) {
         add_codegen_error(call_node, "set(index, value) currently requires a value matching the container element type.");
@@ -3305,7 +3478,7 @@ bool ClythLLVMCodegen::emit_dynamic_array_set(const std::string& name, const ast
 llvm::Value* ClythLLVMCodegen::emit_dynamic_array_contains(const std::string& name, const ast::NodePtr& call_node, const semantic::SemanticResult& semantics) {
     auto info = lookup_local_dynamic_array(name);
     if (!info || info->alloca == nullptr || info->element_type == nullptr || info->array_type == nullptr) {
-        add_codegen_error(call_node, fmt::format("'{}' is not a dynamic array/List/Set.", name));
+        add_codegen_error(call_node, fmt::format("'{}' is not a dynamic array.", name));
         return nullptr;
     }
 
@@ -3386,27 +3559,6 @@ llvm::Value* ClythLLVMCodegen::emit_dynamic_array_contains(const std::string& na
     return builder.CreateLoad(i1, result_slot, name + ".contains.value");
 }
 
-bool ClythLLVMCodegen::emit_set_insert(const std::string& name, const ast::NodePtr& call_node, const semantic::SemanticResult& semantics) {
-    llvm::Value* already_present = emit_dynamic_array_contains(name, call_node, semantics);
-    if (already_present == nullptr) {
-        return false;
-    }
-
-    llvm::Function* function = builder.GetInsertBlock()->getParent();
-    llvm::BasicBlock* insert_block = llvm::BasicBlock::Create(context, name + ".set.insert", function);
-    llvm::BasicBlock* done_block = llvm::BasicBlock::Create(context, name + ".set.done", function);
-    builder.CreateCondBr(already_present, done_block, insert_block);
-
-    builder.SetInsertPoint(insert_block);
-    if (!emit_dynamic_array_push(name, call_node, semantics)) {
-        return false;
-    }
-    builder.CreateBr(done_block);
-
-    builder.SetInsertPoint(done_block);
-    return true;
-}
-
 llvm::Value* emit_key_match(llvm::IRBuilder<>& builder, llvm::Value* lhs, llvm::Value* rhs, const std::string& name_hint) {
     if (lhs == nullptr || rhs == nullptr || lhs->getType() != rhs->getType()) {
         return nullptr;
@@ -3419,309 +3571,6 @@ llvm::Value* emit_key_match(llvm::IRBuilder<>& builder, llvm::Value* lhs, llvm::
         return builder.CreateFCmpOEQ(lhs, rhs, name_hint + ".match");
     }
     return nullptr;
-}
-
-bool ClythLLVMCodegen::emit_map_initializer(const std::string& name, const ast::NodePtr& keyed_literal_node, const semantic::SemanticResult& semantics) {
-    const auto entries = keyed_literal_entries(keyed_literal_node);
-    if (entries.empty()) {
-        return true;
-    }
-
-    for (const auto& entry : entries) {
-        if (attr(entry, "entry_kind") != "pair") {
-            add_codegen_error(entry, "Map keyed-array initializer requires key: value entries only.");
-            return false;
-        }
-        auto [key_node, value_node] = keyed_entry_expressions(entry);
-        if (!key_node || !value_node) {
-            add_codegen_error(entry, "Malformed keyed-array entry for Map initializer.");
-            return false;
-        }
-        if (!emit_map_put_values(name, entry, key_node, value_node, semantics)) {
-            return false;
-        }
-    }
-
-    return true;
-}
-
-bool ClythLLVMCodegen::emit_map_put(const std::string& name, const ast::NodePtr& call_node, const semantic::SemanticResult& semantics) {
-    const auto args = call_arguments(call_node);
-    if (args.size() != 2) {
-        add_codegen_error(call_node, "put(key, value) expects exactly two arguments.");
-        return false;
-    }
-    return emit_map_put_values(name, call_node, args[0], args[1], semantics);
-}
-
-bool ClythLLVMCodegen::emit_map_put_values(
-    const std::string& name,
-    const ast::NodePtr& diagnostic_node,
-    const ast::NodePtr& key_node,
-    const ast::NodePtr& value_node,
-    const semantic::SemanticResult& semantics
-) {
-    auto info = lookup_local_map(name);
-    if (!info || info->alloca == nullptr || info->entry_type == nullptr || info->array_type == nullptr) {
-        add_codegen_error(diagnostic_node, fmt::format("'{}' is not a Map<K,V>.", name));
-        return false;
-    }
-
-    llvm::Value* key_value = emit_expression(key_node, semantics);
-    llvm::Value* stored_value = emit_expression(value_node, semantics);
-    if (key_value == nullptr || stored_value == nullptr) {
-        return false;
-    }
-    if (key_value->getType() != info->key_type && key_value->getType()->isIntegerTy() && info->key_type->isIntegerTy()) {
-        key_value = builder.CreateIntCast(key_value, info->key_type, true, "mapkeycast");
-    }
-    if (stored_value->getType() != info->value_type && stored_value->getType()->isIntegerTy() && info->value_type->isIntegerTy()) {
-        stored_value = builder.CreateIntCast(stored_value, info->value_type, true, "mapvaluecast");
-    }
-    if (key_value->getType() != info->key_type || stored_value->getType() != info->value_type) {
-        add_codegen_error(diagnostic_node, "Map key/value entries must match the declared Map<K,V> types in this backend pass.");
-        return false;
-    }
-
-    llvm::Function* function = builder.GetInsertBlock()->getParent();
-    llvm::Type* i64 = llvm::Type::getInt64Ty(context);
-    llvm::Type* ptr_type = llvm::PointerType::get(context, 0);
-    llvm::Value* zero32 = llvm::ConstantInt::get(llvm::Type::getInt32Ty(context), 0);
-    llvm::Value* data_idx = llvm::ConstantInt::get(llvm::Type::getInt32Ty(context), 0);
-    llvm::Value* len_idx = llvm::ConstantInt::get(llvm::Type::getInt32Ty(context), 1);
-    llvm::Value* cap_idx = llvm::ConstantInt::get(llvm::Type::getInt32Ty(context), 2);
-
-    llvm::Value* data_addr = builder.CreateInBoundsGEP(info->array_type, info->alloca, {zero32, data_idx}, name + ".data.addr");
-    llvm::Value* len_addr = builder.CreateInBoundsGEP(info->array_type, info->alloca, {zero32, len_idx}, name + ".length.addr");
-    llvm::Value* cap_addr = builder.CreateInBoundsGEP(info->array_type, info->alloca, {zero32, cap_idx}, name + ".capacity.addr");
-    llvm::Value* data_ptr = builder.CreateLoad(ptr_type, data_addr, name + ".data");
-    llvm::Value* length = builder.CreateLoad(i64, len_addr, name + ".length");
-    llvm::Value* capacity = builder.CreateLoad(i64, cap_addr, name + ".capacity");
-
-    llvm::BasicBlock* preheader = builder.GetInsertBlock();
-    llvm::BasicBlock* loop_block = llvm::BasicBlock::Create(context, name + ".map.put.loop", function);
-    llvm::BasicBlock* body_block = llvm::BasicBlock::Create(context, name + ".map.put.body", function);
-    llvm::BasicBlock* next_block = llvm::BasicBlock::Create(context, name + ".map.put.next", function);
-    llvm::BasicBlock* update_block = llvm::BasicBlock::Create(context, name + ".map.put.update", function);
-    llvm::BasicBlock* append_check_block = llvm::BasicBlock::Create(context, name + ".map.put.append_check", function);
-    llvm::BasicBlock* grow_block = llvm::BasicBlock::Create(context, name + ".map.put.grow", function);
-    llvm::BasicBlock* append_block = llvm::BasicBlock::Create(context, name + ".map.put.append", function);
-    llvm::BasicBlock* done_block = llvm::BasicBlock::Create(context, name + ".map.put.done", function);
-
-    builder.CreateBr(loop_block);
-
-    builder.SetInsertPoint(loop_block);
-    llvm::PHINode* index = builder.CreatePHI(i64, 2, name + ".map.put.i");
-    index->addIncoming(llvm::ConstantInt::get(i64, 0), preheader);
-    llvm::Value* in_bounds = builder.CreateICmpULT(index, length, name + ".map.put.in_bounds");
-    builder.CreateCondBr(in_bounds, body_block, append_check_block);
-
-    builder.SetInsertPoint(body_block);
-    llvm::Value* entry_ptr = builder.CreateGEP(info->entry_type, data_ptr, index, name + ".map.put.entry");
-    llvm::Value* key_addr = builder.CreateStructGEP(info->entry_type, entry_ptr, 0, name + ".map.put.key.addr");
-    llvm::Value* existing_key = builder.CreateLoad(info->key_type, key_addr, name + ".map.put.key");
-    llvm::Value* matches = emit_key_match(builder, existing_key, key_value, name + ".map.put");
-    if (matches == nullptr) {
-        add_codegen_error(diagnostic_node, "Map key comparison currently supports integer, float, and pointer-like keys.");
-        return false;
-    }
-    builder.CreateCondBr(matches, update_block, next_block);
-
-    builder.SetInsertPoint(update_block);
-    llvm::Value* update_value_addr = builder.CreateStructGEP(info->entry_type, entry_ptr, 1, name + ".map.put.value.addr");
-    builder.CreateStore(stored_value, update_value_addr);
-    builder.CreateBr(done_block);
-
-    builder.SetInsertPoint(next_block);
-    llvm::Value* next_index = builder.CreateAdd(index, llvm::ConstantInt::get(i64, 1), name + ".map.put.next_i");
-    index->addIncoming(next_index, next_block);
-    builder.CreateBr(loop_block);
-
-    builder.SetInsertPoint(append_check_block);
-    llvm::Value* needs_grow = builder.CreateICmpUGE(length, capacity, name + ".map.put.needs_grow");
-    builder.CreateCondBr(needs_grow, grow_block, append_block);
-
-    builder.SetInsertPoint(grow_block);
-    llvm::Value* is_zero = builder.CreateICmpEQ(capacity, llvm::ConstantInt::get(i64, 0), name + ".map.put.cap_zero");
-    llvm::Value* doubled = builder.CreateMul(capacity, llvm::ConstantInt::get(i64, 2), name + ".map.put.cap_double");
-    llvm::Value* new_capacity = builder.CreateSelect(is_zero, llvm::ConstantInt::get(i64, 4), doubled, name + ".map.put.new_capacity");
-    llvm::Value* byte_count = builder.CreateMul(new_capacity, llvm::ConstantInt::get(i64, conservative_element_size_bytes(info->entry_type)), name + ".map.put.new_bytes");
-    llvm::Value* new_data = builder.CreateCall(declare_libc_realloc(), {data_ptr, byte_count}, name + ".map.put.new_data");
-    builder.CreateStore(new_data, data_addr);
-    builder.CreateStore(new_capacity, cap_addr);
-    builder.CreateBr(append_block);
-
-    builder.SetInsertPoint(append_block);
-    llvm::PHINode* active_data = builder.CreatePHI(ptr_type, 2, name + ".map.put.active_data");
-    active_data->addIncoming(data_ptr, append_check_block);
-    active_data->addIncoming(new_data, grow_block);
-    llvm::Value* append_entry_ptr = builder.CreateGEP(info->entry_type, active_data, length, name + ".map.put.append.entry");
-    llvm::Value* append_key_addr = builder.CreateStructGEP(info->entry_type, append_entry_ptr, 0, name + ".map.put.append.key.addr");
-    llvm::Value* append_value_addr = builder.CreateStructGEP(info->entry_type, append_entry_ptr, 1, name + ".map.put.append.value.addr");
-    builder.CreateStore(key_value, append_key_addr);
-    builder.CreateStore(stored_value, append_value_addr);
-    builder.CreateStore(builder.CreateAdd(length, llvm::ConstantInt::get(i64, 1), name + ".map.put.new_length"), len_addr);
-    builder.CreateBr(done_block);
-
-    builder.SetInsertPoint(done_block);
-    return true;
-}
-
-llvm::Value* ClythLLVMCodegen::emit_map_get(const std::string& name, const ast::NodePtr& call_node, const semantic::SemanticResult& semantics) {
-    auto info = lookup_local_map(name);
-    if (!info || info->alloca == nullptr || info->entry_type == nullptr || info->array_type == nullptr) {
-        add_codegen_error(call_node, fmt::format("'{}' is not a Map<K,V>.", name));
-        return nullptr;
-    }
-
-    const auto args = call_arguments(call_node);
-    if (args.size() != 1) {
-        add_codegen_error(call_node, "get(key) expects exactly one argument.");
-        return nullptr;
-    }
-
-    llvm::Value* key_value = emit_expression(args.front(), semantics);
-    if (key_value == nullptr) {
-        return nullptr;
-    }
-    if (key_value->getType() != info->key_type && key_value->getType()->isIntegerTy() && info->key_type->isIntegerTy()) {
-        key_value = builder.CreateIntCast(key_value, info->key_type, true, "mapgetkeycast");
-    }
-    if (key_value->getType() != info->key_type) {
-        add_codegen_error(call_node, "get(key) requires a key matching the Map<K,V> key type in this backend pass.");
-        return nullptr;
-    }
-
-    llvm::Function* function = builder.GetInsertBlock()->getParent();
-    llvm::Type* i64 = llvm::Type::getInt64Ty(context);
-    llvm::Value* zero32 = llvm::ConstantInt::get(llvm::Type::getInt32Ty(context), 0);
-    llvm::Value* data_idx = llvm::ConstantInt::get(llvm::Type::getInt32Ty(context), 0);
-    llvm::Value* len_idx = llvm::ConstantInt::get(llvm::Type::getInt32Ty(context), 1);
-
-    llvm::AllocaInst* result_slot = create_entry_alloca(function, info->value_type, name + ".map.get.result");
-    builder.CreateStore(llvm::Constant::getNullValue(info->value_type), result_slot);
-
-    llvm::Value* data_addr = builder.CreateInBoundsGEP(info->array_type, info->alloca, {zero32, data_idx}, name + ".data.addr");
-    llvm::Value* len_addr = builder.CreateInBoundsGEP(info->array_type, info->alloca, {zero32, len_idx}, name + ".length.addr");
-    llvm::Value* data_ptr = builder.CreateLoad(llvm::PointerType::get(context, 0), data_addr, name + ".data");
-    llvm::Value* length = builder.CreateLoad(i64, len_addr, name + ".length");
-
-    llvm::BasicBlock* preheader = builder.GetInsertBlock();
-    llvm::BasicBlock* loop_block = llvm::BasicBlock::Create(context, name + ".map.get.loop", function);
-    llvm::BasicBlock* body_block = llvm::BasicBlock::Create(context, name + ".map.get.body", function);
-    llvm::BasicBlock* next_block = llvm::BasicBlock::Create(context, name + ".map.get.next", function);
-    llvm::BasicBlock* found_block = llvm::BasicBlock::Create(context, name + ".map.get.found", function);
-    llvm::BasicBlock* exit_block = llvm::BasicBlock::Create(context, name + ".map.get.exit", function);
-
-    builder.CreateBr(loop_block);
-    builder.SetInsertPoint(loop_block);
-    llvm::PHINode* index = builder.CreatePHI(i64, 2, name + ".map.get.i");
-    index->addIncoming(llvm::ConstantInt::get(i64, 0), preheader);
-    llvm::Value* in_bounds = builder.CreateICmpULT(index, length, name + ".map.get.in_bounds");
-    builder.CreateCondBr(in_bounds, body_block, exit_block);
-
-    builder.SetInsertPoint(body_block);
-    llvm::Value* entry_ptr = builder.CreateGEP(info->entry_type, data_ptr, index, name + ".map.get.entry");
-    llvm::Value* key_addr = builder.CreateStructGEP(info->entry_type, entry_ptr, 0, name + ".map.get.key.addr");
-    llvm::Value* existing_key = builder.CreateLoad(info->key_type, key_addr, name + ".map.get.key");
-    llvm::Value* matches = emit_key_match(builder, existing_key, key_value, name + ".map.get");
-    if (matches == nullptr) {
-        add_codegen_error(call_node, "Map key comparison currently supports integer, float, and pointer-like keys.");
-        return nullptr;
-    }
-    builder.CreateCondBr(matches, found_block, next_block);
-
-    builder.SetInsertPoint(found_block);
-    llvm::Value* value_addr = builder.CreateStructGEP(info->entry_type, entry_ptr, 1, name + ".map.get.value.addr");
-    llvm::Value* found_value = builder.CreateLoad(info->value_type, value_addr, name + ".map.get.value");
-    builder.CreateStore(found_value, result_slot);
-    builder.CreateBr(exit_block);
-
-    builder.SetInsertPoint(next_block);
-    llvm::Value* next_index = builder.CreateAdd(index, llvm::ConstantInt::get(i64, 1), name + ".map.get.next_i");
-    index->addIncoming(next_index, next_block);
-    builder.CreateBr(loop_block);
-
-    builder.SetInsertPoint(exit_block);
-    return builder.CreateLoad(info->value_type, result_slot, name + ".map.get.result.value");
-}
-
-llvm::Value* ClythLLVMCodegen::emit_map_contains_key(const std::string& name, const ast::NodePtr& call_node, const semantic::SemanticResult& semantics) {
-    auto info = lookup_local_map(name);
-    if (!info || info->alloca == nullptr || info->entry_type == nullptr || info->array_type == nullptr) {
-        add_codegen_error(call_node, fmt::format("'{}' is not a Map<K,V>.", name));
-        return nullptr;
-    }
-
-    const auto args = call_arguments(call_node);
-    if (args.size() != 1) {
-        add_codegen_error(call_node, "contains_key(key) expects exactly one argument.");
-        return nullptr;
-    }
-
-    llvm::Value* key_value = emit_expression(args.front(), semantics);
-    if (key_value == nullptr) {
-        return nullptr;
-    }
-    if (key_value->getType() != info->key_type && key_value->getType()->isIntegerTy() && info->key_type->isIntegerTy()) {
-        key_value = builder.CreateIntCast(key_value, info->key_type, true, "mapcontainskeycast");
-    }
-    if (key_value->getType() != info->key_type) {
-        add_codegen_error(call_node, "contains_key(key) requires a key matching the Map<K,V> key type in this backend pass.");
-        return nullptr;
-    }
-
-    llvm::Function* function = builder.GetInsertBlock()->getParent();
-    llvm::Type* i1 = llvm::Type::getInt1Ty(context);
-    llvm::Type* i64 = llvm::Type::getInt64Ty(context);
-    llvm::Value* zero32 = llvm::ConstantInt::get(llvm::Type::getInt32Ty(context), 0);
-    llvm::Value* data_idx = llvm::ConstantInt::get(llvm::Type::getInt32Ty(context), 0);
-    llvm::Value* len_idx = llvm::ConstantInt::get(llvm::Type::getInt32Ty(context), 1);
-
-    llvm::AllocaInst* result_slot = create_entry_alloca(function, i1, name + ".map.contains_key.result");
-    builder.CreateStore(llvm::ConstantInt::getFalse(context), result_slot);
-
-    llvm::Value* data_addr = builder.CreateInBoundsGEP(info->array_type, info->alloca, {zero32, data_idx}, name + ".data.addr");
-    llvm::Value* len_addr = builder.CreateInBoundsGEP(info->array_type, info->alloca, {zero32, len_idx}, name + ".length.addr");
-    llvm::Value* data_ptr = builder.CreateLoad(llvm::PointerType::get(context, 0), data_addr, name + ".data");
-    llvm::Value* length = builder.CreateLoad(i64, len_addr, name + ".length");
-
-    llvm::BasicBlock* preheader = builder.GetInsertBlock();
-    llvm::BasicBlock* loop_block = llvm::BasicBlock::Create(context, name + ".map.contains_key.loop", function);
-    llvm::BasicBlock* body_block = llvm::BasicBlock::Create(context, name + ".map.contains_key.body", function);
-    llvm::BasicBlock* next_block = llvm::BasicBlock::Create(context, name + ".map.contains_key.next", function);
-    llvm::BasicBlock* found_block = llvm::BasicBlock::Create(context, name + ".map.contains_key.found", function);
-    llvm::BasicBlock* exit_block = llvm::BasicBlock::Create(context, name + ".map.contains_key.exit", function);
-
-    builder.CreateBr(loop_block);
-    builder.SetInsertPoint(loop_block);
-    llvm::PHINode* index = builder.CreatePHI(i64, 2, name + ".map.contains_key.i");
-    index->addIncoming(llvm::ConstantInt::get(i64, 0), preheader);
-    llvm::Value* in_bounds = builder.CreateICmpULT(index, length, name + ".map.contains_key.in_bounds");
-    builder.CreateCondBr(in_bounds, body_block, exit_block);
-
-    builder.SetInsertPoint(body_block);
-    llvm::Value* entry_ptr = builder.CreateGEP(info->entry_type, data_ptr, index, name + ".map.contains_key.entry");
-    llvm::Value* key_addr = builder.CreateStructGEP(info->entry_type, entry_ptr, 0, name + ".map.contains_key.key.addr");
-    llvm::Value* existing_key = builder.CreateLoad(info->key_type, key_addr, name + ".map.contains_key.key");
-    llvm::Value* matches = emit_key_match(builder, existing_key, key_value, name + ".map.contains_key");
-    if (matches == nullptr) {
-        add_codegen_error(call_node, "Map key comparison currently supports integer, float, and pointer-like keys.");
-        return nullptr;
-    }
-    builder.CreateCondBr(matches, found_block, next_block);
-
-    builder.SetInsertPoint(found_block);
-    builder.CreateStore(llvm::ConstantInt::getTrue(context), result_slot);
-    builder.CreateBr(exit_block);
-
-    builder.SetInsertPoint(next_block);
-    llvm::Value* next_index = builder.CreateAdd(index, llvm::ConstantInt::get(i64, 1), name + ".map.contains_key.next_i");
-    index->addIncoming(next_index, next_block);
-    builder.CreateBr(loop_block);
-
-    builder.SetInsertPoint(exit_block);
-    return builder.CreateLoad(i1, result_slot, name + ".map.contains_key.value");
 }
 
 llvm::AllocaInst* ClythLLVMCodegen::create_entry_alloca(llvm::Function* function, llvm::Type* type, const std::string& name) {
@@ -3739,7 +3588,6 @@ void ClythLLVMCodegen::push_local_scope() {
     current_scope->local_array_scopes.emplace_back();
     current_scope->local_dynamic_array_scopes.emplace_back();
     current_scope->local_string_scopes.emplace_back();
-    current_scope->local_map_scopes.emplace_back();
 }
 
 void ClythLLVMCodegen::pop_local_scope() {
@@ -3759,9 +3607,6 @@ void ClythLLVMCodegen::pop_local_scope() {
     }
     if (!current_scope->local_string_scopes.empty()) {
         current_scope->local_string_scopes.pop_back();
-    }
-    if (!current_scope->local_map_scopes.empty()) {
-        current_scope->local_map_scopes.pop_back();
     }
 }
 
@@ -3806,6 +3651,17 @@ std::optional<std::string> ClythLLVMCodegen::lookup_symbol_type_name(const std::
     auto global_it = global_type_names.find(name);
     if (global_it != global_type_names.end()) {
         return global_it->second;
+    }
+
+    if (current_scope && !current_scope->this_type_name.empty()) {
+        auto struct_it = structs.find(current_scope->this_type_name);
+        if (struct_it != structs.end()) {
+            const StructInfo& info = struct_it->second;
+            auto field_it = info.field_indices.find(name);
+            if (field_it != info.field_indices.end() && field_it->second < info.field_type_names.size()) {
+                return info.field_type_names[field_it->second];
+            }
+        }
     }
 
     return std::nullopt;
@@ -3877,31 +3733,6 @@ std::optional<ClythLLVMCodegen::LocalStringInfo> ClythLLVMCodegen::lookup_local_
     }
 
     for (auto it = current_scope->local_string_scopes.rbegin(); it != current_scope->local_string_scopes.rend(); ++it) {
-        auto found = it->find(name);
-        if (found != it->end()) {
-            return found->second;
-        }
-    }
-
-    return std::nullopt;
-}
-
-bool ClythLLVMCodegen::register_local_map(const std::string& name, const LocalMapInfo& info) {
-    if (!current_scope || current_scope->local_map_scopes.empty()) {
-        diagnostics.add_error(SourceLocation{}, fmt::format("Internal codegen error: no map scope exists while registering '{}'.", name));
-        return false;
-    }
-
-    current_scope->local_map_scopes.back()[name] = info;
-    return true;
-}
-
-std::optional<ClythLLVMCodegen::LocalMapInfo> ClythLLVMCodegen::lookup_local_map(const std::string& name) const {
-    if (!current_scope) {
-        return std::nullopt;
-    }
-
-    for (auto it = current_scope->local_map_scopes.rbegin(); it != current_scope->local_map_scopes.rend(); ++it) {
         auto found = it->find(name);
         if (found != it->end()) {
             return found->second;

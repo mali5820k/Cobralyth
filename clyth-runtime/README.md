@@ -50,11 +50,13 @@ Arrays are compact primitives with `data` and `length`. Growable capacity belong
 
 ## Alpha 0.4 Pass 2 Bridge
 
-The compiler now pulls `module-collections` source into the combined compilation unit when `List<T>`, `Set<T>`, or `Map<K,V>` are referenced. In this bridge pass, generic templates are still stripped before the current backend sees them, but runtime module resolution is now part of the compile path.
+Runtime modules are imported explicitly. Collection types become visible through `include "collections"`; the compiler no longer injects List/Set/Map sources by scanning for container names. The old scaffold-backed List/Set/Map lowering path has been removed from the active backend; runtime collections lower through ordinary generic structs, constructors, methods, compact arrays, and keyed-array literals.
 
 Explicit stack-style construction is also accepted during the migration:
 
 ```clyth
+include "collections"
+
 List<int32> values = List([1, 2, 3])
 Set<int32> unique = Set([1, 2, 2])
 Map<int32, int32> table = Map([1: 10, 2: 20])

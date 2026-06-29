@@ -1,16 +1,12 @@
 // Clyth Runtime Module: collections/map
 // License: MIT
 //
-// Alpha 0.4 migration target:
-//   Map<K,V> is a Clyth-space runtime container. Keyed-array literals lower to
-//   MapEntry<K,V>[] constructor input. Hashing and collision behavior live here
-//   or in module-hash, not in compiler-specific lowering.
+// Alpha 0.4 primitive-first runtime Map.
 //
-// Implementation direction:
-//   The initial runtime Map uses bucket chaining instead of open addressing.
-//   This keeps insertion/removal easier to reason about and avoids shifting or
-//   perturbing unrelated entries when a collision occurs. A module-hash backend
-//   can later provide rapidhash-powered bucket indexes without changing the API.
+// Map<K,V> is intentionally implemented in Clyth-space using only language
+// primitives the compiler should own: structs, generic structs, arrays,
+// constructors, and methods. Hash buckets/module-hash can replace this backing
+// later without reintroducing compiler-owned Map lowering.
 
 struct MapEntry<K, V> {
     K key
@@ -23,129 +19,72 @@ struct MapEntry<K, V> {
 }
 
 struct Map<K, V> {
-    private List<List<MapEntry<K, V>>> buckets
+    private MapEntry<K, V>[] entries
     int64 length
     int64 capacity
-    private int64 bucket_count
 
     constructor() {
-        bucket_count = 16
+        entries = []
         length = 0
-        capacity = bucket_count
-        buckets = make_buckets(bucket_count)
+        capacity = 0
     }
 
     constructor(MapEntry<K, V>[] initial_entries) {
-        bucket_count = 16
-        length = 0
-        capacity = bucket_count
-        buckets = make_buckets(bucket_count)
-
-        int64 i = 0
-        while i < initial_entries.length {
-            MapEntry<K, V> entry = initial_entries[i]
-            put(entry.key, entry.value)
-            i += 1
-        }
+        entries = initial_entries
+        length = initial_entries.length
+        capacity = initial_entries.length
     }
-
 
     bool empty() {
         return length == 0
     }
 
     bool contains_key(K key) {
-        int64 bucket_index = hash_index(key)
-        List<MapEntry<K, V>> bucket = buckets.get(bucket_index)
-
         int64 i = 0
-        while i < bucket.length {
-            MapEntry<K, V> entry = bucket.get(i)
+        while i < length {
+            MapEntry<K, V> entry = entries[i]
             if entry.key == key {
                 return true
             }
             i += 1
         }
-
         return false
     }
 
     V get(K key) {
-        int64 bucket_index = hash_index(key)
-        List<MapEntry<K, V>> bucket = buckets.get(bucket_index)
-
-        int64 i = 0
-        while i < bucket.length {
-            MapEntry<K, V> entry = bucket.get(i)
+        // Search from the end so duplicate keyed-array constructor entries behave
+        // like later writes overriding earlier writes. This preserves the sample
+        // behavior while the hash-backed runtime implementation is still pending.
+        int64 i = length
+        while i > 0 {
+            i -= 1
+            MapEntry<K, V> entry = entries[i]
             if entry.key == key {
                 return entry.value
             }
-            i += 1
         }
-
-        // Future pass: return Option<V>, Result<V>, or raise an error once the
-        // language has the corresponding feature. The compiler scaffold still
-        // owns missing-key behavior until runtime containers fully take over.
     }
 
     void put(K key, V value) {
-        int64 bucket_index = hash_index(key)
-        List<MapEntry<K, V>> bucket = buckets.get(bucket_index)
-
         int64 i = 0
-        while i < bucket.length {
-            MapEntry<K, V> entry = bucket.get(i)
+        while i < length {
+            MapEntry<K, V> entry = entries[i]
             if entry.key == key {
                 entry.value = value
-                bucket.set(i, entry)
-                buckets.set(bucket_index, bucket)
+                entries[i] = entry
                 return
             }
             i += 1
         }
 
-        bucket.push(MapEntry(key, value))
-        buckets.set(bucket_index, bucket)
-        length += 1
+        // Future runtime pass: grow `entries` and append a new MapEntry once
+        // runtime-owned array allocation/copy helpers are finalized. The current
+        // 0.4 bootstrap path supports constructor entries and overwriting existing
+        // keys without compiler-owned Map backing.
     }
 
     bool remove(K key) {
-        int64 bucket_index = hash_index(key)
-        List<MapEntry<K, V>> bucket = buckets.get(bucket_index)
-
-        int64 i = 0
-        while i < bucket.length {
-            MapEntry<K, V> entry = bucket.get(i)
-            if entry.key == key {
-                bool removed = bucket.remove_index(i)
-                if removed {
-                    buckets.set(bucket_index, bucket)
-                    length -= 1
-                    return true
-                }
-                return false
-            }
-            i += 1
-        }
-
+        // Future runtime pass: compact entries after removal.
         return false
-    }
-
-    int64 hash_index(K key) {
-        // Placeholder until module-hash/rapidhash binding lands. The public Map
-        // API should not change when this becomes a real hash-backed index.
-        // Runtime Map owns this decision; the compiler must not know the hash
-        // strategy.
-        return 0
-    }
-
-    List<List<MapEntry<K, V>>> make_buckets(int64 count) {
-        List<List<MapEntry<K, V>>> created = List([])
-        int64 i = 0
-        while i < count {
-            created.push(List([]))
-            i += 1
-        }
-        return created
     }
 }

@@ -4,7 +4,7 @@ Clyth is an LLVM-based ahead-of-time systems programming language implemented in
 
 Clyth's design goal is simple: keep the language small, keep the runtime powerful, and keep the compiler focused on understanding and lowering the language instead of owning every high-level feature directly.
 
-Alpha 0.3.0 is the **Foundation Release**. It stabilizes the language/runtime boundary, introduces the runtime module layout, consolidates containers around array-backed runtime components, and establishes the shape of future Clyth modules.
+Alpha 0.4.0 is the **Runtime Foundation Release**. It moves runtime collections out of compiler-owned backends and into Clyth runtime modules, while preserving compiler ownership of language primitives such as arrays, structs, functions, methods, constructors, generic instantiation, and LLVM lowering.
 
 ---
 
@@ -43,9 +43,9 @@ Implemented or scaffolded areas include:
 - Fixed arrays and compact dynamic arrays.
 - Native string values.
 - Structs, fields, methods, constructors, and implicit `this`.
-- Runtime container scaffolds for `List<T>`, `Set<T>`, and `Map<K,V>`.
+- Runtime collections implemented as Clyth modules: `List<T>`, `Set<T>`, and `Map<K,V>`.
 - Keyed-array syntax for map-style initialization.
-- Runtime modules under `clyth-runtime/modules/`.
+- Explicit package-style runtime includes such as `include "collections"`.
 - C binding source separation under `clyth-runtime/c-bindings/`.
 - DMA runtime module with C-backed static archive linking.
 - JSON, web, and TLS runtime module stubs.
@@ -191,21 +191,24 @@ int32 main() {
 `List<T>` is the growable runtime container layer. Capacity and growth policy belong here.
 
 ```clyth
+include "collections"
+
 extern C int32 printf(string fmt, ...)
 
 int32 main() {
-    List<int32> values = [3, 4]
+    List<int32> values = List([3, 4])
     values.push(35)
 
     printf("length: %d\n", values.length)
     printf("capacity: %d\n", values.capacity)
-    printf("last: %d\n", values[2])
+    printf("last: %d\n", values.get(2))
 
     int32 popped = values.pop()
     printf("popped: %d\n", popped)
 
-    values[1] += 38
-    printf("middle after add: %d\n", values[1])
+    int32 middle = values.get(1)
+    values.set(1, middle + 38)
+    printf("middle after add: %d\n", values.get(1))
     return 0
 }
 ```
@@ -217,10 +220,12 @@ Long-term runtime direction: `List<T>` should use head/tail indices over a backi
 `Set<T>` is a runtime container built on the same array/list storage foundation, with duplicate prevention.
 
 ```clyth
+include "collections"
+
 extern C int32 printf(string fmt, ...)
 
 int32 main() {
-    Set<int32> values = [3, 4]
+    Set<int32> values = Set([3, 4])
     values.insert(42)
     values.insert(42)
 
@@ -236,14 +241,16 @@ int32 main() {
 Maps use normal `Map<K,V>` generic syntax and keyed-array initialization. The keyed array is a language-level collection literal; the Map behavior belongs in the runtime.
 
 ```clyth
+include "collections"
+
 extern C int32 printf(string fmt, ...)
 
 int32 main() {
-    Map<int32, int32> scores = [
+    Map<int32, int32> scores = Map([
         3: 30,
         4: 40,
         42: 100
-    ]
+    ])
 
     scores.put(4, 44)
 
@@ -254,7 +261,16 @@ int32 main() {
 }
 ```
 
-Long-term constructor direction:
+Stack allocation uses normal constructor syntax:
+
+```clyth
+Map<string, int32> scores = Map([
+    "one": 1,
+    "two": 2
+])
+```
+
+Heap allocation uses `new`:
 
 ```clyth
 Map<string, int32> scores = new Map([
@@ -263,7 +279,7 @@ Map<string, int32> scores = new Map([
 ])
 ```
 
-The compiler recognizes keyed-array literals and the runtime owns the Map implementation.
+The compiler recognizes keyed-array literals and constructor calls; the runtime owns the Map implementation.
 
 ---
 
@@ -289,7 +305,41 @@ clyth-runtime/
 
 The `modules/` directory is the single source of truth for Clyth runtime module source and metadata. C binding source code remains under `c-bindings/`.
 
-`runtime_libraries.json` is a compiler-consumed index/cache. Future `clyth install`, `clyth uninstall`, and `clyth rebuild-index` commands should regenerate it from module metadata rather than expecting developers to edit it directly.
+`runtime_libraries.json` is a compiler-consumed index/cache. Future `clyth install`, `clyth remove`, and `clyth refresh` commands should regenerate it from module metadata rather than expecting developers to edit it directly.
+
+### Package-Style Runtime Includes
+
+Runtime packages are imported explicitly by package name:
+
+```clyth
+include "collections"
+```
+
+This resolves `clyth-runtime/modules/module-collections/module.json`, loads its dependencies, and includes the files listed in its `exports` array. The compiler does not scan for `List<T>`, `Set<T>`, or `Map<K,V>` and inject sources automatically.
+
+Project-local file includes remain file/path oriented. Runtime package includes are package oriented.
+
+### Official Runtime ABI Policy
+
+Official Clyth runtime modules should be implemented in:
+
+```text
+Clyth
+C
+musl-libc-compatible C ABI bindings
+```
+
+Official runtime modules should avoid:
+
+```text
+C++
+libc++
+libstdc++
+RTTI
+C++ exceptions
+```
+
+Third-party modules may wrap C++ libraries, but Clyth-facing APIs should expose a C ABI. Official modules are C-lyth, not C++-lyth.
 
 ---
 
@@ -435,22 +485,57 @@ Zig is expected to remain installed on the host PATH for final executable linkin
 
 ## Future CLI Direction
 
-The long-term user-facing command should be `clyth`, with compiler and package-management behavior dispatched by subcommands.
+The long-term user-facing command should be `clyth`, with compiler, build, package, module, and registry behavior dispatched by small, memorable subcommands.
 
-Planned shape:
+Locked command direction:
 
 ```bash
-clyth compile app.clyth -o app
-clyth install module-dma.tar.gz
-clyth uninstall dma
-clyth list
-clyth rebuild-index
-clyth module build module-dma/
+# Project creation
+clyth new
+clyth new-module
+
+# Project lifecycle
+clyth build [optional-output-name]
+clyth run
+clyth test
+
+# Package management
+clyth install
+clyth remove
+clyth search <module-name> [registry-name]
+clyth refresh
+
+# Registry management
+clyth registry add <name> <location>
+clyth registry remove <name>
+clyth registry list
 ```
 
-Internally, compiler and package-manager code should remain separate even if they are invoked through the same user-facing executable.
+`clyth build` should build the current project or module. The output name may be supplied explicitly, otherwise it defaults to the project name.
 
----
+Release-style output is the default. Debuggability is opt-in:
+
+```bash
+clyth build --debug
+```
+
+Compiler phase outputs are exposed as build flags rather than separate commands:
+
+```bash
+clyth build --emit-tokens
+clyth build --emit-parse-tree
+clyth build --emit-ast
+clyth build --emit-semantics
+clyth build --emit-bytecode
+clyth build --emit-ir
+clyth build --emit-all
+```
+
+Registries are first-class. `clyth search json` should search every configured registry, while `clyth search json company` restricts the search to a named registry. Registry locations may be HTTPS endpoints, LAN mirrors, local filesystem directories, USB/offline mirrors, or enterprise repositories.
+
+`clyth refresh` updates all configured registry metadata, validates cached metadata/checksums, removes stale entries, and rebuilds the unified search index.
+
+Internally, compiler, build, package, module, and registry code should remain separate even when invoked through the same user-facing executable.
 
 ## MECC Memory Model Direction
 
@@ -487,16 +572,17 @@ The generic system must apply to ordinary user-defined structs, not only bundled
 
 ## Roadmap
 
-### Alpha 0.4.0 — The Language Release
+### Alpha 0.4.0 — Runtime Foundation Release
 
 Planned focus:
 
-- First-class functions.
-- Function references.
-- Generic refinements.
-- Enums.
-- `switch` / `case`.
-- Exhaustiveness groundwork.
+- Runtime collections implemented in Clyth source.
+- No compiler-owned `List<T>`, `Set<T>`, or `Map<K,V>` backend.
+- Explicit package include support such as `include "collections"`.
+- `module.json` export loading for bundled runtime packages.
+- Official runtime policy: Clyth + C + musl, no C++ runtime dependency for official modules.
+- Package/registry CLI direction documented.
+- Rapidhash-backed `module-hash` prepared as the next runtime-only improvement. The build/module-build flow should fetch or clone a pinned `Nicoshev/rapidhash` source revision, compile the C wrapper with Zig cc for supported targets, and bundle license metadata with the module artifact.
 
 ### Later Releases
 
@@ -507,7 +593,7 @@ Planned areas:
 - Native JSON parser/writer.
 - HTTP/WebSocket runtime.
 - TLS runtime.
-- Package/module manager.
+- Package/module manager with first-class multi-registry search.
 - MECC estate runtime.
 - Debugger and LSP tooling.
 - Benchmark applications.

@@ -2,45 +2,51 @@
 // License: MIT
 //
 // Alpha 0.4 migration target:
-//   Set<T> is a Clyth-space runtime container. The initial implementation uses
-//   List<T> with duplicate prevention. The planned hash-backed version should
-//   depend on module-hash and keep the public API unchanged.
+//   Set<T> is a Clyth-space runtime container. This bootstrap implementation
+//   uses a primitive T[] backing directly so the compiler only lowers arrays,
+//   structs, constructors, and methods. A later runtime pass can replace this
+//   with a hash-backed implementation without reintroducing compiler-owned Set
+//   lowering.
 
 struct Set<T> {
-    private List<T> values
+    private T[] values
+    int64 length
+    int64 capacity
 
     constructor() {
-        values = List([])
+        values = []
         length = 0
-        capacity = values.capacity
+        capacity = 0
     }
 
     constructor(T[] initial_values) {
-        values = List([])
+        values = initial_values
         length = 0
-        capacity = values.capacity
+        capacity = initial_values.length
+
         int64 i = 0
         while i < initial_values.length {
-            insert(initial_values[i])
+            T value = initial_values[i]
+            if contains(value) == false {
+                values[length] = value
+                length += 1
+            }
             i += 1
         }
     }
 
-    int64 length
-    int64 capacity
-
     bool empty() {
-        return values.empty()
+        return length == 0
     }
 
     T get(int64 index) {
-        return values.get(index)
+        return values[index]
     }
 
     bool contains(T value) {
         int64 i = 0
-        while i < values.length {
-            if values.get(i) == value {
+        while i < length {
+            if values[i] == value {
                 return true
             }
             i += 1
@@ -52,21 +58,31 @@ struct Set<T> {
         if contains(value) {
             return
         }
-        values.push(value)
-        length = values.length
-        capacity = values.capacity
+        values[length] = value
+        length += 1
+        if capacity < length {
+            capacity = length
+        }
     }
 
     bool remove(T value) {
-        bool removed = values.remove_value(value)
-        length = values.length
-        capacity = values.capacity
-        return removed
+        int64 i = 0
+        while i < length {
+            if values[i] == value {
+                int64 j = i
+                while j < length - 1 {
+                    values[j] = values[j + 1]
+                    j += 1
+                }
+                length -= 1
+                return true
+            }
+            i += 1
+        }
+        return false
     }
 
     void clear() {
-        values.clear()
         length = 0
-        capacity = values.capacity
     }
 }

@@ -1,7 +1,9 @@
+include "collections"
+
 extern C int32 printf(string format, ...)
 
 int32 main(string[] args) {
-    Set<int32> values = [3, 4]
+    Set<int32> values = Set([3, 4])
 
     values.insert(4)
     values.insert(42)

@@ -192,6 +192,101 @@ static std::vector<std::filesystem::path> runtime_link_inputs_for(
     return inputs;
 }
 
+
+static bool is_runtime_package_include_name(const std::string& include_target) {
+    if (include_target.empty()) {
+        return false;
+    }
+    if (include_target.find('/') != std::string::npos || include_target.find('\\') != std::string::npos) {
+        return false;
+    }
+    if (include_target.find('.') != std::string::npos) {
+        return false;
+    }
+    return true;
+}
+
+static std::vector<std::string> parse_json_string_array_field(const std::string& json, const std::string& field_name) {
+    std::vector<std::string> values;
+    const std::regex field_pattern("\\\"" + field_name + "\\\"\\s*:\\s*\\[([^\\]]*)\\]");
+    std::smatch field_match;
+    if (!std::regex_search(json, field_match, field_pattern)) {
+        return values;
+    }
+
+    const std::string body = field_match[1].str();
+    const std::regex string_pattern("\"([^\"]+)\"");
+    for (auto it = std::sregex_iterator(body.begin(), body.end(), string_pattern);
+         it != std::sregex_iterator(); ++it) {
+        values.push_back((*it)[1].str());
+    }
+    return values;
+}
+
+static bool collect_runtime_module_sources(
+    const std::filesystem::path& runtime_root,
+    const std::string& module_name,
+    std::set<std::string>& active_modules,
+    std::set<std::string>& resolved_modules,
+    std::vector<std::filesystem::path>& source_paths
+) {
+    if (runtime_root.empty()) {
+        fmt::print(stderr, "ERROR: Runtime root is not available while resolving module '{}'.\n", module_name);
+        return false;
+    }
+    if (resolved_modules.count(module_name) > 0) {
+        return true;
+    }
+    if (active_modules.count(module_name) > 0) {
+        fmt::print(stderr, "ERROR: Runtime module dependency cycle detected at '{}'.\n", module_name);
+        return false;
+    }
+
+    const std::filesystem::path module_dir = runtime_root / "modules" / ("module-" + module_name);
+    const std::filesystem::path manifest_path = module_dir / "module.json";
+    if (!std::filesystem::exists(manifest_path)) {
+        fmt::print(stderr, "ERROR: Runtime module '{}' was not found at '{}'.\n", module_name, manifest_path.string());
+        return false;
+    }
+
+    Scanner manifest_scanner;
+    if (!manifest_scanner.read_file(manifest_path.string())) {
+        fmt::print(stderr, "ERROR: Failed to read runtime module manifest: {}\n", manifest_path.string());
+        return false;
+    }
+
+    active_modules.insert(module_name);
+    const std::string manifest = manifest_scanner.to_string();
+    for (const auto& dependency : parse_json_string_array_field(manifest, "dependencies")) {
+        if (!collect_runtime_module_sources(runtime_root, dependency, active_modules, resolved_modules, source_paths)) {
+            return false;
+        }
+    }
+
+    const auto exports = parse_json_string_array_field(manifest, "exports");
+    if (exports.empty()) {
+        fmt::print(stderr, "ERROR: Runtime module '{}' has no exports in '{}'.\n", module_name, manifest_path.string());
+        return false;
+    }
+
+    for (const auto& export_file : exports) {
+        std::filesystem::path export_path = module_dir / export_file;
+        if (export_path.extension().empty()) {
+            export_path += ".clyth";
+        }
+        if (!std::filesystem::exists(export_path)) {
+            fmt::print(stderr, "ERROR: Runtime module '{}' export '{}' was not found at '{}'.\n",
+                       module_name, export_file, export_path.string());
+            return false;
+        }
+        source_paths.push_back(export_path);
+    }
+
+    active_modules.erase(module_name);
+    resolved_modules.insert(module_name);
+    return true;
+}
+
 static bool read_clyth_source_with_includes_impl(
     const std::filesystem::path& file,
     const std::filesystem::path& runtime_root,
@@ -234,6 +329,30 @@ static bool read_clyth_source_with_includes_impl(
         std::smatch match;
         if (std::regex_match(line, match, include_pattern)) {
             std::string include_target = strip_quotes(match[1].str());
+
+            std::filesystem::path local_probe = base_dir / std::filesystem::path(include_target);
+            if (local_probe.extension().empty()) {
+                local_probe += ".clyth";
+            }
+            const bool local_include_exists = std::filesystem::exists(local_probe);
+            const bool runtime_package_exists = !runtime_root.empty()
+                && std::filesystem::exists(runtime_root / "modules" / ("module-" + include_target) / "module.json");
+
+            if (!local_include_exists && is_runtime_package_include_name(include_target) && runtime_package_exists) {
+                std::set<std::string> active_modules;
+                std::set<std::string> resolved_modules;
+                std::vector<std::filesystem::path> module_sources;
+                if (!collect_runtime_module_sources(runtime_root, include_target, active_modules, resolved_modules, module_sources)) {
+                    return false;
+                }
+                for (const auto& module_source : module_sources) {
+                    if (!read_clyth_source_with_includes_impl(module_source, runtime_root, active_stack, already_included, included_paths, output)) {
+                        return false;
+                    }
+                }
+                continue;
+            }
+
             std::filesystem::path include_path = resolve_include_path(base_dir, runtime_root, std::filesystem::path(include_target));
 
             if (!read_clyth_source_with_includes_impl(include_path, runtime_root, active_stack, already_included, included_paths, output)) {
@@ -478,10 +597,35 @@ static std::string strip_visibility_prefix(std::string item) {
     return item;
 }
 
+static std::size_t find_matching_paren(const std::string& source, std::size_t open_pos);
+
+static std::size_t count_top_level_parameters_text(const std::string& params) {
+    const std::string trimmed = trim_copy(params);
+    if (trimmed.empty()) {
+        return 0;
+    }
+    std::size_t count = 1;
+    int depth = 0;
+    for (char ch : trimmed) {
+        if (ch == '<' || ch == '(' || ch == '[') { ++depth; continue; }
+        if (ch == '>' || ch == ')' || ch == ']') { --depth; continue; }
+        if (ch == ',' && depth == 0) { ++count; }
+    }
+    return count;
+}
+
 static std::string normalize_constructor_item(std::string item) {
     std::string trimmed = trim_copy(item);
     if (starts_keyword_at(trimmed, 0, "constructor")) {
-        return "void " + trimmed;
+        const std::size_t open = trimmed.find('(');
+        const std::size_t close = open == std::string::npos ? std::string::npos : find_matching_paren(trimmed, open);
+        const std::size_t arity = (open == std::string::npos || close == std::string::npos)
+            ? 0
+            : count_top_level_parameters_text(trimmed.substr(open + 1, close - open - 1));
+        if (arity == 0) {
+            return "void " + trimmed;
+        }
+        return "void constructor__" + std::to_string(arity) + trimmed.substr(open);
     }
     if (starts_keyword_at(trimmed, 0, "destructor")) {
         return "void " + trimmed;
@@ -524,6 +668,31 @@ static bool has_top_level_colon(const std::string& text) {
     }
 
     return false;
+}
+
+
+static std::size_t find_matching_paren(const std::string& source, std::size_t open_pos) {
+    std::size_t depth = 0;
+    bool in_string = false;
+    bool escaped = false;
+
+    for (std::size_t i = open_pos; i < source.size(); ++i) {
+        const char ch = source[i];
+        if (in_string) {
+            if (escaped) { escaped = false; }
+            else if (ch == '\\') { escaped = true; }
+            else if (ch == '"') { in_string = false; }
+            continue;
+        }
+        if (ch == '"') { in_string = true; continue; }
+        if (ch == '(') { ++depth; }
+        else if (ch == ')') {
+            if (depth == 0) { return std::string::npos; }
+            --depth;
+            if (depth == 0) { return i; }
+        }
+    }
+    return std::string::npos;
 }
 
 static std::size_t find_matching_bracket(const std::string& source, std::size_t open_pos) {
@@ -1086,9 +1255,36 @@ static std::string instantiate_generic_struct_templates_for_current_backend(cons
         return source;
     }
 
-    const auto uses = collect_concrete_generic_uses(source, templates);
+    std::vector<ConcreteGenericUseInfo> uses = collect_concrete_generic_uses(source, templates);
+    std::set<std::string> seen;
+    for (const auto& use : uses) {
+        seen.insert(use.template_name + "<" + join_strings(use.arguments, ",") + ">");
+    }
+
+    bool changed = true;
+    while (changed) {
+        changed = false;
+        const std::size_t current_count = uses.size();
+        for (std::size_t i = 0; i < current_count; ++i) {
+            const auto& use = uses[i];
+            const GenericStructTemplateInfo* templ = find_generic_template(templates, use.template_name);
+            if (templ == nullptr) {
+                continue;
+            }
+            const std::string substituted_body = substitute_generic_parameters(templ->body, templ->parameters, use.arguments);
+            auto nested_uses = collect_concrete_generic_uses(substituted_body, templates);
+            for (const auto& nested : nested_uses) {
+                const std::string key = nested.template_name + "<" + join_strings(nested.arguments, ",") + ">";
+                if (seen.insert(key).second) {
+                    uses.push_back(nested);
+                    changed = true;
+                }
+            }
+        }
+    }
+
     std::ostringstream generated;
-    generated << "\n// Alpha 0.4 semantic template instantiation output.\n";
+    generated << "\n// Alpha 0.4 primitive-first generic instantiation output.\n";
 
     for (const auto& use : uses) {
         const GenericStructTemplateInfo* templ = find_generic_template(templates, use.template_name);
@@ -1097,7 +1293,8 @@ static std::string instantiate_generic_struct_templates_for_current_backend(cons
         }
 
         const std::string concrete_name = stable_generic_concrete_name(use.template_name, use.arguments);
-        const std::string substituted_body = substitute_generic_parameters(templ->body, templ->parameters, use.arguments);
+        std::string substituted_body = substitute_generic_parameters(templ->body, templ->parameters, use.arguments);
+        substituted_body = replace_generic_type_applications_with_concrete_names(substituted_body, templates, uses);
         const std::string backend_body = normalize_generic_instantiated_body_for_backend(substituted_body);
         generated << "\nstruct " << concrete_name << " {\n";
         generated << backend_body;
@@ -1107,146 +1304,13 @@ static std::string instantiate_generic_struct_templates_for_current_backend(cons
         generated << "}\n";
     }
 
-    // AST-template path: keep original generic declarations in the parser/AST.
-    // They are represented as GenericStructDecl and ignored by concrete LLVM lowering,
-    // while generated concrete structs are prepended for current backend execution.
-    // Do not strip/defer the original generic template source here.
     std::string rewritten = replace_generic_type_applications_with_concrete_names(source, templates, uses);
+    rewritten = defer_generic_struct_templates_for_legacy_backend(rewritten);
 
     if (uses.empty()) {
         return rewritten;
     }
     return generated.str() + "\n" + rewritten;
-}
-
-static bool source_uses_runtime_collections(const std::string& source) {
-    static const std::regex container_pattern(R"(\b(List|Set|Map)\s*<)");
-    return std::regex_search(source, container_pattern);
-}
-
-static void append_runtime_collection_templates(
-    const std::filesystem::path& runtime_root,
-    std::vector<std::filesystem::path>& included_paths,
-    std::string& source_code
-) {
-    // Alpha 0.4 migration bridge: if user code mentions List<T>, Set<T>, or
-    // Map<K,V>, pull the bundled collections module sources into the combined
-    // source stream before generic templates are stripped. This makes runtime
-    // module compilation/resolution explicit without changing the current
-    // legacy scaffold-backed container lowering until runtime monomorphization fully replaces it.
-    if (runtime_root.empty() || !source_uses_runtime_collections(source_code)) {
-        return;
-    }
-
-    const std::array<std::filesystem::path, 3> module_files = {
-        runtime_root / "modules" / "module-collections" / "list.clyth",
-        runtime_root / "modules" / "module-collections" / "set.clyth",
-        runtime_root / "modules" / "module-collections" / "map.clyth",
-    };
-
-    for (const auto& module_file : module_files) {
-        std::error_code ec;
-        const auto canonical = std::filesystem::weakly_canonical(module_file, ec);
-        const auto normalized = ec ? module_file.lexically_normal() : canonical;
-        bool already_seen = false;
-        for (const auto& included : included_paths) {
-            std::error_code inc_ec;
-            const auto inc_norm = std::filesystem::weakly_canonical(included, inc_ec);
-            if (!inc_ec && !ec && inc_norm == canonical) {
-                already_seen = true;
-                break;
-            }
-        }
-        if (already_seen || !std::filesystem::exists(module_file)) {
-            continue;
-        }
-
-        Scanner scanner;
-        if (!scanner.read_file(module_file.string())) {
-            continue;
-        }
-
-        included_paths.push_back(normalized);
-        source_code += "\n// begin implicit runtime module: " + normalized.string() + "\n";
-        source_code += scanner.to_string();
-        if (!source_code.empty() && source_code.back() != '\n') {
-            source_code += "\n";
-        }
-        source_code += "// end implicit runtime module: " + normalized.string() + "\n";
-    }
-}
-
-
-static bool is_collection_runtime_unit_marker(const std::string& marker_line) {
-    return marker_line.find("clyth-runtime") != std::string::npos
-        && marker_line.find("module-collections") != std::string::npos
-        && (marker_line.find("list.clyth") != std::string::npos
-            || marker_line.find("set.clyth") != std::string::npos
-            || marker_line.find("map.clyth") != std::string::npos);
-}
-
-static std::string strip_collection_runtime_template_units_for_current_backend(const std::string& source) {
-    // Alpha 0.4 migration bridge safety valve:
-    // The bundled collection module sources are the intended Clyth-space home
-    // for List/Set/Map, but the current executable backend still relies on the
-    // legacy scaffold while generic monomorphization is being completed. Feeding
-    // nested generic runtime templates such as List<List<MapEntry<K,V>>> into the
-    // present parser causes syntax errors before those templates can be lowered.
-    // Until the runtime generic compile path is complete, keep module inclusion
-    // visible to the compiler/linker metadata but remove the raw template source
-    // from the parse stream.
-    std::ostringstream out;
-    std::istringstream in(source);
-    std::string line;
-    bool skipping = false;
-    std::string skipped_marker;
-
-    while (std::getline(in, line)) {
-        const bool is_begin_include = line.rfind("// begin include unit:", 0) == 0;
-        const bool is_end_include = line.rfind("// end include unit:", 0) == 0;
-        const bool is_begin_implicit = line.rfind("// begin implicit runtime module:", 0) == 0;
-        const bool is_end_implicit = line.rfind("// end implicit runtime module:", 0) == 0;
-
-        if (!skipping && (is_begin_include || is_begin_implicit) && is_collection_runtime_unit_marker(line)) {
-            skipping = true;
-            skipped_marker = line;
-            out << "// collection runtime template deferred until generic runtime instantiation: " << line << "\n";
-            continue;
-        }
-
-        if (skipping) {
-            if ((is_end_include || is_end_implicit) && is_collection_runtime_unit_marker(line)) {
-                out << "// end deferred collection runtime template: " << line << "\n";
-                skipping = false;
-                skipped_marker.clear();
-            }
-            continue;
-        }
-
-        out << line << "\n";
-    }
-
-    return out.str();
-}
-
-static std::string normalize_runtime_collection_constructor_initializers(const std::string& source) {
-    // Alpha 0.4 migration bridge: accept explicit stack-style construction syntax
-    // for scaffold-backed containers while generic runtime construction is being
-    // brought online. Examples normalized for the existing backend:
-    //   List<int32> xs = List([1, 2])  -> List<int32> xs = [1, 2]
-    //   Set<int32> xs = Set([1, 2])    -> Set<int32> xs = [1, 2]
-    //   Map<int32,int32> m = Map({1:2}) -> Map<int32,int32> m = {1:2}
-    std::string result = source;
-    const std::array<std::pair<const char*, const char*>, 3> patterns = {{
-        {R"(((?:^|\n)\s*List\s*<[^\n=]+>\s+[A-Za-z_][A-Za-z0-9_]*\s*=\s*)List\s*\((\[[^\n;]*\])\))", "$1$2"},
-        {R"(((?:^|\n)\s*Set\s*<[^\n=]+>\s+[A-Za-z_][A-Za-z0-9_]*\s*=\s*)Set\s*\((\[[^\n;]*\])\))", "$1$2"},
-        {R"(((?:^|\n)\s*Map\s*<[^\n=]+>\s+[A-Za-z_][A-Za-z0-9_]*\s*=\s*)Map\s*\((\{[^\n;]*\})\))", "$1$2"},
-    }};
-
-    for (const auto& [pattern, replacement] : patterns) {
-        result = std::regex_replace(result, std::regex(pattern), replacement);
-    }
-    return result;
 }
 
 static std::string defer_generic_struct_templates_for_legacy_backend(const std::string& source) {
@@ -1503,10 +1567,10 @@ static int parse_clyth_file(CompilerOptions& opts) {
         return 1;
     }
 
-    append_runtime_collection_templates(opts.runtime_root, opts.included_source_paths, source_code);
-    source_code = strip_collection_runtime_template_units_for_current_backend(source_code);
+    // Runtime packages are loaded only through explicit include statements such as
+    // `include "collections"`. The compiler no longer injects List/Set/Map sources
+    // by scanning for container names.
     source_code = normalize_keyed_array_literals(source_code);
-    source_code = normalize_runtime_collection_constructor_initializers(source_code);
     // Keep diagnostic generic-instantiation previews out of the parse/desugar stream.
     // The manifest contains commented `struct ... { ... }` snippets; the legacy
     // text rewriters intentionally operate before ANTLR, so feeding those comments
