@@ -1,0 +1,29 @@
+extern C int32 printf(string fmt, ...)
+
+// Alpha 0.4 generic-instantiation pipeline smoke test.
+// These templates are intentionally ordinary user-defined structs, not
+// List/Set/Map. The current pass verifies that arbitrary generic templates can
+// be discovered, instantiated into concrete names, and used without relying on
+// collection-specific compiler behavior.
+struct Box<T> {
+    public T value
+}
+
+struct Pair<K, V> {
+    public K key
+    public V value
+}
+
+int32 main() {
+    Box<int32> int_box
+    Pair<int32, string> pair_value
+
+    int_box.value = 42
+    pair_value.key = 7
+    pair_value.value = "generic"
+
+    printf("generic box value: %d\n", int_box.value)
+    printf("generic pair key: %d\n", pair_value.key)
+    printf("generic pair value: %s\n", pair_value.value)
+    return 0
+}

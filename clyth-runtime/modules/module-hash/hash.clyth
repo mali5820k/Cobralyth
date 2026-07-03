@@ -1,0 +1,16 @@
+// Clyth Runtime Module: hash
+// License: MIT wrapper
+//
+// Alpha 0.4 status:
+//   Hashing is runtime-owned. This safe Clyth-only bootstrap implementation keeps
+//   modules depending on `hash` linkable until the rapidhash C binding is enabled.
+//   The future rapidhash backend should replace these bodies without changing the
+//   public Clyth API.
+
+uint64 hash_u64(uint64 value) {
+    return value
+}
+
+uint64 hash_i64(int64 value) {
+    return 0
+}

@@ -47,3 +47,19 @@ Each module has a `module.json` file. Clyth wrapper code and native C bindings a
 Compiler-backed primitives: arrays, strings, structs, functions, generic syntax, keyed-array literals, and lowering. Runtime-owned features: List, Set, Map, JSON, web/TLS wrappers, DMA APIs, estates, and future allocation policies.
 
 Arrays are compact primitives with `data` and `length`. Growable capacity belongs to runtime containers such as `List<T>`, `Set<T>`, and `Map<K,V>`.
+
+## Alpha 0.4 Pass 2 Bridge
+
+Runtime modules are imported explicitly. Collection types become visible through `include "collections"`; the compiler no longer injects List/Set/Map sources by scanning for container names. The old scaffold-backed List/Set/Map lowering path has been removed from the active backend; runtime collections lower through ordinary generic structs, constructors, methods, compact arrays, and keyed-array literals.
+
+Explicit stack-style construction is also accepted during the migration:
+
+```clyth
+include "collections"
+
+List<int32> values = List([1, 2, 3])
+Set<int32> unique = Set([1, 2, 2])
+Map<int32, int32> table = Map([1: 10, 2: 20])
+```
+
+This is normalized onto the existing scaffold-backed lowering until full monomorphization replaces it in the next passes.

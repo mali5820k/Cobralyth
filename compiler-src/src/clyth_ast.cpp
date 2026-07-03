@@ -133,6 +133,7 @@ std::string node_kind_name(NodeKind kind) {
         case NodeKind::IncludeDecl: return "IncludeDecl";
         case NodeKind::ExternDecl: return "ExternDecl";
         case NodeKind::StructDecl: return "StructDecl";
+        case NodeKind::GenericStructDecl: return "GenericStructDecl";
         case NodeKind::StructField: return "StructField";
         case NodeKind::MethodBlock: return "MethodBlock";
         case NodeKind::MethodDecl: return "MethodDecl";
@@ -579,11 +580,44 @@ std::any ClythAST::visitExternParam(ClythV1Parser::ExternParamContext* ctx) {
 }
 
 std::any ClythAST::visitStructDecl(ClythV1Parser::StructDeclContext* ctx) {
-    return build_generic(ast::NodeKind::StructDecl, ctx, "struct");
+    const std::string text = ctx->getText();
+    const bool is_generic_template = text.find('<') != std::string::npos
+        && text.find('<') < text.find('{');
+    auto node = build_generic(is_generic_template ? ast::NodeKind::GenericStructDecl : ast::NodeKind::StructDecl, ctx, "struct");
+    if (is_generic_template) {
+        node->attributes["generic_template"] = "true";
+    }
+    return node;
+}
+
+std::any ClythAST::visitGenericParamList(ClythV1Parser::GenericParamListContext* ctx) {
+    auto node = make_node(ast::NodeKind::Generic, ctx, "genericParamList");
+
+    if (ctx != nullptr) {
+        for (auto* identifier : ctx->IDENTIFIER()) {
+            if (identifier == nullptr) {
+                continue;
+            }
+
+            auto param = make_token_node(identifier);
+            param->label = "genericParam";
+            param->attributes["name"] = identifier->getText();
+            node->children.push_back(param);
+        }
+    }
+
+    return node;
 }
 
 std::any ClythAST::visitStructField(ClythV1Parser::StructFieldContext* ctx) {
     return build_generic(ast::NodeKind::StructField, ctx, "field");
+}
+
+std::any ClythAST::visitVisibilityModifier(ClythV1Parser::VisibilityModifierContext* ctx) {
+    auto node = make_node(ast::NodeKind::Generic, ctx, "visibilityModifier");
+    node->attributes["visibility"] = ctx != nullptr ? ctx->getText() : "";
+    node->text = ctx != nullptr ? ctx->getText() : "";
+    return node;
 }
 
 std::any ClythAST::visitMethodBlock(ClythV1Parser::MethodBlockContext* ctx) {

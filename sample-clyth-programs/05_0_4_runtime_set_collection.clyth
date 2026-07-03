@@ -1,7 +1,9 @@
+include "collections"
+
 extern C int32 printf(string format, ...)
 
 int32 main(string[] args) {
-    Set<int32> values = [3, 4]
+    Set<int32> values = Set([3, 4])
 
     values.insert(4)
     values.insert(42)
@@ -9,9 +11,9 @@ int32 main(string[] args) {
 
     printf("set length: %d\n", values.length)
     printf("set capacity: %d\n", values.capacity)
-    printf("first: %d\n", values[0])
-    printf("second: %d\n", values[1])
-    printf("third: %d\n", values[2])
+    printf("first: %d\n", values.get(0))
+    printf("second: %d\n", values.get(1))
+    printf("third: %d\n", values.get(2))
     printf("contains 42: %d\n", values.contains(42))
     printf("contains 99: %d\n", values.contains(99))
 

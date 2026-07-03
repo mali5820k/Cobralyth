@@ -1,0 +1,41 @@
+{
+  "name": "hash",
+  "version": "0.4.0-alpha",
+  "kind": "runtime-module",
+  "exports": [
+    "hash.clyth"
+  ],
+  "dependencies": [],
+  "wrapper": {
+    "license": "MIT"
+  },
+  "c_bindings": [
+    {
+      "name": "rapidhash",
+      "enabled": false,
+      "backend": "rapidhash",
+      "license": "MIT or compatible upstream license pending vendored-source verification",
+      "source_directory": "../../c-bindings/rapidhash",
+      "architectures": {}
+    }
+  ],
+  "status": "stub-until-rapidhash-pinned",
+  "notes": "Hashing is runtime-owned. Enable bindings only after a pinned rapidhash source revision and exact upstream license text are present.",
+  "bindings": {
+    "enabled": false,
+    "language": "c",
+    "build_system": "zig-cc",
+    "fetch": {
+      "type": "git",
+      "repository": "https://github.com/Nicoshev/rapidhash.git",
+      "ref": "PIN_COMMIT_OR_TAG_BEFORE_ENABLE"
+    },
+    "build": [
+      "zig cc -c ../../c-bindings/rapidhash/src/clyth_rapidhash.c -I ../../c-bindings/rapidhash/include -o build/clyth_rapidhash.o",
+      "zig ar rcs build/libclyth_hash_rapidhash.a build/clyth_rapidhash.o"
+    ],
+    "outputs": [
+      "build/libclyth_hash_rapidhash.a"
+    ]
+  }
+}

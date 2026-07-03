@@ -1,0 +1,20 @@
+include "collections"
+
+extern C int32 printf(string format, ...)
+
+int32 main(string[] args) {
+    List<int32> values = List([5, 6])
+    values.push(7)
+
+    Set<int32> unique = Set([1, 1, 2])
+    unique.insert(3)
+
+    Map<int32,int32> pairs = Map([9: 90, 10: 100])
+    pairs.put(10, 101)
+
+    printf("constructor list length: %d\n", values.length)
+    printf("constructor set contains 3: %d\n", unique.contains(3))
+    printf("constructor map value 10: %d\n", pairs.get(10))
+
+    return 0
+}

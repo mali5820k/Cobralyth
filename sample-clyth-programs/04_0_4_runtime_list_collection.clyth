@@ -1,21 +1,25 @@
+include "collections"
+
 extern C int32 printf(string format, ...)
 
 int32 main(string[] args) {
-    List<int32> numbers = [3, 4]
+    List<int32> numbers = List([3, 4])
 
     numbers.push(35)
 
     printf("list length: %d\n", numbers.length)
     printf("list capacity: %d\n", numbers.capacity)
-    printf("first: %d\n", numbers[0])
-    printf("last: %d\n", numbers[2])
+    printf("first: %d\n", numbers.get(0))
+    printf("last: %d\n", numbers.get(2))
 
     int32 popped = numbers.pop()
     printf("popped: %d\n", popped)
     printf("length after pop: %d\n", numbers.length)
 
-    numbers[1] += 38
-    printf("middle after add: %d\n", numbers[1])
+    int32 middle = numbers.get(1)
+    middle += 38
+    numbers.set(1, middle)
+    printf("middle after add: %d\n", numbers.get(1))
 
     return 0
 }

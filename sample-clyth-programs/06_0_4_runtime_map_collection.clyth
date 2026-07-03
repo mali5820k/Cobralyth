@@ -1,12 +1,14 @@
+include "collections"
+
 extern C int32 printf(string format, ...)
 
 int32 main(string[] args) {
-    Map<int32,int32> scores = [
+    Map<int32,int32> scores = Map([
         3: 30,
         4: 40,
         42: 100,
         4: 44
-    ]
+    ])
 
     printf("map length: %d\n", scores.length)
     printf("map capacity: %d\n", scores.capacity)

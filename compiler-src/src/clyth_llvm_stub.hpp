@@ -100,16 +100,6 @@ private:
         llvm::AllocaInst* alloca = nullptr;
     };
 
-    struct LocalMapInfo {
-        llvm::AllocaInst* alloca = nullptr;
-        llvm::StructType* array_type = nullptr;
-        llvm::StructType* entry_type = nullptr;
-        llvm::Type* key_type = nullptr;
-        llvm::Type* value_type = nullptr;
-        std::string key_type_name;
-        std::string value_type_name;
-    };
-
     struct FunctionScope {
         llvm::Function* function = nullptr;
         llvm::Type* return_type = nullptr;
@@ -118,7 +108,6 @@ private:
         std::vector<std::unordered_map<std::string, LocalArrayInfo>> local_array_scopes;
         std::vector<std::unordered_map<std::string, LocalDynamicArrayInfo>> local_dynamic_array_scopes;
         std::vector<std::unordered_map<std::string, LocalStringInfo>> local_string_scopes;
-        std::vector<std::unordered_map<std::string, LocalMapInfo>> local_map_scopes;
         std::string this_type_name;
     };
 
@@ -138,7 +127,6 @@ private:
     std::unordered_map<std::string, StructInfo> structs;
     std::unordered_map<std::string, MethodInfo> methods;
     std::unordered_map<std::string, llvm::StructType*> dynamic_array_types;
-    std::unordered_map<std::string, llvm::StructType*> map_entry_types;
     llvm::StructType* native_string_type = nullptr;
     std::unique_ptr<FunctionScope> current_scope;
     std::vector<LoopScope> loop_stack;
@@ -166,15 +154,20 @@ private:
     llvm::Value* emit_call_suffix(const std::string& callee_name, const ast::NodePtr& call_node, const semantic::SemanticResult& semantics);
     llvm::Value* emit_method_call_suffix(const std::string& receiver_name, const std::string& method_name, const ast::NodePtr& call_node, const semantic::SemanticResult& semantics);
     llvm::Value* emit_lvalue_address(const ast::NodePtr& node, const semantic::SemanticResult& semantics, llvm::Type** out_type = nullptr);
+    std::optional<std::string> resolve_lvalue_type_name(const ast::NodePtr& node) const;
     llvm::Value* emit_struct_field_address(const std::string& base_name, const ast::NodePtr& member_node, llvm::Type** out_type = nullptr);
     llvm::Value* emit_this_field_address(const std::string& field_name, const ast::NodePtr& node, llvm::Type** out_type = nullptr);
     bool maybe_emit_default_constructor_call(const std::string& type_name, llvm::Value* receiver_address, const ast::NodePtr& node);
+    bool maybe_emit_constructor_initializer(const std::string& type_name, llvm::Value* receiver_address, const ast::NodePtr& initializer, const semantic::SemanticResult& semantics);
+    llvm::Value* emit_dynamic_array_literal_value(const std::string& element_type_name, const ast::NodePtr& list_node, const semantic::SemanticResult& semantics);
+    llvm::Value* emit_keyed_dynamic_array_literal_value(const std::string& element_type_name, const ast::NodePtr& keyed_node, const semantic::SemanticResult& semantics);
+    void register_parameter_backing(const std::string& name, const std::string& type_name, llvm::AllocaInst* alloca);
     llvm::Value* emit_fixed_array_element_address(const std::string& name, const ast::NodePtr& index_node, const semantic::SemanticResult& semantics, llvm::Type** out_type = nullptr);
     bool emit_fixed_array_initializer(const std::string& name, const ast::NodePtr& list_node, const semantic::SemanticResult& semantics);
     llvm::StructType* dynamic_array_type_for(llvm::Type* element_type, const std::string& element_type_name, bool has_capacity = false);
-    llvm::StructType* map_entry_type_for(llvm::Type* key_type, llvm::Type* value_type, const std::string& key_type_name, const std::string& value_type_name);
     llvm::StructType* string_type_for();
     bool emit_string_literal_initializer(const std::string& name, const ast::NodePtr& literal_node);
+    bool emit_string_literal_initializer_at_address(llvm::Value* string_address, const std::string& name_hint, const ast::NodePtr& literal_node);
     llvm::Value* emit_string_data_pointer(llvm::Value* string_value, const std::string& name_hint = "string.data");
     llvm::Value* emit_string_field_load(const LocalStringInfo& info, std::uint32_t field_index, const std::string& name_hint);
     llvm::Value* emit_string_index_address(const std::string& name, const ast::NodePtr& index_node, const semantic::SemanticResult& semantics, llvm::Type** out_type = nullptr);
@@ -187,13 +180,9 @@ private:
     bool dynamic_array_has_capacity(const LocalDynamicArrayInfo& info) const;
     bool emit_dynamic_array_push(const std::string& name, const ast::NodePtr& call_node, const semantic::SemanticResult& semantics);
     llvm::Value* emit_dynamic_array_pop(const std::string& name, const ast::NodePtr& call_node, const semantic::SemanticResult& semantics);
+    llvm::Value* emit_dynamic_array_get(const std::string& name, const ast::NodePtr& call_node, const semantic::SemanticResult& semantics);
+    bool emit_dynamic_array_set(const std::string& name, const ast::NodePtr& call_node, const semantic::SemanticResult& semantics);
     llvm::Value* emit_dynamic_array_contains(const std::string& name, const ast::NodePtr& call_node, const semantic::SemanticResult& semantics);
-    bool emit_set_insert(const std::string& name, const ast::NodePtr& call_node, const semantic::SemanticResult& semantics);
-    bool emit_map_initializer(const std::string& name, const ast::NodePtr& keyed_literal_node, const semantic::SemanticResult& semantics);
-    bool emit_map_put(const std::string& name, const ast::NodePtr& call_node, const semantic::SemanticResult& semantics);
-    bool emit_map_put_values(const std::string& name, const ast::NodePtr& diagnostic_node, const ast::NodePtr& key_node, const ast::NodePtr& value_node, const semantic::SemanticResult& semantics);
-    llvm::Value* emit_map_get(const std::string& name, const ast::NodePtr& call_node, const semantic::SemanticResult& semantics);
-    llvm::Value* emit_map_contains_key(const std::string& name, const ast::NodePtr& call_node, const semantic::SemanticResult& semantics);
     llvm::Value* emit_unary(const ast::NodePtr& node, const semantic::SemanticResult& semantics);
     llvm::Value* emit_binary(const ast::NodePtr& node, const semantic::SemanticResult& semantics);
     llvm::Value* emit_condition_value(const ast::NodePtr& node, const semantic::SemanticResult& semantics);
@@ -214,8 +203,6 @@ private:
     std::optional<LocalDynamicArrayInfo> lookup_local_dynamic_array(const std::string& name) const;
     bool register_local_string(const std::string& name, const LocalStringInfo& info);
     std::optional<LocalStringInfo> lookup_local_string(const std::string& name) const;
-    bool register_local_map(const std::string& name, const LocalMapInfo& info);
-    std::optional<LocalMapInfo> lookup_local_map(const std::string& name) const;
 
     bool write_ir_file(const std::filesystem::path& output_path);
     bool link_executable(const CodegenConfig& config);

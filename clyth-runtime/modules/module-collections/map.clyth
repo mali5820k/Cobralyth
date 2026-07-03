@@ -1,8 +1,12 @@
 // Clyth Runtime Module: collections/map
 // License: MIT
 //
-// Map<K,V> is intended to be implemented in Clyth-space using keyed arrays,
-// MapEntry<K,V>, and List/array-backed storage.
+// Alpha 0.4 primitive-first runtime Map.
+//
+// Map<K,V> is intentionally implemented in Clyth-space using only language
+// primitives the compiler should own: structs, generic structs, arrays,
+// constructors, and methods. Hash buckets/module-hash can replace this backing
+// later without reintroducing compiler-owned Map lowering.
 
 struct MapEntry<K, V> {
     K key
@@ -15,5 +19,72 @@ struct MapEntry<K, V> {
 }
 
 struct Map<K, V> {
-    // Runtime implementation target for Alpha 0.3 consolidation.
+    private MapEntry<K, V>[] entries
+    int64 length
+    int64 capacity
+
+    constructor() {
+        entries = []
+        length = 0
+        capacity = 0
+    }
+
+    constructor(MapEntry<K, V>[] initial_entries) {
+        entries = initial_entries
+        length = initial_entries.length
+        capacity = initial_entries.length
+    }
+
+    bool empty() {
+        return length == 0
+    }
+
+    bool contains_key(K key) {
+        int64 i = 0
+        while i < length {
+            MapEntry<K, V> entry = entries[i]
+            if entry.key == key {
+                return true
+            }
+            i += 1
+        }
+        return false
+    }
+
+    V get(K key) {
+        // Search from the end so duplicate keyed-array constructor entries behave
+        // like later writes overriding earlier writes. This preserves the sample
+        // behavior while the hash-backed runtime implementation is still pending.
+        int64 i = length
+        while i > 0 {
+            i -= 1
+            MapEntry<K, V> entry = entries[i]
+            if entry.key == key {
+                return entry.value
+            }
+        }
+    }
+
+    void put(K key, V value) {
+        int64 i = 0
+        while i < length {
+            MapEntry<K, V> entry = entries[i]
+            if entry.key == key {
+                entry.value = value
+                entries[i] = entry
+                return
+            }
+            i += 1
+        }
+
+        // Future runtime pass: grow `entries` and append a new MapEntry once
+        // runtime-owned array allocation/copy helpers are finalized. The current
+        // 0.4 bootstrap path supports constructor entries and overwriting existing
+        // keys without compiler-owned Map backing.
+    }
+
+    bool remove(K key) {
+        // Future runtime pass: compact entries after removal.
+        return false
+    }
 }
