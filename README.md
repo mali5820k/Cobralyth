@@ -7,6 +7,7 @@ Clyth's design goal is to keep the language small, keep the runtime capable, and
 Alpha 0.4.0 is the **Runtime Foundation Release** and is currently being prepared as the first release candidate for this architecture. It moves runtime collections out of compiler-owned backends and into Clyth runtime modules, while preserving compiler ownership of language primitives such as arrays, structs, functions, methods, constructors, generic instantiation, and LLVM lowering.
 
 Clyth documentation can be found here: https://mali5820k.github.io/clyth-docs/
+
 ---
 
 ## Why Clyth Exists
