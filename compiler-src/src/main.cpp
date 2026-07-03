@@ -1707,8 +1707,8 @@ static int parse_clyth_file(CompilerOptions& opts) {
 }
 
 int main(int argc, char** argv) {
-    std::string compiler_version("Cobralyth Compiler CPP: Version 1.0.0");
-    cxxopts::Options options("clythcpp", compiler_version.c_str());
+    std::string compiler_version("Clyth Compiler: Version 0.4.0-alpha (Runtime Foundation Release)");
+    cxxopts::Options options("clyth", compiler_version.c_str());
 
     CompilerOptions opts;
     if (argc > 0 && argv[0]) {

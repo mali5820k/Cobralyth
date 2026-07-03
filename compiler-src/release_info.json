@@ -1,6 +1,6 @@
 {
   "name": "Clyth",
-  "version": "0.3.0-alpha",
-  "codename": "The Foundation Release",
-  "status": "alpha-release"
+  "version": "0.4.0-alpha",
+  "codename": "Runtime Foundation Release",
+  "status": "alpha-release-candidate"
 }

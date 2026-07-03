@@ -19,6 +19,23 @@
       "architectures": {}
     }
   ],
-  "status": "stub",
-  "notes": "Hashing is runtime-owned. The planned rapidhash backend is intentionally not enabled until vendored source and licenses are present."
+  "status": "stub-until-rapidhash-pinned",
+  "notes": "Hashing is runtime-owned. Enable bindings only after a pinned rapidhash source revision and exact upstream license text are present.",
+  "bindings": {
+    "enabled": false,
+    "language": "c",
+    "build_system": "zig-cc",
+    "fetch": {
+      "type": "git",
+      "repository": "https://github.com/Nicoshev/rapidhash.git",
+      "ref": "PIN_COMMIT_OR_TAG_BEFORE_ENABLE"
+    },
+    "build": [
+      "zig cc -c ../../c-bindings/rapidhash/src/clyth_rapidhash.c -I ../../c-bindings/rapidhash/include -o build/clyth_rapidhash.o",
+      "zig ar rcs build/libclyth_hash_rapidhash.a build/clyth_rapidhash.o"
+    ],
+    "outputs": [
+      "build/libclyth_hash_rapidhash.a"
+    ]
+  }
 }

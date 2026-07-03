@@ -14,5 +14,5 @@
     "license": "MIT"
   },
   "c_bindings": [],
-  "notes": "List, Set, and Map are intended to be Clyth-space runtime containers built on compiler-backed arrays and keyed arrays. Alpha 0.4 pass 5A detects concrete generic uses and generates stable instantiation names as the first step toward runtime execution. Set/Map hashing is runtime-owned through module-hash; compiler scaffolding remains temporary until 5B/5C/5D remove it safely."
+  "notes": "List, Set, and Map are Clyth-space runtime containers built on compiler-backed arrays, keyed arrays, structs, constructors, methods, and generic instantiation. The compiler must not special-case these collection names."
 }

@@ -19,18 +19,19 @@ indent_file() {
 }
 
 run_case() {
-    local name="$1"
+    local id="$1"
     local source="$2"
     local expected="$3"
-    local bin="$BUILD_DIR/$name"
-    local out="$BUILD_DIR/$name.out"
-    local compile_log="$BUILD_DIR/$name.compile.log"
-    local run_log="$BUILD_DIR/$name.run.log"
+    local stem="${source%.clyth}"
+    local bin="$BUILD_DIR/$stem"
+    local out="$BUILD_DIR/$stem.out"
+    local compile_log="$BUILD_DIR/$stem.compile.log"
+    local run_log="$BUILD_DIR/$stem.run.log"
 
     TOTAL=$((TOTAL + 1))
 
     echo "$SEPARATOR"
-    echo "[ TEST ] $source"
+    echo "[ TEST $id ] $source"
     echo "        Compiling..."
 
     if ! "$COMPILER" -c "$SAMPLE_DIR/$source" -o "$bin" >"$compile_log" 2>&1; then
@@ -77,17 +78,17 @@ main() {
         exit 1
     fi
 
-    run_case "printf_test" "printf_test.clyth" "Simplest extern-C function hookup" || true
-    run_case "dynamic_array_test" "dynamic_array_test.clyth" "middle: 42" || true
-    run_case "native_string_test" "native_string_test.clyth" "updated length: 22" || true
-    run_case "list_container_test" "list_container_test.clyth" "middle after add: 42" || true
-    run_case "set_container_test" "set_container_test.clyth" "contains 99: 0" || true
-    run_case "map_container_test" "map_container_test.clyth" "value 4: 44" || true
-    run_case "struct_release_test" "alpha_020_struct_release_test.clyth" "counter: 42" || true
-    run_case "runtime_dma_include_test" "runtime_dma_include_test.clyth" "dma runtime include linked" || true
-    run_case "generic_runtime_template_include_test" "generic_runtime_template_include_test.clyth" "generic runtime templates accepted" || true
-    run_case "runtime_collection_constructor_test" "runtime_collection_constructor_test.clyth" "constructor map value 10: 101" || true
-    run_case "generic_user_template_test" "generic_user_template_test.clyth" "generic pair value: generic" || true
+    run_case "01" "01_0_1_printf_extern_c.clyth" "Simplest extern-C function hookup" || true
+    run_case "02" "02_0_2_dynamic_array.clyth" "middle: 42" || true
+    run_case "03" "03_0_2_native_string.clyth" "updated length: 22" || true
+    run_case "04" "04_0_4_runtime_list_collection.clyth" "middle after add: 42" || true
+    run_case "05" "05_0_4_runtime_set_collection.clyth" "contains 99: 0" || true
+    run_case "06" "06_0_4_runtime_map_collection.clyth" "value 4: 44" || true
+    run_case "07" "07_0_2_struct_methods_release.clyth" "counter: 42" || true
+    run_case "08" "08_0_4_runtime_dma_include.clyth" "dma runtime include linked" || true
+    run_case "09" "09_0_4_generic_runtime_package_include.clyth" "generic runtime templates accepted" || true
+    run_case "10" "10_0_4_runtime_collection_constructors.clyth" "constructor map value 10: 101" || true
+    run_case "11" "11_0_4_generic_user_templates.clyth" "generic pair value: generic" || true
 
     echo "$SEPARATOR"
     echo "Test Summary"

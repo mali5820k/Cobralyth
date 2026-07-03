@@ -1,5 +1,5 @@
 # rapidhash License Placeholder
 
-rapidhash is the planned hashing backend for Clyth runtime containers.
+This file must be replaced with the exact upstream rapidhash license text before the rapidhash backend is enabled or distributed as an official bundled binding.
 
-Before enabling or distributing this binding, vendor the upstream source and include the exact upstream license text here.
+The Clyth wrapper code is intended to be MIT licensed. Upstream rapidhash licensing must be tracked separately in module metadata and release license bundles.
