@@ -5,71 +5,119 @@
   "modules": {
     "dma": {
       "path": "modules/module-dma",
-      "exports": ["dma/dma.clyth"],
-      "source_files": ["modules/module-dma/dma.clyth"],
-      "link_when_included": ["dma/dma.clyth"]
+      "exports": [
+        "dma/dma.clyth"
+      ],
+      "source_files": [
+        "modules/module-dma/dma.clyth"
+      ],
+      "link_when_included": [
+        "dma/dma.clyth"
+      ]
     },
     "collections": {
       "path": "modules/module-collections",
-      "exports": ["collections/list.clyth", "collections/set.clyth", "collections/map.clyth"],
-      "source_files": ["modules/module-collections/list.clyth", "modules/module-collections/set.clyth", "modules/module-collections/map.clyth"],
+      "exports": [
+        "collections/list.clyth",
+        "collections/set.clyth",
+        "collections/map.clyth"
+      ],
+      "source_files": [
+        "modules/module-collections/list.clyth",
+        "modules/module-collections/set.clyth",
+        "modules/module-collections/map.clyth"
+      ],
       "status": "rapidhash-backed-runtime-hash-dependent",
-      "dependencies": ["hash"]
+      "dependencies": [
+        "hash"
+      ]
     },
     "hash": {
       "path": "modules/module-hash",
-      "exports": ["hash/hash.clyth"],
-      "source_files": ["modules/module-hash/hash.clyth"],
+      "exports": [
+        "hash/hash.clyth"
+      ],
+      "source_files": [
+        "modules/module-hash/hash.clyth"
+      ],
       "status": "enabled-rapidhash-c-binding",
-      "link_when_included": ["hash/hash.clyth"]
+      "link_when_included": [
+        "hash/hash.clyth"
+      ]
     },
     "file-io": {
       "path": "modules/module-file-io",
-      "exports": ["file-io/file-io.clyth"],
-      "source_files": ["modules/module-file-io/file-io.clyth"],
+      "exports": [
+        "file-io/file-io.clyth"
+      ],
+      "source_files": [
+        "modules/module-file-io/file-io.clyth"
+      ],
       "status": "enabled-native-c-binding",
-      "link_when_included": ["file-io/file-io.clyth"]
+      "link_when_included": [
+        "file-io/file-io.clyth"
+      ]
     },
     "router": {
       "path": "modules/module-router",
-      "exports": ["router/router.clyth"],
-      "source_files": ["modules/module-router/router.clyth"],
-      "status": "enabled-callback-api-surface",
-      "link_when_included": ["router/router.clyth"]
+      "exports": [
+        "router/router.clyth"
+      ],
+      "source_files": [
+        "modules/module-router/router.clyth"
+      ],
+      "status": "enabled-callback/lambda-router-api-surface",
+      "link_when_included": [
+        "router/router.clyth"
+      ]
     },
     "http": {
       "path": "modules/module-http",
-      "exports": ["http/http.clyth"],
-      "source_files": ["modules/module-http/http.clyth"],
-      "status": "enabled-router-config-api-surface-native-c-binding",
-      "dependencies": ["router"],
-      "link_when_included": ["http/http.clyth"]
+      "exports": [
+        "http/http.clyth"
+      ],
+      "source_files": [
+        "modules/module-http/http.clyth"
+      ],
+      "status": "enabled-router-api-surface; backed by C runtime web stack bindings",
+      "dependencies": [
+        "router"
+      ],
+      "link_when_included": [
+        "http/http.clyth"
+      ]
     },
     "https": {
       "path": "modules/module-https",
-      "exports": ["https/https.clyth"],
-      "source_files": ["modules/module-https/https.clyth"],
-      "status": "openssl-only-planned-router-config-api-surface",
-      "dependencies": ["router"],
-      "link_when_included": ["https/https.clyth"]
+      "exports": [
+        "https/https.clyth"
+      ],
+      "source_files": [
+        "modules/module-https/https.clyth"
+      ],
+      "status": "enabled-router-config-api-surface; OpenSSL-only TLS direction; no wolfSSL",
+      "dependencies": [
+        "router"
+      ],
+      "link_when_included": [
+        "https/https.clyth"
+      ]
     },
     "json": {
       "path": "modules/module-json",
-      "exports": ["json/json.clyth"],
-      "source_files": ["modules/module-json/json.clyth"],
-      "status": "stub-native-clyth"
-    },
-    "web": {
-      "path": "modules/module-web",
-      "exports": ["web/web.clyth"],
-      "source_files": ["modules/module-web/web.clyth"],
-      "status": "legacy-stub-replaced-by-router-http-https"
-    },
-    "tls": {
-      "path": "modules/module-tls",
-      "exports": ["tls/tls.clyth"],
-      "source_files": ["modules/module-tls/tls.clyth"],
-      "status": "openssl-only; wolfSSL intentionally excluded due GPL/commercial licensing"
+      "exports": [
+        "json/json.clyth"
+      ],
+      "source_files": [
+        "modules/module-json/json.clyth"
+      ],
+      "status": "enabled-yyjson-c-binding; runtime-managed JSON parser/validation surface",
+      "dependencies": [
+        "collections"
+      ],
+      "link_when_included": [
+        "json/json.clyth"
+      ]
     }
   }
 }

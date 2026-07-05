@@ -23,6 +23,7 @@ int32_t clyth_https_server_start(int64_t server_handle);
 int32_t clyth_response_send_text(int64_t response_handle, int32_t code, const char* payload);
 int32_t clyth_response_send_json(int64_t response_handle, int32_t code, const char* payload);
 int32_t clyth_http_serve_text_once(int32_t port, const char* body);
+int32_t clyth_http_serve_html_once(int32_t port, const char* body);
 int32_t clyth_https_serve_text_once(int32_t port, const char* cert_path, const char* key_path, const char* body);
 
 #ifdef __cplusplus

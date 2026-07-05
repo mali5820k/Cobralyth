@@ -21,6 +21,11 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 LLVM_VERSION="${LLVM_VERSION:-19.1.7}"
 LLVM_TARGETS_TO_BUILD="${LLVM_TARGETS_TO_BUILD:-X86;AArch64}"
 LLVM_GIT_URL="${LLVM_GIT_URL:-https://github.com/llvm/llvm-project.git}"
+LIBUV_VERSION="${LIBUV_VERSION:-v1.52.1}"
+LLHTTP_VERSION="${LLHTTP_VERSION:-release/v9.4.2}"
+OPENSSL_VERSION="${OPENSSL_VERSION:-openssl-4.0.1}"
+WSLAY_VERSION="${WSLAY_VERSION:-release-1.1.1}"
+YYJSON_VERSION="${YYJSON_VERSION:-0.12.0}"
 JOBS="${JOBS:-$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 4)}"
 
 ZIG_CC="${ROOT_DIR}/zig-c.sh"
@@ -297,6 +302,52 @@ ensure_rapidhash_source(){
   [[ -f "$header" ]] || die "rapidhash.h was not found after cloning upstream rapidhash v4."
 }
 
+
+git_checkout_ref_quiet(){
+  local url="$1"
+  local ref="$2"
+  local target_dir="$3"
+  rm -rf "$target_dir"
+  mkdir -p "$(dirname "$target_dir")"
+  git clone --quiet --filter=blob:none --no-checkout "$url" "$target_dir"
+  if git -C "$target_dir" ls-remote --exit-code --tags origin "refs/tags/$ref" >/dev/null 2>&1; then
+    git -C "$target_dir" fetch --quiet --depth 1 origin "refs/tags/$ref:refs/tags/$ref"
+    git -C "$target_dir" checkout --quiet "refs/tags/$ref^{}"
+  else
+    git -C "$target_dir" fetch --quiet --depth 1 origin "$ref"
+    git -C "$target_dir" checkout --quiet FETCH_HEAD
+  fi
+}
+
+ensure_vendor_source(){
+  local name="$1"
+  local url="$2"
+  local ref="$3"
+  local sentinel="$4"
+  local vendor_dir="$CLYTH_RUNTIME_C_BINDINGS/$name/vendor/$name"
+  local ref_marker="$vendor_dir/.clyth_vendor_ref"
+  if [[ -f "$vendor_dir/$sentinel" && -f "$ref_marker" && "$(cat "$ref_marker")" == "$ref" ]]; then
+    ok "$name $ref source already present: $vendor_dir"
+    return
+  fi
+  info "Fetching $name source ($ref)..."
+  git_checkout_ref_quiet "$url" "$ref" "$vendor_dir"
+  [[ -f "$vendor_dir/$sentinel" ]] || die "$name sentinel '$sentinel' was not found after checkout of $ref."
+  printf '%s
+' "$ref" > "$ref_marker"
+}
+
+ensure_yyjson_source(){
+  ensure_vendor_source "yyjson" "https://github.com/ibireme/yyjson.git" "$YYJSON_VERSION" "src/yyjson.h"
+}
+
+ensure_web_stack_sources(){
+  ensure_vendor_source "libuv" "https://github.com/libuv/libuv.git" "$LIBUV_VERSION" "include/uv.h"
+  ensure_vendor_source "llhttp" "https://github.com/nodejs/llhttp.git" "$LLHTTP_VERSION" "include/llhttp.h"
+  ensure_vendor_source "openssl" "https://github.com/openssl/openssl.git" "$OPENSSL_VERSION" "VERSION.dat"
+  ensure_vendor_source "wslay" "https://github.com/tatsuhiro-t/wslay.git" "$WSLAY_VERSION" "lib/includes/wslay/wslay.h"
+}
+
 build_runtime_c_bindings(){
   info "Building Clyth runtime C binding archives..."
   local arch
@@ -314,6 +365,17 @@ build_runtime_c_bindings(){
   build_one_runtime_c_binding "rapidhash" \
     "$CLYTH_RUNTIME_C_BINDINGS/rapidhash" "rapidhash_bindings.c" "libclyth_rapidhash.a" \
     "$CLYTH_RUNTIME_DIR/modules/module-hash/$arch"
+
+  ensure_yyjson_source
+  build_one_runtime_c_binding "json" \
+    "$CLYTH_RUNTIME_C_BINDINGS/yyjson" "json_bindings.c" "libclyth_json.a" \
+    "$CLYTH_RUNTIME_DIR/modules/module-json/$arch"
+
+  ensure_web_stack_sources
+
+  build_one_runtime_c_binding "concurrency" \
+    "$CLYTH_RUNTIME_C_BINDINGS/concurrency" "concurrency.c" "libclyth_concurrency.a" \
+    "$CLYTH_RUNTIME_DIR/modules/module-concurrency/$arch"
 
   build_one_runtime_c_binding "http" \
     "$CLYTH_RUNTIME_C_BINDINGS/http" "web.c" "libclyth_http.a" \
@@ -364,19 +426,7 @@ package_distribution(){
   chmod +x "$DIST_DIR/install.sh" "$DIST_DIR/uninstall.sh" 2>/dev/null || true
   cp "$CLYTH_SRC/release_info.json" "$DIST_DIR/release_info.json" 2>/dev/null || true
   cp "$ROOT_DIR/sample-clyth-programs"/*.clyth "$DIST_DIR/share/clyth/samples/" 2>/dev/null || true
-  
-  # Ship runtime module sources and built per-architecture archives, but never vendor/source caches.
-  mkdir -p "$DIST_DIR/share/clyth/runtime"
-  tar -C "$ROOT_DIR/clyth-runtime" \
-    --exclude='c-bindings/*/vendor' \
-    --exclude='c-bindings/*/build' \
-    --exclude='c-bindings/*/.git' \
-    --exclude='**/.git' \
-    --exclude='**/CMakeFiles' \
-    --exclude='**/CMakeCache.txt' \
-    --exclude='**/*.o' \
-    -cf - . | tar -C "$DIST_DIR/share/clyth/runtime" -xf -
-
+  cp -R "$ROOT_DIR/clyth-runtime"/. "$DIST_DIR/share/clyth/runtime/" 2>/dev/null || true
 
   cat > "$DIST_DIR/README_DIST.md" <<'TXT'
 # Clyth Distribution

@@ -1,0 +1,24 @@
+{
+  "name": "concurrency",
+  "version": "0.5.0-alpha",
+  "kind": "runtime-module",
+  "exports": [
+    "concurrency.clyth"
+  ],
+  "dependencies": [],
+  "status": "enabled-posix-thread-runtime-binding",
+  "wrapper": {
+    "license": "MIT"
+  },
+  "c_bindings": [
+    {
+      "name": "concurrency",
+      "enabled": true,
+      "backend": "pthread",
+      "license": "system pthread / libc",
+      "source_directory": "../../c-bindings/concurrency",
+      "archive": "libclyth_concurrency.a",
+      "architectures": {}
+    }
+  ]
+}

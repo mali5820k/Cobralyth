@@ -61,7 +61,21 @@ run_case() {
         return 1
     fi
 
-    rm -f "$bin" "$out" "$compile_log" "$run_log" "$bin.ll" "$bin.o"
+    local expected="$SAMPLE_DIR/$stem.expected"
+    if [[ -f "$expected" ]]; then
+        if ! diff -u "$expected" "$out" >"$BUILD_DIR/$stem.diff" 2>&1; then
+            FAILED=$((FAILED + 1))
+            echo "        [ FAILED ] Program stdout differed from expected output."
+            echo "        Expected/actual diff:"
+            indent_file "$BUILD_DIR/$stem.diff"
+            echo "        Program stderr:"
+            indent_file "$run_log"
+            echo "$SEPARATOR"
+            return 1
+        fi
+    fi
+
+    rm -f "$bin" "$out" "$compile_log" "$run_log" "$BUILD_DIR/$stem.diff" "$bin.ll" "$bin.o"
     PASSED=$((PASSED + 1))
     echo "        [ OK ] Test passed."
     echo "$SEPARATOR"

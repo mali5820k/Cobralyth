@@ -60,21 +60,21 @@ int32 response_send_json(Response response, int32 code, string payload) {
 }
 
 Router {
-    int32 post(string path, function<void, <Request, Response>> handler) {
-        return clyth_router_post(this.native_handle, path, handler)
+    void post(string path, function<void, <Request, Response>> handler) {
+        clyth_router_post(this.native_handle, path, handler)
     }
 
-    int32 get(string path, function<void, <Request, Response>> handler) {
-        return clyth_router_get(this.native_handle, path, handler)
+    void get(string path, function<void, <Request, Response>> handler) {
+        clyth_router_get(this.native_handle, path, handler)
     }
 }
 
 Response {
-    int32 send_text(int32 code, string payload) {
-        return clyth_response_send_text(this.native_handle, code, payload)
+    void send(int32 code, string payload) {
+        clyth_response_send_json(this.native_handle, code, payload)
     }
 
-    int32 send_json(int32 code, string payload) {
-        return clyth_response_send_json(this.native_handle, code, payload)
+    void send_text(int32 code, string payload) {
+        clyth_response_send_text(this.native_handle, code, payload)
     }
 }

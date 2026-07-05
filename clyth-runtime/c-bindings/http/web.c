@@ -92,9 +92,9 @@ int32_t clyth_response_send_json(int64_t response_handle, int32_t code, const ch
     return 0;
 }
 
-int32_t clyth_http_serve_text_once(int32_t port, const char* body) {
+static int32_t clyth_http_serve_once_with_content_type(int32_t port, const char* body, const char* content_type) {
 #if defined(__unix__) || defined(__APPLE__)
-    if (body == NULL || port <= 0 || port > 65535) {
+    if (body == NULL || content_type == NULL || port <= 0 || port > 65535) {
         return -EINVAL;
     }
 
@@ -136,8 +136,8 @@ int32_t clyth_http_serve_text_once(int32_t port, const char* body) {
 
     char header[256];
     int header_len = snprintf(header, sizeof(header),
-        "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: %zu\r\nConnection: close\r\n\r\n",
-        strlen(body));
+        "HTTP/1.1 200 OK\r\nContent-Type: %s\r\nContent-Length: %zu\r\nConnection: close\r\n\r\n",
+        content_type, strlen(body));
     if (header_len > 0) {
         send(client_fd, header, (size_t)header_len, 0);
     }
@@ -149,8 +149,17 @@ int32_t clyth_http_serve_text_once(int32_t port, const char* body) {
 #else
     (void)port;
     (void)body;
+    (void)content_type;
     return -ENOSYS;
 #endif
+}
+
+int32_t clyth_http_serve_text_once(int32_t port, const char* body) {
+    return clyth_http_serve_once_with_content_type(port, body, "text/plain; charset=utf-8");
+}
+
+int32_t clyth_http_serve_html_once(int32_t port, const char* body) {
+    return clyth_http_serve_once_with_content_type(port, body, "text/html; charset=utf-8");
 }
 
 int32_t clyth_https_serve_text_once(int32_t port, const char* cert_path, const char* key_path, const char* body) {

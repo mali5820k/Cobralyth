@@ -152,6 +152,7 @@ private:
     llvm::Value* emit_lambda_expression(const ast::NodePtr& node, const semantic::SemanticResult& semantics);
     bool emit_lambda_body(llvm::Function* function, const ast::NodePtr& node, const semantic::SemanticResult& semantics);
     llvm::Value* emit_literal(const ast::NodePtr& node);
+    llvm::Value* emit_formatted_string_literal(const ast::NodePtr& node, const semantic::SemanticResult& semantics);
     llvm::Value* emit_identifier(const ast::NodePtr& node);
     llvm::Value* emit_postfix(const ast::NodePtr& node, const semantic::SemanticResult& semantics);
     llvm::Value* emit_call_suffix(const std::string& callee_name, const ast::NodePtr& call_node, const semantic::SemanticResult& semantics);
@@ -177,6 +178,7 @@ private:
     llvm::Value* emit_string_index_address(const std::string& name, const ast::NodePtr& index_node, const semantic::SemanticResult& semantics, llvm::Type** out_type = nullptr);
     llvm::Function* declare_libc_malloc();
     llvm::Function* declare_libc_realloc();
+    llvm::Function* declare_libc_snprintf();
     bool emit_dynamic_array_initializer(const std::string& name, const ast::NodePtr& list_node, const semantic::SemanticResult& semantics);
     llvm::Value* emit_dynamic_array_element_address(const std::string& name, const ast::NodePtr& index_node, const semantic::SemanticResult& semantics, llvm::Type** out_type = nullptr);
     llvm::Value* emit_dynamic_array_length(const LocalDynamicArrayInfo& info);

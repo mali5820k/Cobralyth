@@ -204,6 +204,16 @@ static std::vector<std::filesystem::path> runtime_link_inputs_for(
             runtime_root / "modules" / "module-https" / "https.clyth",
             runtime_root / "modules" / "module-https" / "x86_64" / "libclyth_http.a",
             runtime_root / "c-bindings" / "http" / "x86_64" / "libclyth_http.a"
+        },
+        {
+            runtime_root / "modules" / "module-json" / "json.clyth",
+            runtime_root / "modules" / "module-json" / "x86_64" / "libclyth_json.a",
+            runtime_root / "c-bindings" / "yyjson" / "x86_64" / "libclyth_json.a"
+        },
+        {
+            runtime_root / "modules" / "module-concurrency" / "concurrency.clyth",
+            runtime_root / "modules" / "module-concurrency" / "x86_64" / "libclyth_concurrency.a",
+            runtime_root / "c-bindings" / "concurrency" / "x86_64" / "libclyth_concurrency.a"
         }
     };
 
@@ -1616,6 +1626,62 @@ static bool read_clyth_source_with_includes(
     return true;
 }
 
+
+static std::string normalize_multiline_template_string_literals(const std::string& source) {
+    std::string out;
+    out.reserve(source.size());
+
+    bool in_template = false;
+    bool escaped = false;
+
+    for (char c : source) {
+        if (in_template) {
+            if (escaped) {
+                out.push_back(c);
+                escaped = false;
+                continue;
+            }
+
+            if (c == '\\') {
+                out.push_back(c);
+                escaped = true;
+                continue;
+            }
+
+            if (c == '`') {
+                out.push_back(c);
+                in_template = false;
+                continue;
+            }
+
+            if (c == '\r') {
+                continue;
+            }
+
+            if (c == '\n') {
+                out += "\\n";
+                continue;
+            }
+
+            if (c == '\t') {
+                out += "\\t";
+                continue;
+            }
+
+            out.push_back(c);
+            continue;
+        }
+
+        out.push_back(c);
+        if (c == '`') {
+            in_template = true;
+            escaped = false;
+        }
+    }
+
+    return out;
+}
+
 static int parse_clyth_file(CompilerOptions& opts) {
     std::string source_code;
 
@@ -1627,6 +1693,8 @@ static int parse_clyth_file(CompilerOptions& opts) {
         fmt::print(stderr, "ERROR: Source file is empty: {}\n", opts.main_file.string());
         return 1;
     }
+
+    source_code = normalize_multiline_template_string_literals(source_code);
 
     // Runtime packages are loaded only through explicit include statements such as
     // `include "collections"`. The compiler no longer injects List/Set/Map sources

@@ -42,3 +42,5 @@ assigned a release milestone, given an expected output, and added to `run_langua
 - `15_0_5_hash_runtime.clyth` — validates the runtime hash module and rapidhash replacement ABI are linked and callable.
 
 - `16_0_5_https_api_surface.clyth` — validates the HTTPS module API surface links without enabling a TLS backend yet.
+
+- `19_0_5_formatted_string_literals.clyth` — formatted backtick string literals with `${...}` interpolation.

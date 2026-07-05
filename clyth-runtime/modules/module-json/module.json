@@ -1,6 +1,6 @@
 {
   "name": "json",
-  "version": "0.4.0-alpha",
+  "version": "0.5.0-alpha",
   "kind": "runtime-module",
   "exports": [
     "json.clyth"
@@ -8,10 +8,20 @@
   "dependencies": [
     "collections"
   ],
-  "status": "stub-native-clyth",
+  "status": "enabled-yyjson-c-binding",
   "wrapper": {
     "license": "MIT"
   },
-  "c_bindings": [],
-  "notes": "JSON is planned as a native Clyth implementation using string, List, Map, arrays, and keyed arrays."
+  "c_bindings": [
+    {
+      "name": "yyjson",
+      "enabled": true,
+      "backend": "yyjson",
+      "license": "MIT",
+      "source_directory": "../../c-bindings/yyjson",
+      "archive": "libclyth_json.a",
+      "architectures": {}
+    }
+  ],
+  "notes": "JSON is runtime-managed through a Clyth-owned module surface backed by yyjson. libuv is used for event-loop and async I/O concerns, not JSON parsing."
 }

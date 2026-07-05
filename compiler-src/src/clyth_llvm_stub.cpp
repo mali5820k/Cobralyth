@@ -158,11 +158,21 @@ std::string declared_type_name(const ast::NodePtr& node) {
     return type_node->text;
 }
 
+bool is_clyth_string_literal(const std::string& literal) {
+    return literal.size() >= 2
+        && ((literal.front() == '"' && literal.back() == '"')
+            || (literal.front() == '`' && literal.back() == '`'));
+}
+
 std::string unescape_clyth_string_literal(std::string literal) {
-    if (literal.size() >= 2 && literal.front() == '"' && literal.back() == '"') {
+    const bool is_raw_template = literal.size() >= 2 && literal.front() == '`' && literal.back() == '`';
+    if (is_clyth_string_literal(literal)) {
         literal = literal.substr(1, literal.size() - 2);
     }
 
+    // Multiline template literals are normalized by the compiler driver into
+    // single-line tokens containing escaped newline/tab markers. Decode those
+    // markers here so runtime strings preserve the source text shape.
     std::string out;
     out.reserve(literal.size());
 
@@ -1397,11 +1407,39 @@ bool ClythLLVMCodegen::emit_statement(const ast::NodePtr& node, const semantic::
                 const auto exprs = expression_children(node);
                 if (!exprs.empty()) {
                     ast::NodePtr literal_initializer = first_descendant_of_kind(exprs.front(), ast::NodeKind::LiteralExpr);
-                    if (!literal_initializer) {
-                        add_codegen_error(exprs.front(), "String initializer must be a string literal in this backend pass.");
+                    if (literal_initializer) {
+                        const std::string literal_text = attr(literal_initializer, "literal").value_or(literal_initializer ? literal_initializer->text : "");
+                        if (is_clyth_string_literal(literal_text)) {
+                            const bool is_formatted_template = literal_text.size() >= 2
+                                && literal_text.front() == '`'
+                                && literal_text.back() == '`'
+                                && literal_text.find("${") != std::string::npos;
+                            if (!is_formatted_template) {
+                                return emit_string_literal_initializer(*maybe_name, literal_initializer);
+                            }
+                        }
+                    }
+
+                    llvm::Value* string_value = emit_expression(exprs.front(), semantics);
+                    if (string_value == nullptr) {
                         return false;
                     }
-                    return emit_string_literal_initializer(*maybe_name, literal_initializer);
+                    if (string_value->getType() == string_type_for()) {
+                        builder.CreateStore(string_value, alloca);
+                        return true;
+                    }
+                    if (string_value->getType()->isPointerTy()) {
+                        llvm::Value* zero64 = llvm::ConstantInt::get(llvm::Type::getInt64Ty(context), 0);
+                        llvm::Value* assembled = llvm::UndefValue::get(string_type_for());
+                        assembled = builder.CreateInsertValue(assembled, string_value, {0}, *maybe_name + ".data");
+                        assembled = builder.CreateInsertValue(assembled, zero64, {1}, *maybe_name + ".length");
+                        assembled = builder.CreateInsertValue(assembled, zero64, {2}, *maybe_name + ".capacity");
+                        builder.CreateStore(assembled, alloca);
+                        return true;
+                    }
+
+                    add_codegen_error(exprs.front(), "String initializer requires a string expression.");
+                    return false;
                 }
 
                 builder.CreateStore(llvm::ConstantAggregateZero::get(type), alloca);
@@ -1543,11 +1581,17 @@ bool ClythLLVMCodegen::emit_statement(const ast::NodePtr& node, const semantic::
                 ast::NodePtr literal_initializer = first_descendant_of_kind(exprs.back(), ast::NodeKind::LiteralExpr);
                 if (literal_initializer) {
                     const std::string literal_text = attr(literal_initializer, "literal").value_or(literal_initializer ? literal_initializer->text : "");
-                    if (!literal_text.empty() && literal_text.front() == '"') {
-                        if (!emit_string_literal_initializer_at_address(target_address, name_hint, literal_initializer)) {
-                            return false;
+                    if (is_clyth_string_literal(literal_text)) {
+                        const bool is_formatted_template = literal_text.size() >= 2
+                            && literal_text.front() == '`'
+                            && literal_text.back() == '`'
+                            && literal_text.find("${") != std::string::npos;
+                        if (!is_formatted_template) {
+                            if (!emit_string_literal_initializer_at_address(target_address, name_hint, literal_initializer)) {
+                                return false;
+                            }
+                            return true;
                         }
-                        return true;
                     }
                 }
 
@@ -1775,8 +1819,13 @@ llvm::Value* ClythLLVMCodegen::emit_expression(const ast::NodePtr& node, const s
     }
 
     switch (node->kind) {
-        case ast::NodeKind::LiteralExpr:
+        case ast::NodeKind::LiteralExpr: {
+            const std::string literal = attr(node, "literal").value_or(node ? node->text : "");
+            if (literal.find("${") != std::string::npos) {
+                return emit_formatted_string_literal(node, semantics);
+            }
             return emit_literal(node);
+        }
 
         case ast::NodeKind::IdentifierExpr:
             return emit_identifier(node);
@@ -1944,6 +1993,146 @@ bool ClythLLVMCodegen::emit_lambda_body(llvm::Function* function, const ast::Nod
     return ok;
 }
 
+
+llvm::Value* ClythLLVMCodegen::emit_formatted_string_literal(const ast::NodePtr& node, const semantic::SemanticResult& semantics) {
+    const std::string literal = attr(node, "literal").value_or(node ? node->text : "");
+    std::string body = literal;
+    if (literal.size() >= 2 && ((literal.front() == '`' && literal.back() == '`') || (literal.front() == '"' && literal.back() == '"'))) {
+        body = literal.substr(1, literal.size() - 2);
+    }
+    std::string format;
+    std::vector<llvm::Value*> snprintf_args;
+
+    auto append_format_char = [&](char ch) {
+        if (ch == '%') {
+            format += "%%";
+        } else {
+            format.push_back(ch);
+        }
+    };
+
+    auto trim = [](std::string text) {
+        auto is_space = [](unsigned char ch) { return std::isspace(ch) != 0; };
+        while (!text.empty() && is_space(static_cast<unsigned char>(text.front()))) {
+            text.erase(text.begin());
+        }
+        while (!text.empty() && is_space(static_cast<unsigned char>(text.back()))) {
+            text.pop_back();
+        }
+        return text;
+    };
+
+    auto emit_placeholder_value = [&](const std::string& raw_expr) -> llvm::Value* {
+        const std::string expr = trim(raw_expr);
+        if (expr.empty()) {
+            add_codegen_error(node, "Formatted string placeholder is empty.");
+            return nullptr;
+        }
+
+        if (is_clyth_string_literal(expr)) {
+            return builder.CreateGlobalStringPtr(unescape_clyth_string_literal(expr), "fmt.literal.arg");
+        }
+
+        if (expr == "true") {
+            return llvm::ConstantInt::get(llvm::Type::getInt32Ty(context), 1);
+        }
+        if (expr == "false") {
+            return llvm::ConstantInt::get(llvm::Type::getInt32Ty(context), 0);
+        }
+        if (is_integer_literal(expr)) {
+            return llvm::ConstantInt::get(llvm::Type::getInt64Ty(context), std::stoll(expr), true);
+        }
+
+        ast::NodePtr identifier = std::make_shared<ast::ASTNode>();
+        identifier->kind = ast::NodeKind::IdentifierExpr;
+        identifier->label = "formattedPlaceholder";
+        identifier->text = expr;
+        if (node) {
+            identifier->location = node->location;
+        }
+        ast::NodePtr token = std::make_shared<ast::ASTNode>();
+        token->kind = ast::NodeKind::Token;
+        token->text = expr;
+        token->location = identifier->location;
+        identifier->children.push_back(token);
+        return emit_identifier(identifier);
+    };
+
+    for (std::size_t i = 0; i < body.size();) {
+        if (body[i] == '$' && i + 1 < body.size() && body[i + 1] == '{') {
+            const std::size_t start = i + 2;
+            const std::size_t end = body.find('}', start);
+            if (end == std::string::npos) {
+                add_codegen_error(node, "Unterminated formatted string placeholder.");
+                return nullptr;
+            }
+
+            llvm::Value* value = emit_placeholder_value(body.substr(start, end - start));
+            if (value == nullptr) {
+                return nullptr;
+            }
+
+            if (value->getType() == string_type_for()) {
+                format += "%s";
+                snprintf_args.push_back(emit_string_data_pointer(value, "fmt.string.data"));
+            } else if (value->getType()->isPointerTy()) {
+                format += "%s";
+                snprintf_args.push_back(value);
+            } else if (value->getType()->isIntegerTy(1)) {
+                format += "%d";
+                snprintf_args.push_back(builder.CreateZExt(value, llvm::Type::getInt32Ty(context), "fmt.bool"));
+            } else if (value->getType()->isIntegerTy()) {
+                format += "%lld";
+                snprintf_args.push_back(builder.CreateSExtOrTrunc(value, llvm::Type::getInt64Ty(context), "fmt.int"));
+            } else if (value->getType()->isFloatingPointTy()) {
+                format += "%f";
+                if (!value->getType()->isDoubleTy()) {
+                    value = builder.CreateFPExt(value, llvm::Type::getDoubleTy(context), "fmt.double");
+                }
+                snprintf_args.push_back(value);
+            } else {
+                add_codegen_error(node, "Formatted string placeholder has unsupported value type.");
+                return nullptr;
+            }
+
+            i = end + 1;
+            continue;
+        }
+
+        append_format_char(body[i]);
+        ++i;
+    }
+
+    llvm::Value* format_ptr = builder.CreateGlobalStringPtr(format, "fmt.format");
+    llvm::Function* snprintf_fn = declare_libc_snprintf();
+    llvm::Type* ptr_type = llvm::PointerType::get(context, 0);
+    llvm::Type* i64 = llvm::Type::getInt64Ty(context);
+
+    std::vector<llvm::Value*> size_args;
+    size_args.push_back(llvm::ConstantPointerNull::get(llvm::cast<llvm::PointerType>(ptr_type)));
+    size_args.push_back(llvm::ConstantInt::get(i64, 0));
+    size_args.push_back(format_ptr);
+    size_args.insert(size_args.end(), snprintf_args.begin(), snprintf_args.end());
+
+    llvm::Value* length_i32 = builder.CreateCall(snprintf_fn, size_args, "fmt.length.i32");
+    llvm::Value* length = builder.CreateSExt(length_i32, i64, "fmt.length");
+    llvm::Value* capacity = builder.CreateAdd(length, llvm::ConstantInt::get(i64, 1), "fmt.capacity");
+    llvm::Value* data = builder.CreateCall(declare_libc_malloc(), {capacity}, "fmt.data");
+
+    std::vector<llvm::Value*> write_args;
+    write_args.push_back(data);
+    write_args.push_back(capacity);
+    write_args.push_back(format_ptr);
+    write_args.insert(write_args.end(), snprintf_args.begin(), snprintf_args.end());
+    builder.CreateCall(snprintf_fn, write_args);
+
+    llvm::Value* result = llvm::UndefValue::get(string_type_for());
+    result = builder.CreateInsertValue(result, data, {0}, "fmt.result.data");
+    result = builder.CreateInsertValue(result, length, {1}, "fmt.result.length");
+    result = builder.CreateInsertValue(result, length, {2}, "fmt.result.capacity");
+    return result;
+}
+
 llvm::Value* ClythLLVMCodegen::emit_literal(const ast::NodePtr& node) {
     const std::string literal = attr(node, "literal").value_or(node ? node->text : "");
 
@@ -1959,7 +2148,7 @@ llvm::Value* ClythLLVMCodegen::emit_literal(const ast::NodePtr& node) {
         return llvm::ConstantPointerNull::get(llvm::PointerType::get(context, 0));
     }
 
-    if (!literal.empty() && literal.front() == '"') {
+    if (is_clyth_string_literal(literal)) {
         return builder.CreateGlobalStringPtr(unescape_clyth_string_literal(literal));
     }
 
@@ -2554,7 +2743,7 @@ bool ClythLLVMCodegen::maybe_emit_constructor_initializer(
                 ast::NodePtr literal_initializer = first_descendant_of_kind(args[i], ast::NodeKind::LiteralExpr);
                 if (literal_initializer) {
                     const std::string literal_text = attr(literal_initializer, "literal").value_or(literal_initializer ? literal_initializer->text : "");
-                    if (!literal_text.empty() && literal_text.front() == '"') {
+                    if (is_clyth_string_literal(literal_text)) {
                         if (!emit_string_literal_initializer_at_address(field_address, fmt::format("{}.field{}", type_name, i), literal_initializer)) {
                             return true;
                         }
@@ -3393,7 +3582,7 @@ llvm::Constant* ClythLLVMCodegen::emit_global_constant_initializer(llvm::Type* t
             return llvm::ConstantPointerNull::get(llvm::cast<llvm::PointerType>(type));
         }
 
-        if (!literal.empty() && literal.front() == '"') {
+        if (is_clyth_string_literal(literal)) {
             const std::string unescaped = unescape_clyth_string_literal(literal);
             llvm::Constant* raw_string = llvm::ConstantDataArray::getString(context, unescaped, true);
             auto* global_string = new llvm::GlobalVariable(
@@ -3570,7 +3759,7 @@ bool ClythLLVMCodegen::emit_string_literal_initializer_at_address(
     }
 
     const std::string literal = attr(literal_node, "literal").value_or(literal_node ? literal_node->text : "");
-    if (literal.empty() || literal.front() != '"') {
+    if (!is_clyth_string_literal(literal)) {
         add_codegen_error(literal_node, "String initializer must be a string literal in this backend pass.");
         return false;
     }
@@ -3658,6 +3847,17 @@ llvm::Function* ClythLLVMCodegen::declare_libc_realloc() {
     llvm::Type* i64 = llvm::Type::getInt64Ty(context);
     llvm::FunctionType* realloc_type = llvm::FunctionType::get(ptr_type, {ptr_type, i64}, false);
     return llvm::Function::Create(realloc_type, llvm::Function::ExternalLinkage, "realloc", module.get());
+}
+
+llvm::Function* ClythLLVMCodegen::declare_libc_snprintf() {
+    if (llvm::Function* existing = module->getFunction("snprintf")) {
+        return existing;
+    }
+    llvm::Type* ptr_type = llvm::PointerType::get(context, 0);
+    llvm::Type* i64 = llvm::Type::getInt64Ty(context);
+    llvm::Type* i32 = llvm::Type::getInt32Ty(context);
+    llvm::FunctionType* snprintf_type = llvm::FunctionType::get(i32, {ptr_type, i64, ptr_type}, true);
+    return llvm::Function::Create(snprintf_type, llvm::Function::ExternalLinkage, "snprintf", module.get());
 }
 
 llvm::Value* ClythLLVMCodegen::emit_dynamic_array_length(const LocalDynamicArrayInfo& info) {

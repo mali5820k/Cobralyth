@@ -21,16 +21,22 @@ extern C int64 clyth_http_configuration_create(int32 port, int64 router_handle)
 extern C int64 clyth_http_server_create(int64 configuration_handle)
 extern C int32 clyth_http_server_start(int64 server_handle)
 extern C int32 clyth_http_serve_text_once(int32 port, string body)
+extern C int32 clyth_http_serve_html_once(int32 port, string body)
 
 HttpConfiguration new_http_configuration(int32 port, Router router) {
     int64 native_handle = clyth_http_configuration_create(port, router.native_handle)
-    HttpConfiguration configuration = HttpConfiguration(port, router, native_handle)
+    HttpConfiguration configuration = HttpConfiguration()
+    configuration.port = port
+    configuration.router = router
+    configuration.native_handle = native_handle
     return configuration
 }
 
 HttpServer new_http_server(HttpConfiguration configuration) {
     int64 native_handle = clyth_http_server_create(configuration.native_handle)
-    HttpServer server = HttpServer(configuration, native_handle)
+    HttpServer server = HttpServer()
+    server.configuration = configuration
+    server.native_handle = native_handle
     return server
 }
 
@@ -40,4 +46,8 @@ int32 http_server_start(HttpServer server) {
 
 int32 serve_text_once(int32 port, string body) {
     return clyth_http_serve_text_once(port, body)
+}
+
+int32 serve_html_once(int32 port, string body) {
+    return clyth_http_serve_html_once(port, body)
 }
