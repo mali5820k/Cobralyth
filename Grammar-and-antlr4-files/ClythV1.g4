@@ -282,12 +282,25 @@ primary
     : literal
     | collectionLiteral
     | allocationExpression
+    | lambdaExpression
     | IDENTIFIER
     | LPAREN expression RPAREN
     ;
 
 allocationExpression
     : (MALLOC | ISO_MALLOC) LPAREN type RPAREN
+    ;
+
+lambdaExpression
+    : FUNCTION LT type COMMA LT lambdaParamList? GT ARROW block
+    ;
+
+lambdaParamList
+    : lambdaParam (COMMA lambdaParam)* COMMA?
+    ;
+
+lambdaParam
+    : type IDENTIFIER
     ;
 
 argumentList
@@ -350,6 +363,7 @@ expressionList
 type
     : fixedArrayType
     | dynamicArrayType
+    | functionType
     | genericType
     | baseType
     ;
@@ -360,6 +374,14 @@ fixedArrayType
 
 dynamicArrayType
     : typeAtom LBRACKET RBRACKET
+    ;
+
+functionType
+    : FUNCTION LT type COMMA LT functionParamTypeList? GT GT
+    ;
+
+functionParamTypeList
+    : type (COMMA type)* COMMA?
     ;
 
 genericType
@@ -395,6 +417,7 @@ C_ABI   : 'C';
 PUBLIC  : 'public';
 PRIVATE : 'private';
 STRUCT  : 'struct';
+FUNCTION : 'function';
 
 MECC       : 'mecc';
 MALLOC     : 'malloc';
@@ -455,6 +478,8 @@ MINUS_ASSIGN   : '-=';
 STAR_ASSIGN    : '*=';
 SLASH_ASSIGN   : '/=';
 PERCENT_ASSIGN : '%=';
+
+ARROW : '=>';
 
 ASSIGN : '=';
 

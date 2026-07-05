@@ -1,5 +1,9 @@
-# rapidhash License Placeholder
+# rapidhash license note
 
-This file must be replaced with the exact upstream rapidhash license text before the rapidhash backend is enabled or distributed as an official bundled binding.
+The Clyth binding files in this directory are MIT licensed as part of the Clyth runtime.
 
-The Clyth wrapper code is intended to be MIT licensed. Upstream rapidhash licensing must be tracked separately in module metadata and release license bundles.
+The rapidhash implementation is fetched from upstream during the build step:
+
+https://github.com/Nicoshev/rapidhash/tree/v4
+
+Upstream license files should remain with the cloned source under `vendor/rapidhash`.

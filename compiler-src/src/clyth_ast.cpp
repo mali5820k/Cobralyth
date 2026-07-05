@@ -161,6 +161,7 @@ std::string node_kind_name(NodeKind kind) {
         case NodeKind::IndexExpr: return "IndexExpr";
         case NodeKind::PostfixExpr: return "PostfixExpr";
         case NodeKind::AllocationExpr: return "AllocationExpr";
+        case NodeKind::LambdaExpr: return "LambdaExpr";
         case NodeKind::ListLiteralExpr: return "ListLiteralExpr";
         case NodeKind::CurlyLiteralExpr: return "CurlyLiteralExpr";
         case NodeKind::CurlyEntry: return "CurlyEntry";
@@ -820,6 +821,21 @@ std::any ClythAST::visitAllocationExpression(ClythV1Parser::AllocationExpression
     return build_generic(ast::NodeKind::AllocationExpr, ctx, "allocation");
 }
 
+std::any ClythAST::visitLambdaExpression(ClythV1Parser::LambdaExpressionContext* ctx) {
+    auto node = build_generic(ast::NodeKind::LambdaExpr, ctx, "lambda");
+    node->attributes["return_type"] = ctx->type() != nullptr ? ctx->type()->getText() : "void";
+    node->attributes["type"] = ctx->getText();
+    return node;
+}
+
+std::any ClythAST::visitLambdaParamList(ClythV1Parser::LambdaParamListContext* ctx) {
+    return build_generic(ast::NodeKind::Generic, ctx, "lambdaParamList");
+}
+
+std::any ClythAST::visitLambdaParam(ClythV1Parser::LambdaParamContext* ctx) {
+    return build_generic(ast::NodeKind::Param, ctx, "lambdaParam");
+}
+
 std::any ClythAST::visitArgumentList(ClythV1Parser::ArgumentListContext* ctx) {
     return build_generic(ast::NodeKind::Generic, ctx, "argumentList");
 }
@@ -885,6 +901,19 @@ std::any ClythAST::visitDynamicArrayType(ClythV1Parser::DynamicArrayTypeContext*
     node->attributes["name"] = ctx->getText();
     node->attributes["container"] = "array";
     node->attributes["array_kind"] = "dynamic";
+    return node;
+}
+
+std::any ClythAST::visitFunctionType(ClythV1Parser::FunctionTypeContext* ctx) {
+    auto node = build_generic(ast::NodeKind::Type, ctx, "functionType");
+    node->attributes["name"] = ctx->getText();
+    node->attributes["container"] = "function";
+    return node;
+}
+
+std::any ClythAST::visitFunctionParamTypeList(ClythV1Parser::FunctionParamTypeListContext* ctx) {
+    auto node = build_generic(ast::NodeKind::Generic, ctx, "functionParamTypeList");
+    node->attributes["text"] = ctx->getText();
     return node;
 }
 

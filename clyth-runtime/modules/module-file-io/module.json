@@ -1,0 +1,27 @@
+{
+  "name": "file-io",
+  "version": "0.5.0-alpha",
+  "kind": "runtime-module",
+  "exports": [
+    "file-io.clyth"
+  ],
+  "dependencies": [],
+  "wrapper": {
+    "license": "MIT"
+  },
+  "c_bindings": [
+    {
+      "name": "clyth_file_io",
+      "enabled": true,
+      "backend": "Clyth POSIX File/Directory/Process C Binding",
+      "license": "MIT",
+      "source_directory": "../../c-bindings/file-io",
+      "architectures": {
+        "x86_64": { "archive": "x86_64/libclyth_file_io.a" },
+        "aarch64": { "archive": "aarch64/libclyth_file_io.a" },
+        "arm64": { "archive": "arm64/libclyth_file_io.a" }
+      }
+    }
+  ],
+  "notes": "File I/O is runtime-owned. 0.5.0 exposes common POSIX file, directory, symlink, chmod/chown, archive shell-out, scp, ssh, and bash entry points. Read buffers, line iterators, directory listing arrays, stdout/stderr/stdin stream objects, and indexed writes are planned as Clyth-space wrappers once runtime allocation and owned string buffers stabilize."
+}

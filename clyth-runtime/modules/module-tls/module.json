@@ -1,12 +1,12 @@
 {
   "name": "tls",
-  "version": "0.4.0-alpha",
+  "version": "0.5.0-alpha",
   "kind": "runtime-module",
   "exports": [
     "tls.clyth"
   ],
   "dependencies": [],
-  "status": "stub",
+  "status": "stub-openssl-only",
   "wrapper": {
     "license": "MIT"
   },
@@ -16,7 +16,7 @@
       "enabled": false,
       "backend": "OpenSSL",
       "license": "Apache-2.0",
-      "note": "Upstream TLS backend license applies when this backend is enabled.",
+      "note": "OpenSSL is the only planned TLS backend for Clyth 0.5.x. wolfSSL is excluded because its licensing options are GPL or commercial.",
       "architectures": {},
       "source_directory": "../../c-bindings/openssl"
     }

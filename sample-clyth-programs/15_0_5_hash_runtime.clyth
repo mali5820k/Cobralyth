@@ -1,0 +1,12 @@
+include "hash"
+
+int32 main(string[] args) {
+    uint64 value_hash = hash_u64(123456)
+    uint64 signed_hash = hash_i64(-42)
+    uint64 rapid_hash = rapidhash_u64(9001)
+
+    if value_hash == 0 { return 1 }
+    if signed_hash == 0 { return 1 }
+    if rapid_hash == 0 { return 1 }
+    return 0
+}

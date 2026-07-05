@@ -1,0 +1,56 @@
+// Clyth Runtime Module: https
+// License: MIT wrapper
+//
+// TLS backend direction: OpenSSL only. wolfSSL is intentionally not used
+// because the available licensing options are GPL or commercial.
+
+include "router"
+
+struct HttpsConfiguration {
+    string key,
+    string cert,
+    int32 port,
+    Router router,
+    int64 native_handle,
+
+    constructor(string key, string cert, int32 port, Router router) {
+        this.key = key
+        this.cert = cert
+        this.port = port
+        this.router = router
+        this.native_handle = clyth_https_configuration_create(key, cert, port, router.native_handle)
+    }
+}
+
+struct HttpsServer {
+    HttpsConfiguration configuration,
+    int64 native_handle,
+
+    constructor(HttpsConfiguration configuration) {
+        this.configuration = configuration
+        this.native_handle = clyth_https_server_create(configuration.native_handle)
+    }
+}
+
+extern C int64 clyth_https_configuration_create(string key_pem, string cert_pem, int32 port, int64 router_handle)
+extern C int64 clyth_https_server_create(int64 configuration_handle)
+extern C int32 clyth_https_server_start(int64 server_handle)
+extern C int32 clyth_https_serve_text_once(int32 port, string cert_path, string key_path, string body)
+
+HttpsConfiguration new_https_configuration(string key, string cert, int32 port, Router router) {
+    HttpsConfiguration configuration = HttpsConfiguration(key, cert, port, router)
+    return configuration
+}
+
+HttpsServer new_https_server(HttpsConfiguration configuration) {
+    HttpsServer server = HttpsServer(configuration)
+    return server
+}
+
+int32 https_server_start(HttpsServer server) {
+    return clyth_https_server_start(server.native_handle)
+}
+
+int32 serve_https_text_once(int32 port, string cert_path, string key_path, string body) {
+    return clyth_https_serve_text_once(port, cert_path, key_path, body)
+}

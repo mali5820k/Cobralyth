@@ -1,0 +1,15 @@
+extern C int32 printf(string fmt, ...)
+
+int32 add_one(int32 value) {
+    return value + 1
+}
+
+int32 apply(int32 value, function<int32, <int32>> callback) {
+    return callback(value)
+}
+
+int32 main(string[] args) {
+    int32 result = apply(41, add_one)
+    printf("first-class callback result: %d\n", result)
+    return 0
+}

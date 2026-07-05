@@ -202,7 +202,7 @@ clone_llvm(){
 build_llvm(){
   [[ "$BUILD_LLVM" -eq 0 ]] && { warn "Skipping LLVM bundle"; return; }
   [[ "$REBUILD_ALL" -eq 1 || "$REBUILD_LLVM" -eq 1 ]] && rm -rf "$LLVM_BUILD" "$LLVM_INSTALL"
-  if [[ -x "$LLVM_INSTALL/bin/llvm-config" && -x "$LLVM_INSTALL/bin/llc" && -x "$LLVM_INSTALL/bin/lld" ]]; then
+  if [[ -x "$LLVM_INSTALL/bin/llvm-config" && -x "$LLVM_INSTALL/bin/lld" ]]; then
     ok "Bundled LLVM already built: $LLVM_INSTALL"
     "$LLVM_INSTALL/bin/llvm-config" --version || true
     return
@@ -249,21 +249,77 @@ runtime_arch_name(){
   esac
 }
 
-build_runtime_c_bindings(){
-  info "Building Clyth runtime C binding archives..."
-  local dma_dir="$CLYTH_RUNTIME_C_BINDINGS/dma"
+build_one_runtime_c_binding(){
+  local binding_name="$1"
+  local source_dir="$2"
+  local source_file="$3"
+  local archive_name="$4"
+  shift 4
+  local module_dirs=("$@")
+
+  local source_path="$source_dir/$source_file"
+  if [[ ! -f "$source_path" ]]; then
+    warn "Runtime C binding source not found: $source_path"
+    return
+  fi
+
   local arch
   arch="$(runtime_arch_name)"
-  local dma_module_dir="$CLYTH_RUNTIME_DIR/modules/module-dma/$arch"
-  if [[ -f "$dma_dir/dma.c" ]]; then
-    mkdir -p "$dma_dir/build" "$dma_module_dir"
-    "$ZIG_CC" -O2 -c "$dma_dir/dma.c" -o "$dma_dir/build/dma.o"
-    zig ar rcs "$dma_dir/libclyth_dma.a" "$dma_dir/build/dma.o"
-    cp "$dma_dir/libclyth_dma.a" "$dma_module_dir/libclyth_dma.a"
-    ok "Built runtime archive: $dma_module_dir/libclyth_dma.a"
-  else
-    warn "DMA runtime C binding source not found; skipping runtime DMA archive."
+  local binding_arch_dir="$source_dir/$arch"
+  local object_path="$binding_arch_dir/${binding_name}.o"
+  local archive_path="$binding_arch_dir/$archive_name"
+  mkdir -p "$binding_arch_dir"
+
+  "$ZIG_CC" -O2 -c "$source_path" -o "$object_path"
+  zig ar rcs "$archive_path" "$object_path"
+  ok "Built runtime C binding object: $object_path"
+  ok "Built runtime C binding archive: $archive_path"
+
+  local module_dir
+  for module_dir in "${module_dirs[@]}"; do
+    mkdir -p "$module_dir"
+    cp "$archive_path" "$module_dir/$archive_name"
+    ok "Copied runtime module archive: $module_dir/$archive_name"
+  done
+}
+
+ensure_rapidhash_source(){
+  local vendor_dir="$CLYTH_RUNTIME_C_BINDINGS/rapidhash/vendor/rapidhash"
+  local header="$vendor_dir/rapidhash.h"
+  if [[ -f "$header" ]]; then
+    ok "rapidhash v4 source already present: $vendor_dir"
+    return
   fi
+  info "Fetching upstream rapidhash v4 source..."
+  rm -rf "$vendor_dir"
+  mkdir -p "$(dirname "$vendor_dir")"
+  git clone --depth 1 --branch v4 https://github.com/Nicoshev/rapidhash.git "$vendor_dir"
+  [[ -f "$header" ]] || die "rapidhash.h was not found after cloning upstream rapidhash v4."
+}
+
+build_runtime_c_bindings(){
+  info "Building Clyth runtime C binding archives..."
+  local arch
+  arch="$(runtime_arch_name)"
+
+  build_one_runtime_c_binding "dma" \
+    "$CLYTH_RUNTIME_C_BINDINGS/dma" "dma.c" "libclyth_dma.a" \
+    "$CLYTH_RUNTIME_DIR/modules/module-dma/$arch"
+
+  build_one_runtime_c_binding "file_io" \
+    "$CLYTH_RUNTIME_C_BINDINGS/file-io" "file.c" "libclyth_file_io.a" \
+    "$CLYTH_RUNTIME_DIR/modules/module-file-io/$arch"
+
+  ensure_rapidhash_source
+  build_one_runtime_c_binding "rapidhash" \
+    "$CLYTH_RUNTIME_C_BINDINGS/rapidhash" "rapidhash_bindings.c" "libclyth_rapidhash.a" \
+    "$CLYTH_RUNTIME_DIR/modules/module-hash/$arch"
+
+  build_one_runtime_c_binding "http" \
+    "$CLYTH_RUNTIME_C_BINDINGS/http" "web.c" "libclyth_http.a" \
+    "$CLYTH_RUNTIME_DIR/modules/module-router/$arch" \
+    "$CLYTH_RUNTIME_DIR/modules/module-http/$arch" \
+    "$CLYTH_RUNTIME_DIR/modules/module-https/$arch"
 }
 
 package_distribution(){
@@ -308,7 +364,19 @@ package_distribution(){
   chmod +x "$DIST_DIR/install.sh" "$DIST_DIR/uninstall.sh" 2>/dev/null || true
   cp "$CLYTH_SRC/release_info.json" "$DIST_DIR/release_info.json" 2>/dev/null || true
   cp "$ROOT_DIR/sample-clyth-programs"/*.clyth "$DIST_DIR/share/clyth/samples/" 2>/dev/null || true
-  cp -R "$ROOT_DIR/clyth-runtime"/. "$DIST_DIR/share/clyth/runtime/" 2>/dev/null || true
+  
+  # Ship runtime module sources and built per-architecture archives, but never vendor/source caches.
+  mkdir -p "$DIST_DIR/share/clyth/runtime"
+  tar -C "$ROOT_DIR/clyth-runtime" \
+    --exclude='c-bindings/*/vendor' \
+    --exclude='c-bindings/*/build' \
+    --exclude='c-bindings/*/.git' \
+    --exclude='**/.git' \
+    --exclude='**/CMakeFiles' \
+    --exclude='**/CMakeCache.txt' \
+    --exclude='**/*.o' \
+    -cf - . | tar -C "$DIST_DIR/share/clyth/runtime" -xf -
+
 
   cat > "$DIST_DIR/README_DIST.md" <<'TXT'
 # Clyth Distribution

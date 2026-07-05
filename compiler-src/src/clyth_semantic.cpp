@@ -1,6 +1,7 @@
 #include "clyth_semantic.hpp"
 
 #include <algorithm>
+#include <cctype>
 #include <sstream>
 
 namespace clyth::semantic {
@@ -22,6 +23,104 @@ const std::unordered_set<std::string>& builtin_type_names() {
 
 bool is_builtin_type_name(const std::string& name) {
     return builtin_type_names().count(name) > 0;
+}
+
+
+std::vector<std::string> split_function_type_parameters(const std::string& text) {
+    std::vector<std::string> result;
+    std::string current;
+    int depth = 0;
+
+    for (char ch : text) {
+        if (ch == '<') {
+            ++depth;
+            current.push_back(ch);
+            continue;
+        }
+        if (ch == '>') {
+            --depth;
+            current.push_back(ch);
+            continue;
+        }
+        if ((ch == ',' || ch == ':') && depth == 0) {
+            if (!current.empty()) {
+                result.push_back(current);
+            }
+            current.clear();
+            continue;
+        }
+        if (!std::isspace(static_cast<unsigned char>(ch))) {
+            current.push_back(ch);
+        }
+    }
+
+    if (!current.empty()) {
+        result.push_back(current);
+    }
+
+    return result;
+}
+
+struct FunctionTypeParts {
+    std::string return_type_name;
+    std::vector<std::string> parameter_type_names;
+};
+
+std::optional<FunctionTypeParts> parse_function_type_text(const std::string& type_name) {
+    const std::string prefix = "function<";
+    if (type_name.rfind(prefix, 0) != 0 || type_name.empty() || type_name.back() != '>') {
+        return std::nullopt;
+    }
+
+    const std::string inner = type_name.substr(prefix.size(), type_name.size() - prefix.size() - 1);
+    if (inner.empty()) {
+        return std::nullopt;
+    }
+
+    int depth = 0;
+    std::size_t return_separator = std::string::npos;
+    for (std::size_t i = 0; i < inner.size(); ++i) {
+        const char ch = inner[i];
+        if (ch == '<') {
+            ++depth;
+            continue;
+        }
+        if (ch == '>') {
+            --depth;
+            continue;
+        }
+        if (ch == ',' && depth == 0) {
+            return_separator = i;
+            break;
+        }
+    }
+
+    if (return_separator == std::string::npos) {
+        return std::nullopt;
+    }
+
+    auto trim = [](std::string value) {
+        value.erase(std::remove_if(value.begin(), value.end(), [](unsigned char ch) {
+            return std::isspace(ch);
+        }), value.end());
+        return value;
+    };
+
+    FunctionTypeParts result;
+    result.return_type_name = trim(inner.substr(0, return_separator));
+    const std::string params_wrapper = trim(inner.substr(return_separator + 1));
+
+    if (result.return_type_name.empty() || params_wrapper.size() < 2 ||
+        params_wrapper.front() != '<' || params_wrapper.back() != '>') {
+        return std::nullopt;
+    }
+
+    const std::string params = params_wrapper.substr(1, params_wrapper.size() - 2);
+    if (!params.empty()) {
+        result.parameter_type_names = split_function_type_parameters(params);
+    }
+
+    return result;
 }
 
 bool looks_like_keyword(const std::string& text) {
@@ -256,6 +355,25 @@ bool SemanticContext::is_known_type(const TypeInfo& type) const {
     }
 
     const std::string& name = type.name;
+
+    // First-class function callback syntax: function<Return, <Param1, Param2>>.
+    // The outer `function` marker is structural, while the return type and
+    // parameter types still need to be known Clyth types.
+    if (auto function_type = parse_function_type_text(name)) {
+        TypeInfo return_type = parse_type_text(function_type->return_type_name);
+        if (!is_known_type(return_type)) {
+            return false;
+        }
+
+        for (const std::string& parameter_type_name : function_type->parameter_type_names) {
+            TypeInfo parameter_type = parse_type_text(parameter_type_name);
+            if (!is_known_type(parameter_type)) {
+                return false;
+            }
+        }
+
+        return true;
+    }
 
     // Array syntax: T[N] and T[]. The element type must be known; lengths
     // and dynamic array layout are validated/lowered in later passes.
@@ -508,6 +626,7 @@ bool is_expression_node(const ast::NodePtr& node) {
         case ast::NodeKind::IndexExpr:
         case ast::NodeKind::PostfixExpr:
         case ast::NodeKind::AllocationExpr:
+        case ast::NodeKind::LambdaExpr:
         case ast::NodeKind::ListLiteralExpr:
         case ast::NodeKind::CurlyLiteralExpr:
             return true;

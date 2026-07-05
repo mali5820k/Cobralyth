@@ -254,8 +254,14 @@ Status: binding scaffold only. No OpenSSL source or compiled archive is currentl
 Clyth JSON is currently planned as a native Clyth-space runtime implementation under the Clyth MIT license. No external JSON C library is selected for the default runtime at this time.
 
 
-## rapidhash (planned)
+## rapidhash
 
-Status: planned runtime hash backend for `module-hash`.
+Status: enabled Clyth runtime hashing binding for `module-hash`.
 
-The binding is currently disabled. Before enabling it, the exact upstream source and license text must be vendored under `clyth-runtime/c-bindings/rapidhash/` and reflected in module metadata.
+Clyth's public hash module is backed by `clyth-runtime/c-bindings/rapidhash/`. 0.5.0 keeps a compatible fallback implementation in that binding so collections can link deterministically while the module build flow is prepared to pin/fetch upstream rapidhash v4 source. Once upstream source is vendored or fetched, its exact license text and attribution must live beside the binding and in module metadata.
+
+## wolfSSL
+
+Status: intentionally not used.
+
+wolfSSL is excluded from the default Clyth HTTPS/TLS runtime direction because its available licensing options are GPL or commercial, which does not match the intended licensing posture for Clyth's default runtime modules. OpenSSL is the planned TLS backend.

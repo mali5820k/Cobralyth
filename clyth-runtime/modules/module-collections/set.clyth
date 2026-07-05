@@ -1,5 +1,7 @@
 // Clyth Runtime Module: collections/set
 // License: MIT
+
+include "hash"
 //
 // Alpha 0.4 migration target:
 //   Set<T> is a Clyth-space runtime container. This bootstrap implementation

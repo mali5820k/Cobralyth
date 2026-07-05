@@ -168,24 +168,85 @@ static std::vector<std::filesystem::path> runtime_link_inputs_for(
         return inputs;
     }
 
-    const std::filesystem::path dma_module = runtime_root / "modules" / "module-dma" / "dma.clyth";
-    const std::filesystem::path dma_archive = runtime_root / "modules" / "module-dma" / "x86_64" / "libclyth_dma.a";
-    const std::filesystem::path legacy_dma_archive = runtime_root / "c-bindings" / "dma" / "libclyth_dma.a";
+    struct RuntimeArchiveRule {
+        std::filesystem::path module_source;
+        std::filesystem::path archive;
+        std::filesystem::path legacy_archive;
+    };
 
-    for (const auto& included : included_paths) {
-        std::error_code ec_a;
-        std::error_code ec_b;
-        const auto included_canonical = std::filesystem::weakly_canonical(included, ec_a);
-        const auto dma_canonical = std::filesystem::weakly_canonical(dma_module, ec_b);
-        if (!ec_a && !ec_b && included_canonical == dma_canonical) {
-            if (std::filesystem::exists(dma_archive)) {
-                inputs.push_back(dma_archive);
-            } else if (std::filesystem::exists(legacy_dma_archive)) {
-                inputs.push_back(legacy_dma_archive);
-            } else {
-                fmt::print(stderr, "ERROR: runtime module '{}' requires missing archive '{}'. Run ./build_compiler.sh first.\n", dma_module.string(), dma_archive.string());
+    const std::vector<RuntimeArchiveRule> rules {
+        {
+            runtime_root / "modules" / "module-dma" / "dma.clyth",
+            runtime_root / "modules" / "module-dma" / "x86_64" / "libclyth_dma.a",
+            runtime_root / "c-bindings" / "dma" / "libclyth_dma.a"
+        },
+        {
+            runtime_root / "modules" / "module-file-io" / "file-io.clyth",
+            runtime_root / "modules" / "module-file-io" / "x86_64" / "libclyth_file_io.a",
+            runtime_root / "c-bindings" / "file-io" / "x86_64" / "libclyth_file_io.a"
+        },
+        {
+            runtime_root / "modules" / "module-hash" / "hash.clyth",
+            runtime_root / "modules" / "module-hash" / "x86_64" / "libclyth_rapidhash.a",
+            runtime_root / "c-bindings" / "rapidhash" / "x86_64" / "libclyth_rapidhash.a"
+        },
+        {
+            runtime_root / "modules" / "module-router" / "router.clyth",
+            runtime_root / "modules" / "module-router" / "x86_64" / "libclyth_http.a",
+            runtime_root / "c-bindings" / "http" / "x86_64" / "libclyth_http.a"
+        },
+        {
+            runtime_root / "modules" / "module-http" / "http.clyth",
+            runtime_root / "modules" / "module-http" / "x86_64" / "libclyth_http.a",
+            runtime_root / "c-bindings" / "http" / "x86_64" / "libclyth_http.a"
+        },
+        {
+            runtime_root / "modules" / "module-https" / "https.clyth",
+            runtime_root / "modules" / "module-https" / "x86_64" / "libclyth_http.a",
+            runtime_root / "c-bindings" / "http" / "x86_64" / "libclyth_http.a"
+        }
+    };
+
+    std::set<std::filesystem::path> pushed;
+    for (const auto& rule : rules) {
+        std::error_code module_ec;
+        const auto module_canonical = std::filesystem::weakly_canonical(rule.module_source, module_ec);
+        if (module_ec) {
+            continue;
+        }
+
+        bool included_module = false;
+        for (const auto& included : included_paths) {
+            std::error_code included_ec;
+            const auto included_canonical = std::filesystem::weakly_canonical(included, included_ec);
+            if (!included_ec && included_canonical == module_canonical) {
+                included_module = true;
+                break;
             }
-            break;
+        }
+
+        if (!included_module) {
+            continue;
+        }
+
+        std::filesystem::path selected_archive;
+        if (std::filesystem::exists(rule.archive)) {
+            selected_archive = rule.archive;
+        } else if (std::filesystem::exists(rule.legacy_archive)) {
+            selected_archive = rule.legacy_archive;
+        }
+
+        if (selected_archive.empty()) {
+            fmt::print(stderr, "ERROR: runtime module '{}' requires missing archive '{}'. Run ./build_compiler.sh first.\n",
+                       rule.module_source.string(), rule.archive.string());
+            continue;
+        }
+
+        std::error_code archive_ec;
+        const auto archive_canonical = std::filesystem::weakly_canonical(selected_archive, archive_ec);
+        const auto archive_key = archive_ec ? selected_archive.lexically_normal() : archive_canonical;
+        if (pushed.insert(archive_key).second) {
+            inputs.push_back(selected_archive);
         }
     }
 

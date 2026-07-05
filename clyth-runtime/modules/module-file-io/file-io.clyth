@@ -1,0 +1,61 @@
+// Clyth Runtime Module: file-io
+// License: MIT
+//
+// User-facing file/process/stream API. The C layer exports these names
+// directly so Clyth string values can cross the extern boundary as native
+// char* pointers until richer owned string ABI support lands.
+
+extern C int32 path_exists(string path)
+extern C int32 file_exists(string path)
+extern C int32 directory_exists(string path)
+extern C int32 is_file(string path)
+extern C int32 is_directory(string path)
+extern C int32 is_symlink(string path)
+
+extern C int32 create_file(string path)
+extern C int32 create_directory(string path)
+extern C int32 delete_file(string path)
+extern C int32 delete_directory(string path)
+extern C int32 delete_symlink(string path)
+
+extern C int32 copy_file(string source_path, string destination_path)
+extern C int32 copy_directory(string source_path, string destination_path)
+extern C int32 rename_file(string old_path, string new_path)
+extern C int32 rename_directory(string old_path, string new_path)
+extern C int32 move_file(string source_path, string destination_path)
+extern C int32 move_directory(string source_path, string destination_path)
+extern C int32 create_symlink(string target_path, string link_path)
+extern C int32 create_hardlink(string target_path, string link_path)
+
+extern C int64 file_size(string path)
+extern C int64 directory_size(string path)
+extern C int64 directory_num_files(string path)
+extern C int32 permissions(string path)
+extern C int32 directory_permissions(string path)
+extern C int32 chmod_path(string path, int32 mode)
+extern C int32 chown_path(string path, int32 owner_uid, int32 group_gid)
+
+extern C int32 write_text(string path, string content)
+extern C int32 append_text(string path, string content)
+extern C int32 write_line(string path, string content)
+extern C int32 append_line(string path, string content)
+extern C int32 dos2unix(string path)
+extern C int32 read_to_stdout(string path)
+extern C int32 read_line_to_stdout(string path, int64 line_index)
+extern C int32 list_files_to_stdout(string path)
+extern C int32 file_info_to_stdout(string path)
+extern C int32 directory_info_to_stdout(string path)
+
+extern C int32 has_extension(string path, string extension)
+extern C int32 bash(string command)
+extern C int32 make_tarball(string source_path, string output_path, string compression, int32 level)
+extern C int32 extract_tarball(string archive_path, string output_directory)
+extern C int32 make_zip(string source_path, string output_path, int32 level)
+extern C int32 extract_zip(string archive_path, string output_directory)
+extern C int32 scp(string source_path, string destination)
+extern C int32 ssh(string server, string command)
+
+extern C int32 print(string text)
+extern C int32 println(string text)
+extern C int32 eprint(string text)
+extern C int32 eprintln(string text)

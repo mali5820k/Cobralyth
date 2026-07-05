@@ -1,0 +1,25 @@
+{
+  "name": "https",
+  "version": "0.5.0-alpha",
+  "kind": "runtime-module",
+  "exports": [
+    "https.clyth"
+  ],
+  "dependencies": ["router"],
+  "wrapper": { "license": "MIT" },
+  "c_bindings": [
+    {
+      "name": "clyth_http",
+      "enabled": true,
+      "backend": "Clyth OpenSSL-ready HTTPS/Router C Binding",
+      "license": "MIT wrapper; OpenSSL backend is Apache-2.0 when enabled",
+      "source_directory": "../../c-bindings/http",
+      "architectures": {
+        "x86_64": { "archive": "x86_64/libclyth_http.a" },
+        "aarch64": { "archive": "aarch64/libclyth_http.a" },
+        "arm64": { "archive": "arm64/libclyth_http.a" }
+      }
+    }
+  ],
+  "notes": "HTTPS server shape now uses configuration + router + callbacks. wolfSSL is intentionally excluded; OpenSSL is the planned TLS backend."
+}

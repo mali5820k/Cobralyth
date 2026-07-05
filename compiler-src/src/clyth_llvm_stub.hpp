@@ -126,6 +126,7 @@ private:
     std::unordered_map<std::string, std::string> global_type_names;
     std::unordered_map<std::string, StructInfo> structs;
     std::unordered_map<std::string, MethodInfo> methods;
+    std::size_t lambda_counter = 0;
     std::unordered_map<std::string, llvm::StructType*> dynamic_array_types;
     llvm::StructType* native_string_type = nullptr;
     std::unique_ptr<FunctionScope> current_scope;
@@ -148,10 +149,13 @@ private:
     bool emit_while_statement(const ast::NodePtr& node, const semantic::SemanticResult& semantics);
 
     llvm::Value* emit_expression(const ast::NodePtr& node, const semantic::SemanticResult& semantics);
+    llvm::Value* emit_lambda_expression(const ast::NodePtr& node, const semantic::SemanticResult& semantics);
+    bool emit_lambda_body(llvm::Function* function, const ast::NodePtr& node, const semantic::SemanticResult& semantics);
     llvm::Value* emit_literal(const ast::NodePtr& node);
     llvm::Value* emit_identifier(const ast::NodePtr& node);
     llvm::Value* emit_postfix(const ast::NodePtr& node, const semantic::SemanticResult& semantics);
     llvm::Value* emit_call_suffix(const std::string& callee_name, const ast::NodePtr& call_node, const semantic::SemanticResult& semantics);
+    llvm::Value* emit_struct_constructor_expression(const std::string& type_name, const ast::NodePtr& call_node, const semantic::SemanticResult& semantics);
     llvm::Value* emit_method_call_suffix(const std::string& receiver_name, const std::string& method_name, const ast::NodePtr& call_node, const semantic::SemanticResult& semantics);
     llvm::Value* emit_lvalue_address(const ast::NodePtr& node, const semantic::SemanticResult& semantics, llvm::Type** out_type = nullptr);
     std::optional<std::string> resolve_lvalue_type_name(const ast::NodePtr& node) const;
@@ -189,6 +193,7 @@ private:
     llvm::Constant* emit_global_constant_initializer(llvm::Type* type, const ast::NodePtr& node);
 
     llvm::Type* llvm_type_from_clyth_type(const std::string& type_name);
+    llvm::FunctionType* llvm_function_type_from_clyth_type(const std::string& type_name);
     llvm::AllocaInst* create_entry_alloca(llvm::Function* function, llvm::Type* type, const std::string& name);
 
     void push_local_scope();
