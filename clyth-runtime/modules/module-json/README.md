@@ -8,11 +8,11 @@ Current practical support:
 
 - JSON payload strings can be sent through HTTP/HTTPS response APIs.
 - `JsonValue` establishes the tagged runtime value direction.
-- `json_raw`, `json_string`, and `json_to_string` provide a minimal module surface for examples and future expansion.
+- `json_raw` and `json_string` provide minimal constructors; values expose `value.to_string()` for object-style conversion.
 
 Near-term work:
 
-- `JSON.stringify(value)` style object formatting.
+- `JSON.stringify(value)` and `value.to_string()` style object formatting.
 - `JSON.parse(string)` to produce `JsonValue`.
 - Object/array builders.
 - Integration with `Map<string, T>` and struct `to_string` / formatting hooks.

@@ -9,6 +9,7 @@
 //   - singleton/object-style JSON API
 //   - validation and root-kind checks through yyjson
 //   - JsonValue wrapper for raw/string payloads
+//   - JsonValue.to_string() for object-style string conversion
 //
 // Follow-up hardening:
 //   - parse(string) -> JsonValue with owned runtime memory
@@ -26,6 +27,12 @@ extern C int32 json_is_null(string text)
 struct JsonValue {
     int32 kind,
     string text,
+}
+
+JsonValue {
+    string to_string() {
+        return this.text
+    }
 }
 
 struct JSON {
@@ -71,7 +78,7 @@ struct JSON {
     }
 
     string stringify(JsonValue value) {
-        return value.text
+        return value.to_string()
     }
 }
 
@@ -87,8 +94,4 @@ JsonValue json_raw(string value) {
     json.kind = 2
     json.text = value
     return json
-}
-
-string json_to_string(JsonValue value) {
-    return value.text
 }

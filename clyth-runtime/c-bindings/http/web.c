@@ -12,6 +12,7 @@
 #define CLYTH_MAX_CONFIGS 256
 #define CLYTH_MAX_SERVERS 256
 #define CLYTH_MAX_RESPONSES 4096
+#define CLYTH_MAX_REQUESTS 4096
 #define CLYTH_MAX_REQUEST_BYTES (1024 * 1024)
 
 typedef enum clyth_http_method {
@@ -31,6 +32,8 @@ typedef struct clyth_http_configuration {
     int64_t handle;
     int32_t port;
     int64_t router_handle;
+    char* certificate;
+    char* key;
 } clyth_http_configuration;
 
 typedef struct clyth_http_server_state {
@@ -65,6 +68,14 @@ typedef struct clyth_response_slot {
     int sent;
 } clyth_response_slot;
 
+typedef struct clyth_request_slot {
+    int64_t handle;
+    char* method;
+    char* path;
+    char* query;
+    char* body;
+} clyth_request_slot;
+
 static int64_t next_handle = 1;
 static clyth_route_entry routes[CLYTH_MAX_ROUTES];
 static size_t route_count = 0;
@@ -76,6 +87,13 @@ static clyth_http_server_state servers[CLYTH_MAX_SERVERS];
 static size_t server_count = 0;
 static clyth_response_slot responses[CLYTH_MAX_RESPONSES];
 static size_t response_count = 0;
+static clyth_request_slot requests[CLYTH_MAX_REQUESTS];
+static size_t request_count = 0;
+
+static int clyth_http_trace_enabled(void) {
+    const char* value = getenv("CLYTH_HTTP_TRACE");
+    return value != NULL && value[0] != '\0' && strcmp(value, "0") != 0;
+}
 
 static int64_t allocate_handle(void) {
     return next_handle++;
@@ -121,6 +139,7 @@ static clyth_http_server_state* find_server(int64_t handle) {
     return NULL;
 }
 
+
 static clyth_route_entry* find_route(int64_t router_handle, clyth_http_method method, const char* path) {
     for (size_t i = 0; i < route_count; ++i) {
         if (routes[i].router_handle == router_handle && routes[i].method == method && strcmp(routes[i].path, path) == 0) {
@@ -159,6 +178,86 @@ static void unregister_response(int64_t handle) {
             return;
         }
     }
+}
+
+static clyth_request_slot* find_request(int64_t handle) {
+    for (size_t i = 0; i < request_count; ++i) {
+        if (requests[i].handle == handle) {
+            return &requests[i];
+        }
+    }
+    return NULL;
+}
+
+static int64_t register_request(const char* method, const char* path, const char* query, const char* body) {
+    if (request_count >= CLYTH_MAX_REQUESTS) {
+        return -ENOMEM;
+    }
+
+    char* method_copy = clyth_strdup(method == NULL ? "" : method);
+    char* path_copy = clyth_strdup(path == NULL ? "" : path);
+    char* query_copy = clyth_strdup(query == NULL ? "" : query);
+    char* body_copy = clyth_strdup(body == NULL ? "" : body);
+    if (method_copy == NULL || path_copy == NULL || query_copy == NULL || body_copy == NULL) {
+        free(method_copy);
+        free(path_copy);
+        free(query_copy);
+        free(body_copy);
+        return -ENOMEM;
+    }
+
+    int64_t handle = allocate_handle();
+    requests[request_count].handle = handle;
+    requests[request_count].method = method_copy;
+    requests[request_count].path = path_copy;
+    requests[request_count].query = query_copy;
+    requests[request_count].body = body_copy;
+    ++request_count;
+    return handle;
+}
+
+static void unregister_request(int64_t handle) {
+    for (size_t i = 0; i < request_count; ++i) {
+        if (requests[i].handle == handle) {
+            free(requests[i].method);
+            free(requests[i].path);
+            free(requests[i].query);
+            free(requests[i].body);
+            requests[i] = requests[request_count - 1];
+            --request_count;
+            return;
+        }
+    }
+}
+
+static const char* request_string_or_empty(int64_t request_handle, int field) {
+    clyth_request_slot* slot = find_request(request_handle);
+    if (slot == NULL) {
+        return "";
+    }
+    switch (field) {
+        case 0: return slot->method == NULL ? "" : slot->method;
+        case 1: return slot->path == NULL ? "" : slot->path;
+        case 2: return slot->query == NULL ? "" : slot->query;
+        case 3: return slot->body == NULL ? "" : slot->body;
+        default: return "";
+    }
+}
+
+const char* clyth_request_method(int64_t request_handle) {
+    return request_string_or_empty(request_handle, 0);
+}
+
+const char* clyth_request_path(int64_t request_handle) {
+    return request_string_or_empty(request_handle, 1);
+}
+
+const char* clyth_request_query(int64_t request_handle) {
+    return request_string_or_empty(request_handle, 2);
+}
+
+const char* clyth_request_body(int64_t request_handle) {
+    return request_string_or_empty(request_handle, 3);
 }
 
 int64_t clyth_router_create(void) {
@@ -205,30 +304,41 @@ int32_t clyth_router_get(int64_t router_handle, const char* path, clyth_route_ha
     return register_route(router_handle, CLYTH_HTTP_GET, path, handler);
 }
 
-int64_t clyth_http_configuration_create(int32_t port, int64_t router_handle) {
+int64_t clyth_server_configuration_create(int32_t port, int64_t router_handle, const char* certificate, const char* key) {
     if (port <= 0 || port > 65535 || !router_exists(router_handle)) {
         return -EINVAL;
     }
     if (configuration_count >= CLYTH_MAX_CONFIGS) {
         return -ENOMEM;
     }
+
+    char* certificate_copy = clyth_strdup(certificate == NULL ? "" : certificate);
+    char* key_copy = clyth_strdup(key == NULL ? "" : key);
+    if (certificate_copy == NULL || key_copy == NULL) {
+        free(certificate_copy);
+        free(key_copy);
+        return -ENOMEM;
+    }
+
     int64_t handle = allocate_handle();
     configurations[configuration_count].handle = handle;
     configurations[configuration_count].port = port;
     configurations[configuration_count].router_handle = router_handle;
+    configurations[configuration_count].certificate = certificate_copy;
+    configurations[configuration_count].key = key_copy;
     ++configuration_count;
     return handle;
 }
 
-int64_t clyth_https_configuration_create(const char* key_pem, const char* cert_pem, int32_t port, int64_t router_handle) {
-    (void)key_pem;
-    (void)cert_pem;
-    (void)port;
-    (void)router_handle;
-    return -ENOSYS;
+int64_t clyth_http_configuration_create(int32_t port, int64_t router_handle) {
+    return clyth_server_configuration_create(port, router_handle, "", "");
 }
 
-int64_t clyth_http_server_create(int64_t configuration_handle) {
+int64_t clyth_https_configuration_create(const char* key_pem, const char* cert_pem, int32_t port, int64_t router_handle) {
+    return clyth_server_configuration_create(port, router_handle, cert_pem, key_pem);
+}
+
+int64_t clyth_server_create(int64_t configuration_handle) {
     if (find_configuration(configuration_handle) == NULL) {
         return -EINVAL;
     }
@@ -242,9 +352,12 @@ int64_t clyth_http_server_create(int64_t configuration_handle) {
     return handle;
 }
 
+int64_t clyth_http_server_create(int64_t configuration_handle) {
+    return clyth_server_create(configuration_handle);
+}
+
 int64_t clyth_https_server_create(int64_t configuration_handle) {
-    (void)configuration_handle;
-    return -ENOSYS;
+    return clyth_server_create(configuration_handle);
 }
 
 static const char* find_header_end(const char* data, size_t length) {
@@ -442,8 +555,10 @@ static void maybe_handle_request(clyth_uv_client* client) {
         return;
     }
 
-    printf("[HTTP] %s %s%s%s (%zu bytes, content-length=%d)\n", method, path, query[0] ? "?" : "", query, client->request_length, content_length);
-    fflush(stdout);
+    if (clyth_http_trace_enabled()) {
+        printf("[HTTP] %s %s%s%s (%zu bytes, content-length=%d)\n", method, path, query[0] ? "?" : "", query, client->request_length, content_length);
+        fflush(stdout);
+    }
 
     if (strcmp(method, "OPTIONS") == 0) {
         write_response(client, 200, "text/plain; charset=utf-8", "");
@@ -457,8 +572,10 @@ static void maybe_handle_request(clyth_uv_client* client) {
 
     clyth_route_entry* route = find_route(client->server->router_handle, method_from_text(method), path);
     if (route == NULL || route->handler == NULL) {
-        printf("[HTTP] no route for %s %s\n", method, path);
-        fflush(stdout);
+        if (clyth_http_trace_enabled()) {
+            printf("[HTTP] no route for %s %s\n", method, path);
+            fflush(stdout);
+        }
         write_response(client, 404, "text/plain; charset=utf-8", "Not found");
         return;
     }
@@ -472,15 +589,22 @@ static void maybe_handle_request(clyth_uv_client* client) {
     memcpy(body_copy, body, (size_t)content_length);
     body_copy[content_length] = '\0';
 
+    int64_t request_handle = register_request(method, path, query, body_copy);
+    free(body_copy);
+    if (request_handle <= 0) {
+        write_response(client, 500, "text/plain; charset=utf-8", "request allocation failed");
+        return;
+    }
+
     int64_t response_handle = register_response(client);
     if (response_handle <= 0) {
-        free(body_copy);
+        unregister_request(request_handle);
         write_response(client, 500, "text/plain; charset=utf-8", "response allocation failed");
         return;
     }
 
     clyth_runtime_request request;
-    request.native_handle = 0;
+    request.native_handle = request_handle;
 
     clyth_runtime_response response;
     response.native_handle = response_handle;
@@ -490,7 +614,7 @@ static void maybe_handle_request(clyth_uv_client* client) {
     clyth_response_slot* slot = find_response(response_handle);
     const int sent = slot != NULL && slot->sent;
     unregister_response(response_handle);
-    free(body_copy);
+    unregister_request(request_handle);
 
     if (!sent && !client->response_started) {
         write_response(client, 500, "text/plain; charset=utf-8", "route handler did not send a response");
@@ -616,7 +740,7 @@ static int32_t clyth_http_serve_uv(int32_t port, int64_t router_handle) {
     return rc;
 }
 
-int32_t clyth_http_server_start(int64_t server_handle) {
+int32_t clyth_server_start(int64_t server_handle) {
     clyth_http_server_state* server = find_server(server_handle);
     if (server == NULL) {
         return -EINVAL;
@@ -628,7 +752,10 @@ int32_t clyth_http_server_start(int64_t server_handle) {
     return clyth_http_serve_uv(configuration->port, configuration->router_handle);
 }
 
+int32_t clyth_http_server_start(int64_t server_handle) {
+    return clyth_server_start(server_handle);
+}
+
 int32_t clyth_https_server_start(int64_t server_handle) {
-    (void)server_handle;
-    return -ENOSYS;
+    return clyth_server_start(server_handle);
 }

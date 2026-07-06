@@ -1,59 +1,66 @@
 // Clyth Runtime Module: https
 // License: MIT wrapper
 //
-// HTTPS keeps the same shape as HTTP, but the native backend remains
-// experimental in 0.5.0. No demo-specific serve_* APIs are exposed.
-// TLS backend direction: OpenSSL only. wolfSSL is intentionally not used
-// because the available licensing options are GPL or commercial.
+// 0.5.0 server API surface. Clyth exposes one server-facing networking API:
+// create a ServerConfiguration, register routes, then call server.start().
+//
+// Plain HTTP is represented by an HTTPS-capable server configuration with no
+// certificate/key configured. TLS is configuration, not a separate application
+// model. The active 0.5.0 transport is libuv + llhttp; OpenSSL integration keeps
+// this same API shape when certificate support lands.
 
 include "router"
 
-struct HttpsConfiguration {
-    string key,
-    string cert,
+struct ServerConfiguration {
     int32 port,
     Router router,
+    string certificate,
+    string key,
     int64 native_handle,
 
-    constructor(string key, string cert, int32 port, Router router) {
-        this.key = key
-        this.cert = cert
+    constructor(int32 port, Router router) {
         this.port = port
         this.router = router
-        this.native_handle = clyth_https_configuration_create(key, cert, port, router.native_handle)
+        this.certificate = ""
+        this.key = ""
+        this.native_handle = clyth_server_configuration_create(port, router.native_handle, "", "")
+    }
+
+    constructor(int32 port, Router router, string certificate, string key) {
+        this.port = port
+        this.router = router
+        this.certificate = certificate
+        this.key = key
+        this.native_handle = clyth_server_configuration_create(port, router.native_handle, certificate, key)
     }
 }
 
-struct HttpsServer {
-    HttpsConfiguration configuration,
+struct Server {
+    ServerConfiguration configuration,
     int64 native_handle,
 
-    constructor(HttpsConfiguration configuration) {
+    constructor(ServerConfiguration configuration) {
         this.configuration = configuration
-        this.native_handle = clyth_https_server_create(configuration.native_handle)
+        this.native_handle = clyth_server_create(configuration.native_handle)
     }
 }
 
-extern C int64 clyth_https_configuration_create(string key_pem, string cert_pem, int32 port, int64 router_handle)
-extern C int64 clyth_https_server_create(int64 configuration_handle)
-extern C int32 clyth_https_server_start(int64 server_handle)
+extern C int64 clyth_server_configuration_create(int32 port, int64 router_handle, string certificate, string key)
+extern C int64 clyth_server_create(int64 configuration_handle)
+extern C int32 clyth_server_start(int64 server_handle)
 
-HttpsConfiguration new_https_configuration(string key, string cert, int32 port, Router router) {
-    HttpsConfiguration configuration = HttpsConfiguration(key, cert, port, router)
+ServerConfiguration new_server_configuration(int32 port, Router router) {
+    ServerConfiguration configuration = ServerConfiguration(port, router)
     return configuration
 }
 
-HttpsServer new_https_server(HttpsConfiguration configuration) {
-    HttpsServer server = HttpsServer(configuration)
+Server new_server(ServerConfiguration configuration) {
+    Server server = Server(configuration)
     return server
 }
 
-int32 https_server_start(HttpsServer server) {
-    return clyth_https_server_start(server.native_handle)
-}
-
-HttpsServer {
+Server {
     int32 start() {
-        return clyth_https_server_start(this.native_handle)
+        return clyth_server_start(this.native_handle)
     }
 }

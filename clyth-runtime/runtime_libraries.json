@@ -71,22 +71,6 @@
         "router/router.clyth"
       ]
     },
-    "http": {
-      "path": "modules/module-http",
-      "exports": [
-        "http/http.clyth"
-      ],
-      "source_files": [
-        "modules/module-http/http.clyth"
-      ],
-      "status": "enabled-router-api-surface; backed by C runtime web stack bindings",
-      "dependencies": [
-        "router"
-      ],
-      "link_when_included": [
-        "http/http.clyth"
-      ]
-    },
     "https": {
       "path": "modules/module-https",
       "exports": [

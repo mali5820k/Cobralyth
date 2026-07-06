@@ -196,11 +196,6 @@ static std::vector<std::filesystem::path> runtime_link_inputs_for(
             runtime_root / "c-bindings" / "http" / "x86_64" / "libclyth_http.a"
         },
         {
-            runtime_root / "modules" / "module-http" / "http.clyth",
-            runtime_root / "modules" / "module-http" / "x86_64" / "libclyth_http.a",
-            runtime_root / "c-bindings" / "http" / "x86_64" / "libclyth_http.a"
-        },
-        {
             runtime_root / "modules" / "module-https" / "https.clyth",
             runtime_root / "modules" / "module-https" / "x86_64" / "libclyth_http.a",
             runtime_root / "c-bindings" / "http" / "x86_64" / "libclyth_http.a"

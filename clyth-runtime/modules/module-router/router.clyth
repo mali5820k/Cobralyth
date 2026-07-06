@@ -1,16 +1,18 @@
 // Clyth Runtime Module: router
 // License: MIT
 //
-// 0.5.0 route-driven HTTP API surface.
+// 0.5.0 route-driven server API surface.
 //
 // Public shape:
 //   router.get("/", (Request request, Response response) => { ... })
 //   router.post("/api/message", (Request request, Response response) => { ... })
+//   request.body()
 //   response.send(200, payload)
 //
-// Request is intentionally handle-backed for 0.5.0. Passing large structs with
-// string fields through a native function-pointer callback is too ABI-sensitive
-// for this milestone. Request accessors can be layered on top of native_handle.
+// Request and Response cross the native callback ABI as handle-only values.
+// Request metadata is stored by the libuv/llhttp runtime for the duration of
+// the route callback and accessed through methods. This keeps callback ABI
+// stable while preserving Express-style request ergonomics in Clyth code.
 
 struct Request {
     int64 native_handle,
@@ -39,6 +41,12 @@ struct Router {
 extern C int64 clyth_router_create()
 extern C int32 clyth_router_post(int64 router_handle, string path, function<void(Request, Response)> handler)
 extern C int32 clyth_router_get(int64 router_handle, string path, function<void(Request, Response)> handler)
+
+extern C string clyth_request_method(int64 request_handle)
+extern C string clyth_request_path(int64 request_handle)
+extern C string clyth_request_query(int64 request_handle)
+extern C string clyth_request_body(int64 request_handle)
+
 extern C int32 clyth_response_send(int64 response_handle, int32 code, string payload)
 
 Router new_router() {
@@ -65,6 +73,24 @@ Router {
 
     void get(string path, function<void(Request, Response)> handler) {
         clyth_router_get(this.native_handle, path, handler)
+    }
+}
+
+Request {
+    string method() {
+        return clyth_request_method(this.native_handle)
+    }
+
+    string path() {
+        return clyth_request_path(this.native_handle)
+    }
+
+    string query() {
+        return clyth_request_query(this.native_handle)
+    }
+
+    string body() {
+        return clyth_request_body(this.native_handle)
     }
 }
 

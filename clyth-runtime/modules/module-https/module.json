@@ -11,7 +11,7 @@
     {
       "name": "clyth_http",
       "enabled": true,
-      "backend": "Clyth OpenSSL-ready HTTPS/Router C Binding",
+      "backend": "Clyth libuv/llhttp server binding with TLS-ready configuration surface",
       "license": "MIT wrapper; OpenSSL backend is Apache-2.0 when enabled",
       "source_directory": "../../c-bindings/http",
       "architectures": {
@@ -21,5 +21,5 @@
       }
     }
   ],
-  "notes": "HTTPS server shape now uses configuration + router + callbacks. wolfSSL is intentionally excluded; OpenSSL is the planned TLS backend."
+  "notes": "Canonical 0.5.0 server API. ServerConfiguration(port, router) starts plain HTTP; ServerConfiguration(port, router, certificate, key) reserves the same surface for TLS. TLS is configuration, not a separate server model."
 }

@@ -11,7 +11,7 @@
     {
       "name": "clyth_http",
       "enabled": true,
-      "backend": "Clyth POSIX Web/Router C Binding",
+      "backend": "Clyth libuv-backed Web/Router C Binding",
       "license": "MIT",
       "source_directory": "../../c-bindings/http",
       "architectures": {

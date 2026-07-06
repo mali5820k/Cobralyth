@@ -1,5 +1,8 @@
 #include "clyth_llvm_stub.hpp"
 
+#include "clyth_antlr_files/ClythV1Lexer.h"
+#include "clyth_antlr_files/ClythV1Parser.h"
+
 #include <algorithm>
 #include <cerrno>
 #include <cstdint>
@@ -1377,6 +1380,19 @@ bool ClythLLVMCodegen::emit_statement(const ast::NodePtr& node, const semantic::
             if (current_scope && current_scope->return_type && value->getType() != current_scope->return_type) {
                 if (value->getType()->isIntegerTy() && current_scope->return_type->isIntegerTy()) {
                     value = builder.CreateIntCast(value, current_scope->return_type, true, "retcast");
+                } else if (value->getType()->isPointerTy() && current_scope->return_type == string_type_for()) {
+                    // Native accessors such as clyth_request_body() return a C string pointer,
+                    // while Clyth methods such as Request.body() return the language-level
+                    // string value. Wrap the pointer into the current string representation at
+                    // the return boundary instead of changing the callback ABI.
+                    llvm::Value* zero64 = llvm::ConstantInt::get(llvm::Type::getInt64Ty(context), 0);
+                    llvm::Value* assembled = llvm::UndefValue::get(string_type_for());
+                    assembled = builder.CreateInsertValue(assembled, value, {0}, "ret.string.data");
+                    assembled = builder.CreateInsertValue(assembled, zero64, {1}, "ret.string.length");
+                    assembled = builder.CreateInsertValue(assembled, zero64, {2}, "ret.string.capacity");
+                    value = assembled;
+                } else if (value->getType() == string_type_for() && current_scope->return_type->isPointerTy()) {
+                    value = emit_string_data_pointer(value, "ret.string.data");
                 }
             }
 
@@ -2030,6 +2046,58 @@ llvm::Value* ClythLLVMCodegen::emit_formatted_string_literal(const ast::NodePtr&
         return text;
     };
 
+    auto parse_placeholder_expression = [&](const std::string& expr) -> ast::NodePtr {
+        antlr4::ANTLRInputStream input(expr);
+        ClythV1Lexer lexer(&input);
+        antlr4::CommonTokenStream tokens(&lexer);
+        ClythV1Parser parser(&tokens);
+
+        DiagnosticBag placeholder_diagnostics;
+        ClythSyntaxErrorListener syntax_errors(placeholder_diagnostics);
+        lexer.removeErrorListeners();
+        parser.removeErrorListeners();
+        lexer.addErrorListener(&syntax_errors);
+        parser.addErrorListener(&syntax_errors);
+
+        ClythAST ast_builder(placeholder_diagnostics);
+        ClythV1Parser::ExpressionContext* expression_ctx = parser.expression();
+        tokens.fill();
+
+        if (placeholder_diagnostics.has_errors()) {
+            add_codegen_error(node, fmt::format("Invalid formatted string placeholder expression '{}'.", expr));
+            return nullptr;
+        }
+
+        bool reached_eof = false;
+        for (antlr4::Token* token : tokens.getTokens()) {
+            if (token == nullptr) {
+                continue;
+            }
+            if (token->getType() == antlr4::Token::EOF) {
+                reached_eof = true;
+                break;
+            }
+        }
+        (void)reached_eof;
+
+        std::any built = ast_builder.visitExpression(expression_ctx);
+        if (!built.has_value()) {
+            add_codegen_error(node, fmt::format("Unable to build AST for formatted string placeholder '{}'.", expr));
+            return nullptr;
+        }
+
+        try {
+            ast::NodePtr expression_node = std::any_cast<ast::NodePtr>(built);
+            if (expression_node && node) {
+                expression_node->location = node->location;
+            }
+            return expression_node;
+        } catch (const std::bad_any_cast&) {
+            add_codegen_error(node, fmt::format("Unable to build expression node for formatted string placeholder '{}'.", expr));
+            return nullptr;
+        }
+    };
+
     auto emit_placeholder_value = [&](const std::string& raw_expr) -> llvm::Value* {
         const std::string expr = trim(raw_expr);
         if (expr.empty()) {
@@ -2051,19 +2119,15 @@ llvm::Value* ClythLLVMCodegen::emit_formatted_string_literal(const ast::NodePtr&
             return llvm::ConstantInt::get(llvm::Type::getInt64Ty(context), std::stoll(expr), true);
         }
 
-        ast::NodePtr identifier = std::make_shared<ast::ASTNode>();
-        identifier->kind = ast::NodeKind::IdentifierExpr;
-        identifier->label = "formattedPlaceholder";
-        identifier->text = expr;
-        if (node) {
-            identifier->location = node->location;
+        // Formatted string placeholders are language expressions, not symbol-name
+        // strings.  This lets `${request.body}`, `${json.stringify(payload)}`,
+        // `${a + b}`, and other normal expression forms lower through the same
+        // expression path used everywhere else in the compiler.
+        ast::NodePtr expression_node = parse_placeholder_expression(expr);
+        if (!expression_node) {
+            return nullptr;
         }
-        ast::NodePtr token = std::make_shared<ast::ASTNode>();
-        token->kind = ast::NodeKind::Token;
-        token->text = expr;
-        token->location = identifier->location;
-        identifier->children.push_back(token);
-        return emit_identifier(identifier);
+        return emit_expression(expression_node, semantics);
     };
 
     for (std::size_t i = 0; i < body.size();) {

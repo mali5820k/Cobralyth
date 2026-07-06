@@ -1,5 +1,5 @@
 include "file-io"
-include "http"
+include "https"
 include "json"
 
 string welcome_html() {
@@ -147,11 +147,15 @@ int32 main(string[] args) {
     })
 
     router.post("/api/message", (Request request, Response response) => {
-        response.send(200, `{"received":true,"message":"Clyth backend received the JSON payload."}`)
+        JSON json = JSON()
+        JsonValue payload = json.parse(request.body())
+        string payload_text = json.stringify(payload)
+        println(`Received new request body: ${request.body()}`)
+        response.send(200, `{"received":true,"message":"Clyth backend received the JSON payload.","payload":${payload_text}}`)
     })
 
-    HttpConfiguration configuration = HttpConfiguration(9090, router)
-    HttpServer server = HttpServer(configuration)
+    ServerConfiguration configuration = ServerConfiguration(9090, router)
+    Server server = Server(configuration)
 
     println("Clyth backend HTTP demo listening on http://127.0.0.1:9090")
     return server.start()

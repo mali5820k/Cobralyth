@@ -415,7 +415,7 @@ build_http_runtime_c_binding(){
   ok "Built libuv-backed HTTP runtime archive: $archive_path"
 
   local module_dir
-  for module_dir in     "$CLYTH_RUNTIME_DIR/modules/module-router/$arch"     "$CLYTH_RUNTIME_DIR/modules/module-http/$arch"     "$CLYTH_RUNTIME_DIR/modules/module-https/$arch"; do
+  for module_dir in     "$CLYTH_RUNTIME_DIR/modules/module-router/$arch"     "$CLYTH_RUNTIME_DIR/modules/module-https/$arch"; do
     mkdir -p "$module_dir"
     cp "$archive_path" "$module_dir/libclyth_http.a"
     ok "Copied runtime module archive: $module_dir/libclyth_http.a"

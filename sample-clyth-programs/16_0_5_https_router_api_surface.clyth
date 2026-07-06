@@ -1,31 +1,18 @@
-include "file-io"
 include "https"
-include "collections"
-
-struct DataObj {
-    Map<string, bool> valid_strings,
-    bool is_readonly,
-}
 
 int32 main(string[] args) {
-    string key = "development-key-placeholder"
-    string cert = "development-cert-placeholder"
-
     Router router = Router()
     router.post("/", (Request request, Response response) => {
-        if request.body != null {
-            print(request.body)
-        } else {
-            println("request body was null")
-        }
         response.send(200, `{"ok":true}`)
     })
 
-    HttpsConfiguration https_configuration = HttpsConfiguration(key, cert, 9000, router)
-    HttpsServer app_server = HttpsServer(https_configuration)
+    TlsConfiguration tls = TlsConfiguration("development-key-placeholder", "development-cert-placeholder")
+    HttpConfiguration configuration = HttpConfiguration(9000, router)
+    HttpServer app_server = HttpServer(configuration)
 
     if router.native_handle <= 0 { return 1 }
-    if https_configuration.native_handle >= 0 { return 1 }
-    if app_server.native_handle >= 0 { return 1 }
+    if configuration.native_handle <= 0 { return 1 }
+    if app_server.native_handle <= 0 { return 1 }
+    if tls.key == "" { return 1 }
     return 0
 }
