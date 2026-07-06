@@ -35,7 +35,7 @@ Files in `_legacy_untracked/` are preserved only as historical/manual reference 
 They are not part of the supported release regression suite until they are renamed,
 assigned a release milestone, given an expected output, and added to `run_language_samples.sh`.
 
-- `13_0_5_first_class_function_callback.clyth` — validates first-class function callback syntax and indirect calls through `function<return<params>>`.
+- `13_0_5_first_class_function_callback.clyth` — validates first-class function callback syntax and indirect calls through `function<return(params)>`.
 
 - `14_0_5_file_io_runtime.clyth` — validates the native file runtime module can write, append, stat, and remove a text file.
 

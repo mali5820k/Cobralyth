@@ -4,7 +4,7 @@ int32 add_one(int32 value) {
     return value + 1
 }
 
-int32 apply(int32 value, function<int32, <int32>> callback) {
+int32 apply(int32 value, function<int32(int32)> callback) {
     return callback(value)
 }
 

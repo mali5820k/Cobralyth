@@ -28,6 +28,22 @@ WSLAY_VERSION="${WSLAY_VERSION:-release-1.1.1}"
 YYJSON_VERSION="${YYJSON_VERSION:-0.12.0}"
 JOBS="${JOBS:-$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 4)}"
 
+CLYTH_ZIG_TARGET="${CLYTH_ZIG_TARGET:-native-linux-musl}"
+export CLYTH_ZIG_TARGET
+
+case "$(uname -m)" in
+  x86_64|amd64) CLYTH_DEFAULT_LLVM_TRIPLE="x86_64-unknown-linux-musl" ;;
+  aarch64|arm64) CLYTH_DEFAULT_LLVM_TRIPLE="aarch64-unknown-linux-musl" ;;
+  *) CLYTH_DEFAULT_LLVM_TRIPLE="$(uname -m)-unknown-linux-musl" ;;
+esac
+CLYTH_LLVM_TARGET_TRIPLE="${CLYTH_LLVM_TARGET_TRIPLE:-$CLYTH_DEFAULT_LLVM_TRIPLE}"
+export CLYTH_LLVM_TARGET_TRIPLE
+
+CLYTH_ZIG_STATIC="${CLYTH_ZIG_STATIC:-1}"
+export CLYTH_ZIG_STATIC
+CLYTH_ZIG_CXX_STDLIB="${CLYTH_ZIG_CXX_STDLIB:-libc++}"
+export CLYTH_ZIG_CXX_STDLIB
+
 ZIG_CC="${ROOT_DIR}/zig-c.sh"
 ZIG_CXX="${ROOT_DIR}/zig-c++.sh"
 
@@ -60,7 +76,7 @@ trap 'err "Build failed near line $LINENO. Scroll up for the first real compiler
 
 usage(){ cat <<USAGE
 Usage: ./build_compiler.sh [options]
-  --skip-llvm       Do not build bundled LLVM; use system LLVM via CMake.
+  --skip-llvm       Do not rebuild bundled LLVM; require an existing llvm-bundled install.
   --rebuild-llvm    Delete llvm-build/llvm-bundled and rebuild LLVM.
   --rebuild-antlr   Delete antlr4-cpp-runtime-lib and rebuild ANTLR runtime.
   --rebuild-all     Rebuild ANTLR runtime, LLVM, and Clyth compiler.
@@ -177,7 +193,10 @@ ensure_fmt(){
 
 build_antlr(){
   [[ "$REBUILD_ALL" -eq 1 || "$REBUILD_ANTLR" -eq 1 ]] && rm -rf "$ANTLR_INSTALL"
-  if [[ -d "$ANTLR_INSTALL/usr/local/include" ]]; then ok "ANTLR runtime already built"; return; fi
+  if [[ -d "$ANTLR_INSTALL/usr/local/include" ]] && find "$ANTLR_INSTALL/usr/local" -type f -name 'libantlr4-runtime.a' | grep -q .; then
+    ok "ANTLR runtime already built"
+    return
+  fi
   info "Building ANTLR4 C++ runtime..."
   local b="$ANTLR_SRC/build"
   rm -rf "$ANTLR_INSTALL" "$b"; mkdir -p "$ANTLR_INSTALL" "$b"
@@ -186,7 +205,11 @@ build_antlr(){
     -DCMAKE_C_COMPILER="$ZIG_CC" \
     -DCMAKE_CXX_COMPILER="$ZIG_CXX" \
     -DCMAKE_BUILD_TYPE=Release \
-    -DCMAKE_POSITION_INDEPENDENT_CODE=ON
+    -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
+    -DANTLR_BUILD_SHARED=OFF \
+    -DANTLR_BUILD_STATIC=ON \
+    -DANTLR_BUILD_CPP_TESTS=OFF \
+    -DBUILD_SHARED_LIBS=OFF
   cmake_build "$b"
   DESTDIR="$ANTLR_INSTALL" cmake --install "$b"
   ok "ANTLR4 runtime installed to $ANTLR_INSTALL"
@@ -205,7 +228,14 @@ clone_llvm(){
 }
 
 build_llvm(){
-  [[ "$BUILD_LLVM" -eq 0 ]] && { warn "Skipping LLVM bundle"; return; }
+  if [[ "$BUILD_LLVM" -eq 0 ]]; then
+    if [[ -d "$LLVM_INSTALL/lib/cmake/llvm" && -x "$LLVM_INSTALL/bin/llvm-config" ]]; then
+      ok "Skipping LLVM rebuild; using existing bundled LLVM: $LLVM_INSTALL"
+      "$LLVM_INSTALL/bin/llvm-config" --version || true
+      return
+    fi
+    die "--skip-llvm requested, but bundled LLVM is missing or incomplete at $LLVM_INSTALL. Rebuild LLVM or set CLYTH_ALLOW_SYSTEM_LLVM=1 for an explicit non-release/dev-only system LLVM fallback."
+  fi
   [[ "$REBUILD_ALL" -eq 1 || "$REBUILD_LLVM" -eq 1 ]] && rm -rf "$LLVM_BUILD" "$LLVM_INSTALL"
   if [[ -x "$LLVM_INSTALL/bin/llvm-config" && -x "$LLVM_INSTALL/bin/lld" ]]; then
     ok "Bundled LLVM already built: $LLVM_INSTALL"
@@ -221,19 +251,36 @@ build_llvm(){
     -DCMAKE_CXX_COMPILER="$ZIG_CXX" \
     -DCMAKE_BUILD_TYPE=Release \
     -DCMAKE_INSTALL_PREFIX="$LLVM_INSTALL" \
+    -DCMAKE_C_FLAGS="-target $CLYTH_ZIG_TARGET" \
+    -DCMAKE_CXX_FLAGS="-target $CLYTH_ZIG_TARGET -stdlib=libc++" \
+    -DCMAKE_EXE_LINKER_FLAGS="-target $CLYTH_ZIG_TARGET -stdlib=libc++ -static" \
+    -DCMAKE_SHARED_LINKER_FLAGS="-target $CLYTH_ZIG_TARGET -stdlib=libc++" \
+    -DCMAKE_MODULE_LINKER_FLAGS="-target $CLYTH_ZIG_TARGET -stdlib=libc++" \
     -DLLVM_ENABLE_PROJECTS="lld" \
     -DLLVM_ENABLE_RUNTIMES="" \
     -DLLVM_TARGETS_TO_BUILD="$LLVM_TARGETS_TO_BUILD" \
+    -DLLVM_DEFAULT_TARGET_TRIPLE="$CLYTH_LLVM_TARGET_TRIPLE" \
+    -DLLVM_HOST_TRIPLE="$CLYTH_LLVM_TARGET_TRIPLE" \
     -DLLVM_BUILD_LLVM_DYLIB=OFF \
     -DLLVM_LINK_LLVM_DYLIB=OFF \
+    -DBUILD_SHARED_LIBS=OFF \
     -DLLVM_BUILD_TOOLS=ON \
+    -DLLVM_BUILD_UTILS=ON \
     -DLLVM_INCLUDE_TESTS=OFF \
     -DLLVM_INCLUDE_EXAMPLES=OFF \
     -DLLVM_INCLUDE_BENCHMARKS=OFF \
+    -DLLVM_INCLUDE_DOCS=OFF \
     -DLLVM_ENABLE_TERMINFO=OFF \
     -DLLVM_ENABLE_LIBXML2=OFF \
     -DLLVM_ENABLE_ZLIB=OFF \
     -DLLVM_ENABLE_ZSTD=OFF \
+    -DLLVM_ENABLE_LIBEDIT=OFF \
+    -DLLVM_ENABLE_LIBPFM=OFF \
+    -DLLVM_ENABLE_Z3_SOLVER=OFF \
+    -DLLVM_ENABLE_FFI=OFF \
+    -DLLVM_ENABLE_LIBCXX=ON \
+    -DLLVM_STATIC_LINK_CXX_STDLIB=ON \
+    -DLLVM_ENABLE_LTO=OFF \
     -DLLVM_ENABLE_RTTI=ON \
     -DLLVM_ENABLE_EH=ON \
     -DCMAKE_POSITION_INDEPENDENT_CODE=ON
@@ -285,6 +332,93 @@ build_one_runtime_c_binding(){
     mkdir -p "$module_dir"
     cp "$archive_path" "$module_dir/$archive_name"
     ok "Copied runtime module archive: $module_dir/$archive_name"
+  done
+}
+
+build_http_runtime_c_binding(){
+  local arch
+  arch="$(runtime_arch_name)"
+
+  local source_dir="$CLYTH_RUNTIME_C_BINDINGS/http"
+  local binding_arch_dir="$source_dir/$arch"
+  local archive_path="$binding_arch_dir/libclyth_http.a"
+  local libuv_dir="$CLYTH_RUNTIME_C_BINDINGS/libuv/vendor/libuv"
+  mkdir -p "$binding_arch_dir"
+
+  local common_flags=(
+    -O2
+    -target "$CLYTH_ZIG_TARGET"
+    -D_GNU_SOURCE
+    -D_POSIX_C_SOURCE=200112L
+    -D_FILE_OFFSET_BITS=64
+    -I"$source_dir"
+    -I"$libuv_dir/include"
+    -I"$libuv_dir/src"
+  )
+
+  local objects=()
+  local web_object="$binding_arch_dir/http.o"
+  "$ZIG_CC" "${common_flags[@]}" -c "$source_dir/web.c" -o "$web_object"
+  objects+=("$web_object")
+
+  local libuv_sources=(
+    src/fs-poll.c
+    src/idna.c
+    src/inet.c
+    src/random.c
+    src/strscpy.c
+    src/strtok.c
+    src/thread-common.c
+    src/threadpool.c
+    src/timer.c
+    src/uv-common.c
+    src/uv-data-getter-setters.c
+    src/version.c
+    src/unix/async.c
+    src/unix/core.c
+    src/unix/dl.c
+    src/unix/fs.c
+    src/unix/getaddrinfo.c
+    src/unix/getnameinfo.c
+    src/unix/linux.c
+    src/unix/loop-watcher.c
+    src/unix/loop.c
+    src/unix/pipe.c
+    src/unix/poll.c
+    src/unix/process.c
+    src/unix/procfs-exepath.c
+    src/unix/proctitle.c
+    src/unix/random-devurandom.c
+    src/unix/random-getrandom.c
+    src/unix/signal.c
+    src/unix/stream.c
+    src/unix/tcp.c
+    src/unix/thread.c
+    src/unix/tty.c
+    src/unix/udp.c
+  )
+
+  local libuv_source
+  for libuv_source in "${libuv_sources[@]}"; do
+    local source_path="$libuv_dir/$libuv_source"
+    if [[ ! -f "$source_path" ]]; then
+      warn "libuv source not found, skipping: $source_path"
+      continue
+    fi
+    local object_name="libuv_${libuv_source//\//_}"
+    local object_path="$binding_arch_dir/${object_name%.c}.o"
+    "$ZIG_CC" "${common_flags[@]}" -c "$source_path" -o "$object_path"
+    objects+=("$object_path")
+  done
+
+  zig ar rcs "$archive_path" "${objects[@]}"
+  ok "Built libuv-backed HTTP runtime archive: $archive_path"
+
+  local module_dir
+  for module_dir in     "$CLYTH_RUNTIME_DIR/modules/module-router/$arch"     "$CLYTH_RUNTIME_DIR/modules/module-http/$arch"     "$CLYTH_RUNTIME_DIR/modules/module-https/$arch"; do
+    mkdir -p "$module_dir"
+    cp "$archive_path" "$module_dir/libclyth_http.a"
+    ok "Copied runtime module archive: $module_dir/libclyth_http.a"
   done
 }
 
@@ -377,11 +511,7 @@ build_runtime_c_bindings(){
     "$CLYTH_RUNTIME_C_BINDINGS/concurrency" "concurrency.c" "libclyth_concurrency.a" \
     "$CLYTH_RUNTIME_DIR/modules/module-concurrency/$arch"
 
-  build_one_runtime_c_binding "http" \
-    "$CLYTH_RUNTIME_C_BINDINGS/http" "web.c" "libclyth_http.a" \
-    "$CLYTH_RUNTIME_DIR/modules/module-router/$arch" \
-    "$CLYTH_RUNTIME_DIR/modules/module-http/$arch" \
-    "$CLYTH_RUNTIME_DIR/modules/module-https/$arch"
+  build_http_runtime_c_binding
 }
 
 package_distribution(){
@@ -480,11 +610,13 @@ build_clyth(){
   cd -
   mapfile -t g < <(gen_args)
   extra=()
-  if [[ "$BUILD_LLVM" -eq 1 && -d "$LLVM_INSTALL/lib/cmake/llvm" ]]; then
+  if [[ -d "$LLVM_INSTALL/lib/cmake/llvm" && -x "$LLVM_INSTALL/bin/llvm-config" ]]; then
     extra+=("-DLLVM_DIR=$LLVM_INSTALL/lib/cmake/llvm" "-DCMAKE_PREFIX_PATH=$LLVM_INSTALL")
     info "Using bundled LLVM_DIR=$LLVM_INSTALL/lib/cmake/llvm"
+  elif [[ "${CLYTH_ALLOW_SYSTEM_LLVM:-0}" == "1" ]]; then
+    warn "Using system LLVM because CLYTH_ALLOW_SYSTEM_LLVM=1. This is dev-only and not valid for release purity."
   else
-    warn "Bundled LLVM not enabled/found; CMake will search for system LLVM."
+    die "Bundled LLVM not found at $LLVM_INSTALL/lib/cmake/llvm. Refusing to fall back to system LLVM. Run ./build_compiler.sh --rebuild-llvm --skip-dist or set CLYTH_ALLOW_SYSTEM_LLVM=1 for dev-only testing."
   fi
   cmake -S "$CLYTH_SRC" -B "$CLYTH_BUILD" "${g[@]}" \
     -DCMAKE_C_COMPILER="$ZIG_CC" \
@@ -500,6 +632,10 @@ main(){
   export PATH="$ROOT_DIR:$PATH"
   info "Starting Clyth build at $ROOT_DIR"
   info "Parallel jobs: $JOBS"
+  info "Zig target: $CLYTH_ZIG_TARGET"
+  info "LLVM target triple: $CLYTH_LLVM_TARGET_TRIPLE"
+  info "Zig static link mode: $CLYTH_ZIG_STATIC"
+  info "Zig C++ standard library: $CLYTH_ZIG_CXX_STDLIB"
   check_deps
   setup_antlr
   ensure_fmt

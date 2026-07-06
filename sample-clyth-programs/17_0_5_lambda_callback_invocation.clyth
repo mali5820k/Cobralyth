@@ -1,11 +1,11 @@
 extern C int32 printf(string fmt, ...)
 
-int32 run_callback(int32 value, function<int32, <int32>> callback) {
+int32 run_callback(int32 value, function<int32(int32)> callback) {
     return callback(value)
 }
 
 int32 main(string[] args) {
-    int32 result = run_callback(21, function<int32, <int32 value> => {
+    int32 result = run_callback(21, (int32 value) => {
         return value * 2
     })
     printf("lambda callback result: %d\n", result)

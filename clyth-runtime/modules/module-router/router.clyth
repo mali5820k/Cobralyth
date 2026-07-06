@@ -1,19 +1,23 @@
 // Clyth Runtime Module: router
 // License: MIT
 //
-// 0.5.0 router API surface. The public Clyth API uses Router, Request, and
-// Response structs. Native runtime handles stay behind the module boundary.
-// Anonymous route functions are the intended ergonomic endpoint once lambda
-// lowering lands:
+// 0.5.0 route-driven HTTP API surface.
 //
-// router.post("/", function<void, <Request request, Response response> => { ... })
+// Public shape:
+//   router.get("/", (Request request, Response response) => { ... })
+//   router.post("/api/message", (Request request, Response response) => { ... })
+//   response.send(200, payload)
+//
+// Request is intentionally handle-backed for 0.5.0. Passing large structs with
+// string fields through a native function-pointer callback is too ABI-sensitive
+// for this milestone. Request accessors can be layered on top of native_handle.
 
 struct Request {
-    string body,
-    string method,
-    string path,
-    string query,
     int64 native_handle,
+
+    constructor(int64 handle) {
+        this.native_handle = handle
+    }
 }
 
 struct Response {
@@ -33,48 +37,39 @@ struct Router {
 }
 
 extern C int64 clyth_router_create()
-extern C int32 clyth_router_post(int64 router_handle, string path, function<void, <Request, Response>> handler)
-extern C int32 clyth_router_get(int64 router_handle, string path, function<void, <Request, Response>> handler)
-extern C int32 clyth_response_send_text(int64 response_handle, int32 code, string payload)
-extern C int32 clyth_response_send_json(int64 response_handle, int32 code, string payload)
+extern C int32 clyth_router_post(int64 router_handle, string path, function<void(Request, Response)> handler)
+extern C int32 clyth_router_get(int64 router_handle, string path, function<void(Request, Response)> handler)
+extern C int32 clyth_response_send(int64 response_handle, int32 code, string payload)
 
 Router new_router() {
     Router router = Router()
     return router
 }
 
-int32 router_post(Router router, string path, function<void, <Request, Response>> handler) {
+int32 router_post(Router router, string path, function<void(Request, Response)> handler) {
     return clyth_router_post(router.native_handle, path, handler)
 }
 
-int32 router_get(Router router, string path, function<void, <Request, Response>> handler) {
+int32 router_get(Router router, string path, function<void(Request, Response)> handler) {
     return clyth_router_get(router.native_handle, path, handler)
 }
 
-int32 response_send_text(Response response, int32 code, string payload) {
-    return clyth_response_send_text(response.native_handle, code, payload)
-}
-
-int32 response_send_json(Response response, int32 code, string payload) {
-    return clyth_response_send_json(response.native_handle, code, payload)
+int32 response_send(Response response, int32 code, string payload) {
+    return clyth_response_send(response.native_handle, code, payload)
 }
 
 Router {
-    void post(string path, function<void, <Request, Response>> handler) {
+    void post(string path, function<void(Request, Response)> handler) {
         clyth_router_post(this.native_handle, path, handler)
     }
 
-    void get(string path, function<void, <Request, Response>> handler) {
+    void get(string path, function<void(Request, Response)> handler) {
         clyth_router_get(this.native_handle, path, handler)
     }
 }
 
 Response {
     void send(int32 code, string payload) {
-        clyth_response_send_json(this.native_handle, code, payload)
-    }
-
-    void send_text(int32 code, string payload) {
-        clyth_response_send_text(this.native_handle, code, payload)
+        clyth_response_send(this.native_handle, code, payload)
     }
 }

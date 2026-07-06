@@ -224,7 +224,6 @@ public:
     std::any visitPostfix(ClythV1Parser::PostfixContext* ctx) override;
     std::any visitPostfixSuffix(ClythV1Parser::PostfixSuffixContext* ctx) override;
     std::any visitPrimary(ClythV1Parser::PrimaryContext* ctx) override;
-    std::any visitAllocationExpression(ClythV1Parser::AllocationExpressionContext* ctx) override;
     std::any visitLambdaExpression(ClythV1Parser::LambdaExpressionContext* ctx) override;
     std::any visitLambdaParamList(ClythV1Parser::LambdaParamListContext* ctx) override;
     std::any visitLambdaParam(ClythV1Parser::LambdaParamContext* ctx) override;

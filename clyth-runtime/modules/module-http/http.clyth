@@ -1,8 +1,9 @@
 // Clyth Runtime Module: http
 // License: MIT
 //
-// 0.5.0 HTTP server API surface. HTTP configuration/server objects are Clyth
-// structs; native handles remain internal runtime implementation details.
+// 0.5.0 HTTP server API surface. HTTP is route-driven: create a Router,
+// register get/post handlers, build an HttpServer, then call server.start().
+// Demo-only serve_* helpers are intentionally not exposed.
 
 include "router"
 
@@ -10,33 +11,35 @@ struct HttpConfiguration {
     int32 port,
     Router router,
     int64 native_handle,
+
+    constructor(int32 port, Router router) {
+        this.port = port
+        this.router = router
+        this.native_handle = clyth_http_configuration_create(port, router.native_handle)
+    }
 }
 
 struct HttpServer {
     HttpConfiguration configuration,
     int64 native_handle,
+
+    constructor(HttpConfiguration configuration) {
+        this.configuration = configuration
+        this.native_handle = clyth_http_server_create(configuration.native_handle)
+    }
 }
 
 extern C int64 clyth_http_configuration_create(int32 port, int64 router_handle)
 extern C int64 clyth_http_server_create(int64 configuration_handle)
 extern C int32 clyth_http_server_start(int64 server_handle)
-extern C int32 clyth_http_serve_text_once(int32 port, string body)
-extern C int32 clyth_http_serve_html_once(int32 port, string body)
 
 HttpConfiguration new_http_configuration(int32 port, Router router) {
-    int64 native_handle = clyth_http_configuration_create(port, router.native_handle)
-    HttpConfiguration configuration = HttpConfiguration()
-    configuration.port = port
-    configuration.router = router
-    configuration.native_handle = native_handle
+    HttpConfiguration configuration = HttpConfiguration(port, router)
     return configuration
 }
 
 HttpServer new_http_server(HttpConfiguration configuration) {
-    int64 native_handle = clyth_http_server_create(configuration.native_handle)
-    HttpServer server = HttpServer()
-    server.configuration = configuration
-    server.native_handle = native_handle
+    HttpServer server = HttpServer(configuration)
     return server
 }
 
@@ -44,10 +47,8 @@ int32 http_server_start(HttpServer server) {
     return clyth_http_server_start(server.native_handle)
 }
 
-int32 serve_text_once(int32 port, string body) {
-    return clyth_http_serve_text_once(port, body)
-}
-
-int32 serve_html_once(int32 port, string body) {
-    return clyth_http_serve_html_once(port, body)
+HttpServer {
+    int32 start() {
+        return clyth_http_server_start(this.native_handle)
+    }
 }

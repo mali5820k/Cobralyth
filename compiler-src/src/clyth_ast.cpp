@@ -817,13 +817,12 @@ std::any ClythAST::visitPrimary(ClythV1Parser::PrimaryContext* ctx) {
     return build_generic(ast::NodeKind::Generic, ctx, "primary");
 }
 
-std::any ClythAST::visitAllocationExpression(ClythV1Parser::AllocationExpressionContext* ctx) {
-    return build_generic(ast::NodeKind::AllocationExpr, ctx, "allocation");
-}
-
 std::any ClythAST::visitLambdaExpression(ClythV1Parser::LambdaExpressionContext* ctx) {
     auto node = build_generic(ast::NodeKind::LambdaExpr, ctx, "lambda");
-    node->attributes["return_type"] = ctx->type() != nullptr ? ctx->type()->getText() : "void";
+    // Anonymous functions no longer carry an explicit return type in the lambda
+    // expression grammar. The semantic pass infers void when there are no
+    // return statements, or validates a consistent inferred return type later.
+    node->attributes["return_type"] = "void";
     node->attributes["type"] = ctx->getText();
     return node;
 }

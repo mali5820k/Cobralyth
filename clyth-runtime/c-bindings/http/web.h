@@ -7,7 +7,15 @@
 extern "C" {
 #endif
 
-typedef void* clyth_route_handler_fn;
+typedef struct clyth_runtime_request {
+    int64_t native_handle;
+} clyth_runtime_request;
+
+typedef struct clyth_runtime_response {
+    int64_t native_handle;
+} clyth_runtime_response;
+
+typedef void (*clyth_route_handler_fn)(clyth_runtime_request request, clyth_runtime_response response);
 
 int64_t clyth_router_create(void);
 int32_t clyth_router_post(int64_t router_handle, const char* path, clyth_route_handler_fn handler);
@@ -20,11 +28,7 @@ int64_t clyth_https_server_create(int64_t configuration_handle);
 int32_t clyth_http_server_start(int64_t server_handle);
 int32_t clyth_https_server_start(int64_t server_handle);
 
-int32_t clyth_response_send_text(int64_t response_handle, int32_t code, const char* payload);
-int32_t clyth_response_send_json(int64_t response_handle, int32_t code, const char* payload);
-int32_t clyth_http_serve_text_once(int32_t port, const char* body);
-int32_t clyth_http_serve_html_once(int32_t port, const char* body);
-int32_t clyth_https_serve_text_once(int32_t port, const char* cert_path, const char* key_path, const char* body);
+int32_t clyth_response_send(int64_t response_handle, int32_t code, const char* payload);
 
 #ifdef __cplusplus
 }

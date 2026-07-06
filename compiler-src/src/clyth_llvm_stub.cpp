@@ -165,14 +165,15 @@ bool is_clyth_string_literal(const std::string& literal) {
 }
 
 std::string unescape_clyth_string_literal(std::string literal) {
-    const bool is_raw_template = literal.size() >= 2 && literal.front() == '`' && literal.back() == '`';
     if (is_clyth_string_literal(literal)) {
         literal = literal.substr(1, literal.size() - 2);
     }
 
-    // Multiline template literals are normalized by the compiler driver into
-    // single-line tokens containing escaped newline/tab markers. Decode those
-    // markers here so runtime strings preserve the source text shape.
+    // Backtick strings preserve the user-facing multiline authoring model, but
+    // the pre-ANTLR normalizer has to encode physical newlines as \n so the
+    // grammar can still consume the string as one token. Lower those escapes
+    // back into real bytes here so runtime output contains 0x0A/0x09 rather
+    // than literal backslash characters.
     std::string out;
     out.reserve(literal.size());
 
@@ -325,20 +326,31 @@ std::optional<std::string> parse_dynamic_array_element_type_name(const std::stri
 std::vector<std::string> split_top_level_generic_args(const std::string& text) {
     std::vector<std::string> result;
     std::string current;
-    int depth = 0;
+    int angle_depth = 0;
+    int paren_depth = 0;
 
     for (char ch : text) {
         if (ch == '<') {
-            ++depth;
+            ++angle_depth;
             current.push_back(ch);
             continue;
         }
         if (ch == '>') {
-            --depth;
+            --angle_depth;
             current.push_back(ch);
             continue;
         }
-        if ((ch == ',' || ch == ':') && depth == 0) {
+        if (ch == '(') {
+            ++paren_depth;
+            current.push_back(ch);
+            continue;
+        }
+        if (ch == ')') {
+            --paren_depth;
+            current.push_back(ch);
+            continue;
+        }
+        if ((ch == ',' || ch == ':') && angle_depth == 0 && paren_depth == 0) {
             if (!current.empty()) {
                 result.push_back(current);
             }
@@ -374,54 +386,50 @@ std::optional<FunctionTypeInfo> parse_function_type_text(const std::string& type
         return std::nullopt;
     }
 
-    int depth = 0;
-    std::size_t return_separator = std::string::npos;
+    auto trim = [](std::string value) {
+        auto not_space = [](unsigned char ch) { return !std::isspace(ch); };
+        value.erase(value.begin(), std::find_if(value.begin(), value.end(), not_space));
+        value.erase(std::find_if(value.rbegin(), value.rend(), not_space).base(), value.end());
+        return value;
+    };
+
+    int angle_depth = 0;
+    std::size_t open_paren = std::string::npos;
     for (std::size_t i = 0; i < inner.size(); ++i) {
         const char ch = inner[i];
         if (ch == '<') {
-            ++depth;
+            ++angle_depth;
             continue;
         }
         if (ch == '>') {
-            --depth;
+            --angle_depth;
             continue;
         }
-        if (ch == ',' && depth == 0) {
-            return_separator = i;
+        if (ch == '(' && angle_depth == 0) {
+            open_paren = i;
             break;
         }
     }
 
-    if (return_separator == std::string::npos) {
+    if (open_paren == std::string::npos || inner.back() != ')') {
         return std::nullopt;
     }
 
     FunctionTypeInfo result;
-    result.return_type_name = inner.substr(0, return_separator);
-    const std::string params_wrapper = inner.substr(return_separator + 1);
+    result.return_type_name = trim(inner.substr(0, open_paren));
+    const std::string params = inner.substr(open_paren + 1, inner.size() - open_paren - 2);
 
-    auto trim = [](std::string value) {
-        value.erase(std::remove_if(value.begin(), value.end(), [](unsigned char ch) {
-            return std::isspace(ch);
-        }), value.end());
-        return value;
-    };
-
-    result.return_type_name = trim(result.return_type_name);
-    const std::string params_clean = trim(params_wrapper);
-
-    if (result.return_type_name.empty() || params_clean.size() < 2 ||
-        params_clean.front() != '<' || params_clean.back() != '>') {
+    if (result.return_type_name.empty()) {
         return std::nullopt;
     }
 
-    const std::string params = params_clean.substr(1, params_clean.size() - 2);
-    if (!params.empty()) {
+    if (!trim(params).empty()) {
         result.parameter_type_names = split_top_level_generic_args(params);
     }
 
     return result;
 }
+
 std::string sanitize_type_fragment_for_symbol(std::string value) {
     for (char& ch : value) {
         if (!(std::isalnum(static_cast<unsigned char>(ch)) || ch == '_')) {
@@ -1997,8 +2005,8 @@ bool ClythLLVMCodegen::emit_lambda_body(llvm::Function* function, const ast::Nod
 llvm::Value* ClythLLVMCodegen::emit_formatted_string_literal(const ast::NodePtr& node, const semantic::SemanticResult& semantics) {
     const std::string literal = attr(node, "literal").value_or(node ? node->text : "");
     std::string body = literal;
-    if (literal.size() >= 2 && ((literal.front() == '`' && literal.back() == '`') || (literal.front() == '"' && literal.back() == '"'))) {
-        body = literal.substr(1, literal.size() - 2);
+    if (is_clyth_string_literal(literal)) {
+        body = unescape_clyth_string_literal(literal);
     }
     std::string format;
     std::vector<llvm::Value*> snprintf_args;

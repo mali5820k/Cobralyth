@@ -5,7 +5,7 @@
 // function values into this layer, while explicit POSIX thread access remains
 // available for systems code that wants native-thread control.
 
-extern C int64 clyth_posix_thread_start(function<int64, <int64>> entry, int64 arg)
+extern C int64 clyth_posix_thread_start(function<int64(int64)> entry, int64 arg)
 extern C int32 clyth_posix_thread_completed(int64 thread)
 extern C int64 clyth_posix_thread_result(int64 thread)
 extern C int32 clyth_posix_thread_release(int64 thread)

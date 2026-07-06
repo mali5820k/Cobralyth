@@ -281,18 +281,13 @@ postfixSuffix
 primary
     : literal
     | collectionLiteral
-    | allocationExpression
     | lambdaExpression
     | IDENTIFIER
     | LPAREN expression RPAREN
     ;
 
-allocationExpression
-    : (MALLOC | ISO_MALLOC) LPAREN type RPAREN
-    ;
-
 lambdaExpression
-    : FUNCTION LT type COMMA LT lambdaParamList? GT ARROW block
+    : LPAREN lambdaParamList? RPAREN ARROW block
     ;
 
 lambdaParamList
@@ -377,7 +372,7 @@ dynamicArrayType
     ;
 
 functionType
-    : FUNCTION LT type COMMA LT functionParamTypeList? GT GT
+    : FUNCTION LT type LPAREN functionParamTypeList? RPAREN GT
     ;
 
 functionParamTypeList
@@ -420,8 +415,6 @@ STRUCT  : 'struct';
 FUNCTION : 'function';
 
 MECC       : 'mecc';
-MALLOC     : 'malloc';
-ISO_MALLOC : 'iso_malloc';
 
 CONSTRUCTOR : 'constructor';
 DESTRUCTOR  : 'destructor';

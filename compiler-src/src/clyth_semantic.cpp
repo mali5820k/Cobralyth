@@ -29,20 +29,31 @@ bool is_builtin_type_name(const std::string& name) {
 std::vector<std::string> split_function_type_parameters(const std::string& text) {
     std::vector<std::string> result;
     std::string current;
-    int depth = 0;
+    int angle_depth = 0;
+    int paren_depth = 0;
 
     for (char ch : text) {
         if (ch == '<') {
-            ++depth;
+            ++angle_depth;
             current.push_back(ch);
             continue;
         }
         if (ch == '>') {
-            --depth;
+            --angle_depth;
             current.push_back(ch);
             continue;
         }
-        if ((ch == ',' || ch == ':') && depth == 0) {
+        if (ch == '(') {
+            ++paren_depth;
+            current.push_back(ch);
+            continue;
+        }
+        if (ch == ')') {
+            --paren_depth;
+            current.push_back(ch);
+            continue;
+        }
+        if ((ch == ',' || ch == ':') && angle_depth == 0 && paren_depth == 0) {
             if (!current.empty()) {
                 result.push_back(current);
             }
@@ -77,57 +88,55 @@ std::optional<FunctionTypeParts> parse_function_type_text(const std::string& typ
         return std::nullopt;
     }
 
-    int depth = 0;
-    std::size_t return_separator = std::string::npos;
+    auto trim = [](std::string value) {
+        auto not_space = [](unsigned char ch) { return !std::isspace(ch); };
+        value.erase(value.begin(), std::find_if(value.begin(), value.end(), not_space));
+        value.erase(std::find_if(value.rbegin(), value.rend(), not_space).base(), value.end());
+        return value;
+    };
+
+    int angle_depth = 0;
+    std::size_t open_paren = std::string::npos;
     for (std::size_t i = 0; i < inner.size(); ++i) {
         const char ch = inner[i];
         if (ch == '<') {
-            ++depth;
+            ++angle_depth;
             continue;
         }
         if (ch == '>') {
-            --depth;
+            --angle_depth;
             continue;
         }
-        if (ch == ',' && depth == 0) {
-            return_separator = i;
+        if (ch == '(' && angle_depth == 0) {
+            open_paren = i;
             break;
         }
     }
 
-    if (return_separator == std::string::npos) {
+    if (open_paren == std::string::npos || inner.back() != ')') {
         return std::nullopt;
     }
-
-    auto trim = [](std::string value) {
-        value.erase(std::remove_if(value.begin(), value.end(), [](unsigned char ch) {
-            return std::isspace(ch);
-        }), value.end());
-        return value;
-    };
 
     FunctionTypeParts result;
-    result.return_type_name = trim(inner.substr(0, return_separator));
-    const std::string params_wrapper = trim(inner.substr(return_separator + 1));
+    result.return_type_name = trim(inner.substr(0, open_paren));
+    const std::string params = inner.substr(open_paren + 1, inner.size() - open_paren - 2);
 
-    if (result.return_type_name.empty() || params_wrapper.size() < 2 ||
-        params_wrapper.front() != '<' || params_wrapper.back() != '>') {
+    if (result.return_type_name.empty()) {
         return std::nullopt;
     }
 
-    const std::string params = params_wrapper.substr(1, params_wrapper.size() - 2);
-    if (!params.empty()) {
+    if (!trim(params).empty()) {
         result.parameter_type_names = split_function_type_parameters(params);
     }
 
     return result;
 }
 
+
 bool looks_like_keyword(const std::string& text) {
     static const std::unordered_set<std::string> keywords {
         "include", "extern", "C", "struct", "mecc",
         "if", "else", "for", "while", "return", "break", "continue",
-        "malloc", "iso_malloc",
         "is", "in", "not",
         "true", "false", "null", "constructor", "destructor"
     };
@@ -201,6 +210,27 @@ void collect_nodes_by_kind(const ast::NodePtr& node, ast::NodeKind kind, std::ve
 
     for (const auto& child : node->children) {
         collect_nodes_by_kind(child, kind, out);
+    }
+}
+
+void collect_signature_params(const ast::NodePtr& node, std::vector<ast::NodePtr>& out) {
+    if (!node) {
+        return;
+    }
+
+    if (node->label == "paramList" || node->label == "externParamList") {
+        collect_nodes_by_kind(node, ast::NodeKind::Param, out);
+        return;
+    }
+
+    if (node->kind == ast::NodeKind::BlockStmt ||
+        node->kind == ast::NodeKind::MeccBlockStmt ||
+        node->kind == ast::NodeKind::LambdaExpr) {
+        return;
+    }
+
+    for (const auto& child : node->children) {
+        collect_signature_params(child, out);
     }
 }
 
@@ -356,7 +386,7 @@ bool SemanticContext::is_known_type(const TypeInfo& type) const {
 
     const std::string& name = type.name;
 
-    // First-class function callback syntax: function<Return, <Param1, Param2>>.
+    // First-class function callback syntax: function<Return(Param1, Param2)>.
     // The outer `function` marker is structural, while the return type and
     // parameter types still need to be known Clyth types.
     if (auto function_type = parse_function_type_text(name)) {
@@ -868,7 +898,7 @@ void FunctionSignaturePass::run(SemanticContext& context, const ast::ProgramPtr&
 
         std::unordered_set<std::string> param_names;
         std::vector<ast::NodePtr> params;
-        collect_nodes_by_kind(fn, ast::NodeKind::Param, params);
+        collect_signature_params(fn, params);
 
         for (const auto& param : params) {
             const auto param_name = query::declared_name(param);
@@ -953,7 +983,7 @@ void ScopeAndSymbolPass::visit_function(SemanticContext& context, const ast::Nod
     context.push_scope(fmt::format("function:{}", name));
 
     std::vector<ast::NodePtr> params;
-    collect_nodes_by_kind(node, ast::NodeKind::Param, params);
+    collect_signature_params(node, params);
 
     for (const auto& param : params) {
         const auto param_name = query::declared_name(param);

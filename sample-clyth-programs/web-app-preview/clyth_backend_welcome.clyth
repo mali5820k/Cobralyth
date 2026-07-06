@@ -140,7 +140,19 @@ string welcome_html() {
 }
 
 int32 main(string[] args) {
-    string html = welcome_html()
+    Router router = Router()
+
+    router.get("/", (Request request, Response response) => {
+        response.send(200, welcome_html())
+    })
+
+    router.post("/api/message", (Request request, Response response) => {
+        response.send(200, `{"received":true,"message":"Clyth backend received the JSON payload."}`)
+    })
+
+    HttpConfiguration configuration = HttpConfiguration(9090, router)
+    HttpServer server = HttpServer(configuration)
+
     println("Clyth backend HTTP demo listening on http://127.0.0.1:9090")
-    return serve_html_once(9090, html)
+    return server.start()
 }

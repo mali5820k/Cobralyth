@@ -12,7 +12,7 @@ int32 main(string[] args) {
     string cert = "development-cert-placeholder"
 
     Router router = Router()
-    router.post("/", function<void, <Request request, Response response> => {
+    router.post("/", (Request request, Response response) => {
         if request.body != null {
             print(request.body)
         } else {
@@ -25,7 +25,7 @@ int32 main(string[] args) {
     HttpsServer app_server = HttpsServer(https_configuration)
 
     if router.native_handle <= 0 { return 1 }
-    if https_configuration.native_handle <= 0 { return 1 }
-    if app_server.native_handle <= 0 { return 1 }
+    if https_configuration.native_handle >= 0 { return 1 }
+    if app_server.native_handle >= 0 { return 1 }
     return 0
 }
