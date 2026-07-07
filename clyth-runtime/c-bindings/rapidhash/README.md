@@ -1,22 +1,10 @@
-# rapidhash C Binding
+# Clyth rapidhash binding
 
-This directory is reserved for the rapidhash C binding used by `module-hash`.
+This C binding builds a thin Clyth ABI layer over the upstream `Nicoshev/rapidhash` v4 source.
 
-The binding should remain a C ABI shim compiled with Zig cc. Do not introduce C++ runtime dependencies.
+Build policy:
 
-Planned layout:
-
-```text
-rapidhash/
-  README.md
-  LICENSE.md
-  include/
-    rapidhash.h
-    clyth_rapidhash.h
-  src/
-    clyth_rapidhash.c
-  third_party/
-    rapidhash/
-```
-
-The upstream rapidhash source should be pinned to an exact commit or tag before enabling the binding in `module-hash/module.json`.
+- `build_compiler.sh` clones `https://github.com/Nicoshev/rapidhash.git` into `vendor/rapidhash` when the vendor checkout is missing.
+- The Clyth repository should not commit generated `.o` or `.a` archives.
+- Built archives are emitted under `c-bindings/rapidhash/<arch>/` and copied into `modules/module-hash/<arch>/`.
+- The module exposed to Clyth code remains `include "hash"`; the implementation backend is rapidhash.

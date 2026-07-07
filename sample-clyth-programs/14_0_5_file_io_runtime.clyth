@@ -1,0 +1,52 @@
+include "file-io"
+int32 main(string[] args) {
+    string directory_path = "/tmp/clyth_0_5_file_io_dir"
+    string copied_directory_path = "/tmp/clyth_0_5_file_io_dir_copy"
+    string path = "/tmp/clyth_0_5_file_io_dir/sample.txt"
+    string copy_path = "/tmp/clyth_0_5_file_io_dir/sample_copy.txt"
+    string moved_path = "/tmp/clyth_0_5_file_io_dir/sample_moved.txt"
+
+    delete_file(path)
+    delete_file(copy_path)
+    delete_file(moved_path)
+    delete_directory(copied_directory_path)
+    delete_directory(directory_path)
+
+    int32 mkdir_result = create_directory(directory_path)
+    int32 create_result = create_file(path)
+    int32 write_result = write_text(path, "Clyth file runtime\n")
+    int32 append_result = append_line(path, "append works")
+    int32 copy_result = copy_file(path, copy_path)
+    int32 move_result = move_file(copy_path, moved_path)
+    int32 copy_directory_result = copy_directory(directory_path, copied_directory_path)
+    bool exists = file_exists(path)
+    bool moved = file_exists(moved_path)
+    bool directory_ok = directory_exists(directory_path)
+    bool extension_ok = has_extension(path, "txt")
+    int64 size = file_size(path)
+    int64 directory_file_count = directory_num_files(directory_path)
+
+    println("file-io runtime checks completed")
+
+    if mkdir_result != 0 { return 1 }
+    if create_result != 0 { return 1 }
+    if write_result != 0 { return 1 }
+    if append_result != 0 { return 1 }
+    if copy_result != 0 { return 1 }
+    if move_result != 0 { return 1 }
+    if copy_directory_result != 0 { return 1 }
+    if exists == false { return 1 }
+    if moved == false { return 1 }
+    if directory_ok == false { return 1 }
+    if extension_ok == false { return 1 }
+    if size <= 0 { return 1 }
+    if directory_file_count <= 0 { return 1 }
+
+    delete_file(path)
+    delete_file(moved_path)
+    delete_file("/tmp/clyth_0_5_file_io_dir_copy/sample.txt")
+    delete_file("/tmp/clyth_0_5_file_io_dir_copy/sample_moved.txt")
+    delete_directory(copied_directory_path)
+    delete_directory(directory_path)
+    return 0
+}

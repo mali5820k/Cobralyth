@@ -1,5 +1,8 @@
 #include "clyth_llvm_stub.hpp"
 
+#include "clyth_antlr_files/ClythV1Lexer.h"
+#include "clyth_antlr_files/ClythV1Parser.h"
+
 #include <algorithm>
 #include <cerrno>
 #include <cstdint>
@@ -7,9 +10,12 @@
 #include <cstdlib>
 #include <sstream>
 #include <string_view>
+#include <unordered_map>
 
 namespace clyth::llvm_stub {
 namespace {
+
+bool is_identifier_like(const std::string& token);
 
 bool is_token(const ast::NodePtr& node, const std::string& text) {
     return node && node->kind == ast::NodeKind::Token && node->text == text;
@@ -26,6 +32,25 @@ std::optional<std::string> attr(const ast::NodePtr& node, const std::string& key
     }
 
     return it->second;
+}
+
+std::string lower_snake_type_name(std::string_view type_name) {
+    std::string result;
+    result.reserve(type_name.size() + 8);
+
+    for (std::size_t i = 0; i < type_name.size(); ++i) {
+        const unsigned char ch = static_cast<unsigned char>(type_name[i]);
+        if (std::isupper(ch)) {
+            if (i != 0 && !result.empty() && result.back() != '_') {
+                result.push_back('_');
+            }
+            result.push_back(static_cast<char>(std::tolower(ch)));
+        } else {
+            result.push_back(static_cast<char>(ch));
+        }
+    }
+
+    return result;
 }
 
 std::vector<ast::NodePtr> children_of_kind(const ast::NodePtr& node, ast::NodeKind kind) {
@@ -139,11 +164,22 @@ std::string declared_type_name(const ast::NodePtr& node) {
     return type_node->text;
 }
 
+bool is_clyth_string_literal(const std::string& literal) {
+    return literal.size() >= 2
+        && ((literal.front() == '"' && literal.back() == '"')
+            || (literal.front() == '`' && literal.back() == '`'));
+}
+
 std::string unescape_clyth_string_literal(std::string literal) {
-    if (literal.size() >= 2 && literal.front() == '"' && literal.back() == '"') {
+    if (is_clyth_string_literal(literal)) {
         literal = literal.substr(1, literal.size() - 2);
     }
 
+    // Backtick strings preserve the user-facing multiline authoring model, but
+    // the pre-ANTLR normalizer has to encode physical newlines as \n so the
+    // grammar can still consume the string as one token. Lower those escapes
+    // back into real bytes here so runtime output contains 0x0A/0x09 rather
+    // than literal backslash characters.
     std::string out;
     out.reserve(literal.size());
 
@@ -261,7 +297,7 @@ std::vector<ast::NodePtr> direct_params(const ast::NodePtr& node) {
         return params;
     }
     for (const auto& child : node->children) {
-        if (!child || (child->label != "paramList" && child->label != "externParamList")) {
+        if (!child || (child->label != "paramList" && child->label != "externParamList" && child->label != "lambdaParamList")) {
             continue;
         }
         for (const auto& param : child->children) {
@@ -271,6 +307,168 @@ std::vector<ast::NodePtr> direct_params(const ast::NodePtr& node) {
         }
     }
     return params;
+}
+
+
+void collect_return_statements(const ast::NodePtr& node, std::vector<ast::NodePtr>& out) {
+    if (!node) {
+        return;
+    }
+
+    if (node->kind == ast::NodeKind::LambdaExpr) {
+        // Do not let nested lambdas influence the current lambda's inferred return type.
+        return;
+    }
+
+    if (node->kind == ast::NodeKind::ReturnStmt) {
+        out.push_back(node);
+        return;
+    }
+
+    for (const auto& child : node->children) {
+        collect_return_statements(child, out);
+    }
+}
+
+std::optional<std::string> token_text_in_subtree(const ast::NodePtr& node, const std::string& text) {
+    if (!node) {
+        return std::nullopt;
+    }
+    if (node->kind == ast::NodeKind::Token && node->text == text) {
+        return node->text;
+    }
+    for (const auto& child : node->children) {
+        if (auto found = token_text_in_subtree(child, text)) {
+            return found;
+        }
+    }
+    return std::nullopt;
+}
+
+std::optional<std::string> first_identifier_text_in_subtree(const ast::NodePtr& node) {
+    if (!node) {
+        return std::nullopt;
+    }
+
+    if (node->kind == ast::NodeKind::Token && is_identifier_like(node->text)) {
+        static const std::vector<std::string> keywords = {
+            "return", "if", "else", "while", "for", "true", "false", "null"
+        };
+        if (std::find(keywords.begin(), keywords.end(), node->text) == keywords.end()) {
+            return node->text;
+        }
+    }
+
+    for (const auto& child : node->children) {
+        if (auto found = first_identifier_text_in_subtree(child)) {
+            return found;
+        }
+    }
+    return std::nullopt;
+}
+
+std::optional<std::string> infer_lambda_expr_type_name(
+    const ast::NodePtr& expr,
+    const std::unordered_map<std::string, std::string>& locals
+) {
+    if (!expr) {
+        return std::nullopt;
+    }
+
+    if (expr->kind == ast::NodeKind::LiteralExpr) {
+        const std::string literal = attr(expr, "literal").value_or(expr->text);
+        if (is_clyth_string_literal(literal)) {
+            return std::string("string");
+        }
+        if (literal == "true" || literal == "false") {
+            return std::string("bool");
+        }
+        if (!literal.empty() && std::isdigit(static_cast<unsigned char>(literal.front()))) {
+            return std::string("int32");
+        }
+    }
+
+    if (expr->kind == ast::NodeKind::IdentifierExpr || expr->kind == ast::NodeKind::Generic) {
+        if (auto ident = first_identifier_text_in_subtree(expr)) {
+            auto it = locals.find(*ident);
+            if (it != locals.end()) {
+                return it->second;
+            }
+        }
+    }
+
+    if (expr->kind == ast::NodeKind::BinaryExpr || expr->kind == ast::NodeKind::UnaryExpr) {
+        const auto children = expression_children(expr);
+        std::optional<std::string> first_type;
+        for (const auto& child : children) {
+            auto child_type = infer_lambda_expr_type_name(child, locals);
+            if (!child_type) {
+                continue;
+            }
+            if (!first_type) {
+                first_type = child_type;
+                continue;
+            }
+            if (*first_type != *child_type) {
+                return std::nullopt;
+            }
+        }
+        if (first_type) {
+            return first_type;
+        }
+    }
+
+    const auto children = expression_children(expr);
+    if (children.size() == 1) {
+        return infer_lambda_expr_type_name(children.front(), locals);
+    }
+
+    return std::nullopt;
+}
+
+std::string infer_lambda_return_type_name(const ast::NodePtr& lambda_node) {
+    std::unordered_map<std::string, std::string> locals;
+    for (const auto& param : direct_params(lambda_node)) {
+        if (auto name = declared_name(param)) {
+            locals[*name] = declared_type_name(param);
+        }
+    }
+
+    const ast::NodePtr body = first_child_of_kind(lambda_node, ast::NodeKind::BlockStmt);
+    std::vector<ast::NodePtr> returns;
+    collect_return_statements(body, returns);
+
+    if (returns.empty()) {
+        return "void";
+    }
+
+    std::optional<std::string> inferred;
+    for (const auto& ret : returns) {
+        const auto exprs = expression_children(ret);
+        if (exprs.empty()) {
+            if (inferred && *inferred != "void") {
+                return "void";
+            }
+            inferred = std::string("void");
+            continue;
+        }
+
+        auto type_name = infer_lambda_expr_type_name(exprs.front(), locals);
+        if (!type_name) {
+            // Keep the existing conservative behavior for expression forms that
+            // the 0.5.0 inference bridge cannot classify yet. The semantic
+            // rule is still "infer from returns"; the Pratt-parser frontend can
+            // replace this with full expression typing in 0.6.0.
+            return attr(lambda_node, "return_type").value_or("void");
+        }
+
+        if (inferred && *inferred != *type_name) {
+            return attr(lambda_node, "return_type").value_or("void");
+        }
+        inferred = type_name;
+    }
+
+    return inferred.value_or("void");
 }
 
 bool is_dynamic_array_type_name(const std::string& type_name) {
@@ -296,20 +494,31 @@ std::optional<std::string> parse_dynamic_array_element_type_name(const std::stri
 std::vector<std::string> split_top_level_generic_args(const std::string& text) {
     std::vector<std::string> result;
     std::string current;
-    int depth = 0;
+    int angle_depth = 0;
+    int paren_depth = 0;
 
     for (char ch : text) {
         if (ch == '<') {
-            ++depth;
+            ++angle_depth;
             current.push_back(ch);
             continue;
         }
         if (ch == '>') {
-            --depth;
+            --angle_depth;
             current.push_back(ch);
             continue;
         }
-        if ((ch == ',' || ch == ':') && depth == 0) {
+        if (ch == '(') {
+            ++paren_depth;
+            current.push_back(ch);
+            continue;
+        }
+        if (ch == ')') {
+            --paren_depth;
+            current.push_back(ch);
+            continue;
+        }
+        if ((ch == ',' || ch == ':') && angle_depth == 0 && paren_depth == 0) {
             if (!current.empty()) {
                 result.push_back(current);
             }
@@ -323,6 +532,67 @@ std::vector<std::string> split_top_level_generic_args(const std::string& text) {
 
     if (!current.empty()) {
         result.push_back(current);
+    }
+
+    return result;
+}
+
+
+struct FunctionTypeInfo {
+    std::string return_type_name;
+    std::vector<std::string> parameter_type_names;
+};
+
+std::optional<FunctionTypeInfo> parse_function_type_text(const std::string& type_name) {
+    const std::string prefix = "function<";
+    if (type_name.rfind(prefix, 0) != 0 || type_name.empty() || type_name.back() != '>') {
+        return std::nullopt;
+    }
+
+    const std::string inner = type_name.substr(prefix.size(), type_name.size() - prefix.size() - 1);
+    if (inner.empty()) {
+        return std::nullopt;
+    }
+
+    auto trim = [](std::string value) {
+        auto not_space = [](unsigned char ch) { return !std::isspace(ch); };
+        value.erase(value.begin(), std::find_if(value.begin(), value.end(), not_space));
+        value.erase(std::find_if(value.rbegin(), value.rend(), not_space).base(), value.end());
+        return value;
+    };
+
+    int angle_depth = 0;
+    std::size_t open_paren = std::string::npos;
+    for (std::size_t i = 0; i < inner.size(); ++i) {
+        const char ch = inner[i];
+        if (ch == '<') {
+            ++angle_depth;
+            continue;
+        }
+        if (ch == '>') {
+            --angle_depth;
+            continue;
+        }
+        if (ch == '(' && angle_depth == 0) {
+            open_paren = i;
+            break;
+        }
+    }
+
+    if (open_paren == std::string::npos || inner.back() != ')') {
+        return std::nullopt;
+    }
+
+    FunctionTypeInfo result;
+    result.return_type_name = trim(inner.substr(0, open_paren));
+    const std::string params = inner.substr(open_paren + 1, inner.size() - open_paren - 2);
+
+    if (result.return_type_name.empty()) {
+        return std::nullopt;
+    }
+
+    if (!trim(params).empty()) {
+        result.parameter_type_names = split_top_level_generic_args(params);
     }
 
     return result;
@@ -1275,6 +1545,19 @@ bool ClythLLVMCodegen::emit_statement(const ast::NodePtr& node, const semantic::
             if (current_scope && current_scope->return_type && value->getType() != current_scope->return_type) {
                 if (value->getType()->isIntegerTy() && current_scope->return_type->isIntegerTy()) {
                     value = builder.CreateIntCast(value, current_scope->return_type, true, "retcast");
+                } else if (value->getType()->isPointerTy() && current_scope->return_type == string_type_for()) {
+                    // Native accessors such as clyth_request_body() return a C string pointer,
+                    // while Clyth methods such as Request.body() return the language-level
+                    // string value. Wrap the pointer into the current string representation at
+                    // the return boundary instead of changing the callback ABI.
+                    llvm::Value* zero64 = llvm::ConstantInt::get(llvm::Type::getInt64Ty(context), 0);
+                    llvm::Value* assembled = llvm::UndefValue::get(string_type_for());
+                    assembled = builder.CreateInsertValue(assembled, value, {0}, "ret.string.data");
+                    assembled = builder.CreateInsertValue(assembled, zero64, {1}, "ret.string.length");
+                    assembled = builder.CreateInsertValue(assembled, zero64, {2}, "ret.string.capacity");
+                    value = assembled;
+                } else if (value->getType() == string_type_for() && current_scope->return_type->isPointerTy()) {
+                    value = emit_string_data_pointer(value, "ret.string.data");
                 }
             }
 
@@ -1313,11 +1596,39 @@ bool ClythLLVMCodegen::emit_statement(const ast::NodePtr& node, const semantic::
                 const auto exprs = expression_children(node);
                 if (!exprs.empty()) {
                     ast::NodePtr literal_initializer = first_descendant_of_kind(exprs.front(), ast::NodeKind::LiteralExpr);
-                    if (!literal_initializer) {
-                        add_codegen_error(exprs.front(), "String initializer must be a string literal in this backend pass.");
+                    if (literal_initializer) {
+                        const std::string literal_text = attr(literal_initializer, "literal").value_or(literal_initializer ? literal_initializer->text : "");
+                        if (is_clyth_string_literal(literal_text)) {
+                            const bool is_formatted_template = literal_text.size() >= 2
+                                && literal_text.front() == '`'
+                                && literal_text.back() == '`'
+                                && literal_text.find("${") != std::string::npos;
+                            if (!is_formatted_template) {
+                                return emit_string_literal_initializer(*maybe_name, literal_initializer);
+                            }
+                        }
+                    }
+
+                    llvm::Value* string_value = emit_expression(exprs.front(), semantics);
+                    if (string_value == nullptr) {
                         return false;
                     }
-                    return emit_string_literal_initializer(*maybe_name, literal_initializer);
+                    if (string_value->getType() == string_type_for()) {
+                        builder.CreateStore(string_value, alloca);
+                        return true;
+                    }
+                    if (string_value->getType()->isPointerTy()) {
+                        llvm::Value* zero64 = llvm::ConstantInt::get(llvm::Type::getInt64Ty(context), 0);
+                        llvm::Value* assembled = llvm::UndefValue::get(string_type_for());
+                        assembled = builder.CreateInsertValue(assembled, string_value, {0}, *maybe_name + ".data");
+                        assembled = builder.CreateInsertValue(assembled, zero64, {1}, *maybe_name + ".length");
+                        assembled = builder.CreateInsertValue(assembled, zero64, {2}, *maybe_name + ".capacity");
+                        builder.CreateStore(assembled, alloca);
+                        return true;
+                    }
+
+                    add_codegen_error(exprs.front(), "String initializer requires a string expression.");
+                    return false;
                 }
 
                 builder.CreateStore(llvm::ConstantAggregateZero::get(type), alloca);
@@ -1455,16 +1766,44 @@ bool ClythLLVMCodegen::emit_statement(const ast::NodePtr& node, const semantic::
                     add_codegen_error(node, "Compound assignment for string values is not implemented yet.");
                     return false;
                 }
-                ast::NodePtr literal_initializer = first_descendant_of_kind(exprs.back(), ast::NodeKind::LiteralExpr);
-                if (!literal_initializer) {
-                    add_codegen_error(exprs.back(), "String assignment currently requires a string literal.");
-                    return false;
-                }
                 const std::string name_hint = maybe_name.value_or("string");
-                if (!emit_string_literal_initializer_at_address(target_address, name_hint, literal_initializer)) {
+                ast::NodePtr literal_initializer = first_descendant_of_kind(exprs.back(), ast::NodeKind::LiteralExpr);
+                if (literal_initializer) {
+                    const std::string literal_text = attr(literal_initializer, "literal").value_or(literal_initializer ? literal_initializer->text : "");
+                    if (is_clyth_string_literal(literal_text)) {
+                        const bool is_formatted_template = literal_text.size() >= 2
+                            && literal_text.front() == '`'
+                            && literal_text.back() == '`'
+                            && literal_text.find("${") != std::string::npos;
+                        if (!is_formatted_template) {
+                            if (!emit_string_literal_initializer_at_address(target_address, name_hint, literal_initializer)) {
+                                return false;
+                            }
+                            return true;
+                        }
+                    }
+                }
+
+                llvm::Value* string_value = emit_expression(exprs.back(), semantics);
+                if (string_value == nullptr) {
                     return false;
                 }
-                return true;
+                if (string_value->getType() == string_type_for()) {
+                    builder.CreateStore(string_value, target_address);
+                    return true;
+                }
+                if (string_value->getType()->isPointerTy()) {
+                    llvm::Value* zero64 = llvm::ConstantInt::get(llvm::Type::getInt64Ty(context), 0);
+                    llvm::Value* assembled = llvm::UndefValue::get(string_type_for());
+                    assembled = builder.CreateInsertValue(assembled, string_value, {0}, name_hint + ".data");
+                    assembled = builder.CreateInsertValue(assembled, zero64, {1}, name_hint + ".length");
+                    assembled = builder.CreateInsertValue(assembled, zero64, {2}, name_hint + ".capacity");
+                    builder.CreateStore(assembled, target_address);
+                    return true;
+                }
+
+                add_codegen_error(exprs.back(), "String assignment requires a string value.");
+                return false;
             }
 
             std::string assignment_operator = "=";
@@ -1669,8 +2008,13 @@ llvm::Value* ClythLLVMCodegen::emit_expression(const ast::NodePtr& node, const s
     }
 
     switch (node->kind) {
-        case ast::NodeKind::LiteralExpr:
+        case ast::NodeKind::LiteralExpr: {
+            const std::string literal = attr(node, "literal").value_or(node ? node->text : "");
+            if (literal.find("${") != std::string::npos) {
+                return emit_formatted_string_literal(node, semantics);
+            }
             return emit_literal(node);
+        }
 
         case ast::NodeKind::IdentifierExpr:
             return emit_identifier(node);
@@ -1706,6 +2050,9 @@ llvm::Value* ClythLLVMCodegen::emit_expression(const ast::NodePtr& node, const s
 
         case ast::NodeKind::ListLiteralExpr:
         case ast::NodeKind::CurlyLiteralExpr:
+        case ast::NodeKind::LambdaExpr:
+            return emit_lambda_expression(node, semantics);
+
         case ast::NodeKind::AllocationExpr:
         case ast::NodeKind::IndexExpr:
             add_codegen_error(node, fmt::format("Expression codegen for '{}' is not implemented yet.", ast::node_kind_name(node->kind)));
@@ -1715,6 +2062,315 @@ llvm::Value* ClythLLVMCodegen::emit_expression(const ast::NodePtr& node, const s
             add_codegen_error(node, fmt::format("Unsupported expression node '{}'.", ast::node_kind_name(node->kind)));
             return nullptr;
     }
+}
+
+
+llvm::Value* ClythLLVMCodegen::emit_lambda_expression(const ast::NodePtr& node, const semantic::SemanticResult& semantics) {
+    if (!node) {
+        return nullptr;
+    }
+
+    std::string return_type_name = attr(node, "return_type").value_or("void");
+    if (return_type_name == "void") {
+        return_type_name = infer_lambda_return_type_name(node);
+    }
+    llvm::Type* return_type = llvm_type_from_clyth_type(return_type_name);
+    if (return_type == nullptr) {
+        add_codegen_error(node, fmt::format("Unsupported lambda return type '{}'.", return_type_name));
+        return nullptr;
+    }
+
+    std::vector<llvm::Type*> parameter_types;
+    for (const auto& param : direct_params(node)) {
+        const std::string param_type_name = declared_type_name(param);
+        llvm::Type* param_type = llvm_type_from_clyth_type(param_type_name);
+        if (param_type == nullptr) {
+            add_codegen_error(param, fmt::format("Unsupported lambda parameter type '{}'.", param_type_name));
+            return nullptr;
+        }
+        parameter_types.push_back(param_type);
+    }
+
+    const std::string lambda_name = fmt::format("__clyth_lambda_{}", lambda_counter++);
+    llvm::FunctionType* function_type = llvm::FunctionType::get(return_type, parameter_types, false);
+    llvm::Function* function = llvm::Function::Create(
+        function_type,
+        llvm::Function::InternalLinkage,
+        lambda_name,
+        module.get()
+    );
+
+    std::size_t index = 0;
+    const auto params = direct_params(node);
+    for (llvm::Argument& arg : function->args()) {
+        std::string name = fmt::format("arg{}", index);
+        if (index < params.size()) {
+            if (auto param_name = declared_name(params[index])) {
+                name = *param_name;
+            }
+        }
+        arg.setName(name);
+        ++index;
+    }
+
+    llvm::BasicBlock* saved_block = builder.GetInsertBlock();
+    std::unique_ptr<FunctionScope> saved_scope = std::move(current_scope);
+
+    const bool ok = emit_lambda_body(function, node, semantics);
+
+    current_scope = std::move(saved_scope);
+    if (saved_block != nullptr) {
+        builder.SetInsertPoint(saved_block);
+    }
+
+    if (!ok) {
+        return nullptr;
+    }
+    return function;
+}
+
+bool ClythLLVMCodegen::emit_lambda_body(llvm::Function* function, const ast::NodePtr& node, const semantic::SemanticResult& semantics) {
+    if (function == nullptr || node == nullptr) {
+        return false;
+    }
+
+    llvm::BasicBlock* entry_block = llvm::BasicBlock::Create(context, "entry", function);
+    builder.SetInsertPoint(entry_block);
+
+    current_scope = std::make_unique<FunctionScope>();
+    current_scope->function = function;
+    current_scope->return_type = function->getReturnType();
+    push_local_scope();
+
+    const auto params = direct_params(node);
+    std::size_t index = 0;
+    for (llvm::Argument& arg : function->args()) {
+        std::string name = fmt::format("arg{}", index);
+        std::string type_name;
+        if (index < params.size()) {
+            if (auto param_name = declared_name(params[index])) {
+                name = *param_name;
+            }
+            type_name = declared_type_name(params[index]);
+        }
+        llvm::AllocaInst* alloca = create_entry_alloca(function, arg.getType(), name);
+        builder.CreateStore(&arg, alloca);
+        register_local(name, alloca);
+        register_local_type(name, type_name);
+        register_parameter_backing(name, type_name, alloca);
+        ++index;
+    }
+
+    const ast::NodePtr body = first_child_of_kind(node, ast::NodeKind::BlockStmt);
+    if (!body) {
+        add_codegen_error(node, "Lambda expression is missing a body block.");
+        current_scope.reset();
+        return false;
+    }
+
+    const bool ok = emit_block(body, semantics);
+    if (ok && !builder.GetInsertBlock()->getTerminator()) {
+        if (current_scope->return_type->isVoidTy()) {
+            builder.CreateRetVoid();
+        } else if (current_scope->return_type->isIntegerTy()) {
+            builder.CreateRet(llvm::ConstantInt::get(current_scope->return_type, 0));
+        } else {
+            add_codegen_error(node, "Lambda has no return and unsupported default return type.");
+            current_scope.reset();
+            return false;
+        }
+    }
+
+    current_scope.reset();
+    return ok;
+}
+
+
+llvm::Value* ClythLLVMCodegen::emit_formatted_string_literal(const ast::NodePtr& node, const semantic::SemanticResult& semantics) {
+    const std::string literal = attr(node, "literal").value_or(node ? node->text : "");
+    std::string body = literal;
+    if (is_clyth_string_literal(literal)) {
+        body = unescape_clyth_string_literal(literal);
+    }
+    std::string format;
+    std::vector<llvm::Value*> snprintf_args;
+
+    auto append_format_char = [&](char ch) {
+        if (ch == '%') {
+            format += "%%";
+        } else {
+            format.push_back(ch);
+        }
+    };
+
+    auto trim = [](std::string text) {
+        auto is_space = [](unsigned char ch) { return std::isspace(ch) != 0; };
+        while (!text.empty() && is_space(static_cast<unsigned char>(text.front()))) {
+            text.erase(text.begin());
+        }
+        while (!text.empty() && is_space(static_cast<unsigned char>(text.back()))) {
+            text.pop_back();
+        }
+        return text;
+    };
+
+    auto parse_placeholder_expression = [&](const std::string& expr) -> ast::NodePtr {
+        antlr4::ANTLRInputStream input(expr);
+        ClythV1Lexer lexer(&input);
+        antlr4::CommonTokenStream tokens(&lexer);
+        ClythV1Parser parser(&tokens);
+
+        DiagnosticBag placeholder_diagnostics;
+        ClythSyntaxErrorListener syntax_errors(placeholder_diagnostics);
+        lexer.removeErrorListeners();
+        parser.removeErrorListeners();
+        lexer.addErrorListener(&syntax_errors);
+        parser.addErrorListener(&syntax_errors);
+
+        ClythAST ast_builder(placeholder_diagnostics);
+        ClythV1Parser::ExpressionContext* expression_ctx = parser.expression();
+        tokens.fill();
+
+        if (placeholder_diagnostics.has_errors()) {
+            add_codegen_error(node, fmt::format("Invalid formatted string placeholder expression '{}'.", expr));
+            return nullptr;
+        }
+
+        bool reached_eof = false;
+        for (antlr4::Token* token : tokens.getTokens()) {
+            if (token == nullptr) {
+                continue;
+            }
+            if (token->getType() == antlr4::Token::EOF) {
+                reached_eof = true;
+                break;
+            }
+        }
+        (void)reached_eof;
+
+        std::any built = ast_builder.visitExpression(expression_ctx);
+        if (!built.has_value()) {
+            add_codegen_error(node, fmt::format("Unable to build AST for formatted string placeholder '{}'.", expr));
+            return nullptr;
+        }
+
+        try {
+            ast::NodePtr expression_node = std::any_cast<ast::NodePtr>(built);
+            if (expression_node && node) {
+                expression_node->location = node->location;
+            }
+            return expression_node;
+        } catch (const std::bad_any_cast&) {
+            add_codegen_error(node, fmt::format("Unable to build expression node for formatted string placeholder '{}'.", expr));
+            return nullptr;
+        }
+    };
+
+    auto emit_placeholder_value = [&](const std::string& raw_expr) -> llvm::Value* {
+        const std::string expr = trim(raw_expr);
+        if (expr.empty()) {
+            add_codegen_error(node, "Formatted string placeholder is empty.");
+            return nullptr;
+        }
+
+        if (is_clyth_string_literal(expr)) {
+            return builder.CreateGlobalStringPtr(unescape_clyth_string_literal(expr), "fmt.literal.arg");
+        }
+
+        if (expr == "true") {
+            return llvm::ConstantInt::get(llvm::Type::getInt32Ty(context), 1);
+        }
+        if (expr == "false") {
+            return llvm::ConstantInt::get(llvm::Type::getInt32Ty(context), 0);
+        }
+        if (is_integer_literal(expr)) {
+            return llvm::ConstantInt::get(llvm::Type::getInt64Ty(context), std::stoll(expr), true);
+        }
+
+        // Formatted string placeholders are language expressions, not symbol-name
+        // strings.  This lets `${request.body}`, `${json.stringify(payload)}`,
+        // `${a + b}`, and other normal expression forms lower through the same
+        // expression path used everywhere else in the compiler.
+        ast::NodePtr expression_node = parse_placeholder_expression(expr);
+        if (!expression_node) {
+            return nullptr;
+        }
+        return emit_expression(expression_node, semantics);
+    };
+
+    for (std::size_t i = 0; i < body.size();) {
+        if (body[i] == '$' && i + 1 < body.size() && body[i + 1] == '{') {
+            const std::size_t start = i + 2;
+            const std::size_t end = body.find('}', start);
+            if (end == std::string::npos) {
+                add_codegen_error(node, "Unterminated formatted string placeholder.");
+                return nullptr;
+            }
+
+            llvm::Value* value = emit_placeholder_value(body.substr(start, end - start));
+            if (value == nullptr) {
+                return nullptr;
+            }
+
+            if (value->getType() == string_type_for()) {
+                format += "%s";
+                snprintf_args.push_back(emit_string_data_pointer(value, "fmt.string.data"));
+            } else if (value->getType()->isPointerTy()) {
+                format += "%s";
+                snprintf_args.push_back(value);
+            } else if (value->getType()->isIntegerTy(1)) {
+                format += "%d";
+                snprintf_args.push_back(builder.CreateZExt(value, llvm::Type::getInt32Ty(context), "fmt.bool"));
+            } else if (value->getType()->isIntegerTy()) {
+                format += "%lld";
+                snprintf_args.push_back(builder.CreateSExtOrTrunc(value, llvm::Type::getInt64Ty(context), "fmt.int"));
+            } else if (value->getType()->isFloatingPointTy()) {
+                format += "%f";
+                if (!value->getType()->isDoubleTy()) {
+                    value = builder.CreateFPExt(value, llvm::Type::getDoubleTy(context), "fmt.double");
+                }
+                snprintf_args.push_back(value);
+            } else {
+                add_codegen_error(node, "Formatted string placeholder has unsupported value type.");
+                return nullptr;
+            }
+
+            i = end + 1;
+            continue;
+        }
+
+        append_format_char(body[i]);
+        ++i;
+    }
+
+    llvm::Value* format_ptr = builder.CreateGlobalStringPtr(format, "fmt.format");
+    llvm::Function* snprintf_fn = declare_libc_snprintf();
+    llvm::Type* ptr_type = llvm::PointerType::get(context, 0);
+    llvm::Type* i64 = llvm::Type::getInt64Ty(context);
+
+    std::vector<llvm::Value*> size_args;
+    size_args.push_back(llvm::ConstantPointerNull::get(llvm::cast<llvm::PointerType>(ptr_type)));
+    size_args.push_back(llvm::ConstantInt::get(i64, 0));
+    size_args.push_back(format_ptr);
+    size_args.insert(size_args.end(), snprintf_args.begin(), snprintf_args.end());
+
+    llvm::Value* length_i32 = builder.CreateCall(snprintf_fn, size_args, "fmt.length.i32");
+    llvm::Value* length = builder.CreateSExt(length_i32, i64, "fmt.length");
+    llvm::Value* capacity = builder.CreateAdd(length, llvm::ConstantInt::get(i64, 1), "fmt.capacity");
+    llvm::Value* data = builder.CreateCall(declare_libc_malloc(), {capacity}, "fmt.data");
+
+    std::vector<llvm::Value*> write_args;
+    write_args.push_back(data);
+    write_args.push_back(capacity);
+    write_args.push_back(format_ptr);
+    write_args.insert(write_args.end(), snprintf_args.begin(), snprintf_args.end());
+    builder.CreateCall(snprintf_fn, write_args);
+
+    llvm::Value* result = llvm::UndefValue::get(string_type_for());
+    result = builder.CreateInsertValue(result, data, {0}, "fmt.result.data");
+    result = builder.CreateInsertValue(result, length, {1}, "fmt.result.length");
+    result = builder.CreateInsertValue(result, length, {2}, "fmt.result.capacity");
+    return result;
 }
 
 llvm::Value* ClythLLVMCodegen::emit_literal(const ast::NodePtr& node) {
@@ -1732,7 +2388,7 @@ llvm::Value* ClythLLVMCodegen::emit_literal(const ast::NodePtr& node) {
         return llvm::ConstantPointerNull::get(llvm::PointerType::get(context, 0));
     }
 
-    if (!literal.empty() && literal.front() == '"') {
+    if (is_clyth_string_literal(literal)) {
         return builder.CreateGlobalStringPtr(unescape_clyth_string_literal(literal));
     }
 
@@ -1772,6 +2428,11 @@ llvm::Value* ClythLLVMCodegen::emit_identifier(const ast::NodePtr& node) {
     if (global_it != globals.end()) {
         llvm::GlobalVariable* global = global_it->second;
         return builder.CreateLoad(global->getValueType(), global, *maybe_name);
+    }
+
+    auto function_it = functions.find(*maybe_name);
+    if (function_it != functions.end()) {
+        return function_it->second;
     }
 
     if (current_scope && !current_scope->this_type_name.empty()) {
@@ -2269,7 +2930,101 @@ bool ClythLLVMCodegen::maybe_emit_constructor_initializer(
     const std::string key = method_key(type_name, constructor_name);
     auto method_it = methods.find(key);
     if (method_it == methods.end()) {
-        return false;
+        auto struct_it = structs.find(type_name);
+        if (struct_it == structs.end()) {
+            return false;
+        }
+
+        if (auto maybe_callee = first_token_text(call_node)) {
+            if (*maybe_callee != type_name) {
+                return false;
+            }
+        }
+
+        const StructInfo& info = struct_it->second;
+        // A bare StructName() is the default value constructor. The receiver was
+        // already zero-initialized by the caller, so there is nothing else to
+        // lower when no explicit constructor method exists.
+        if (args.empty()) {
+            return true;
+        }
+
+        if (args.size() != info.field_type_names.size()) {
+            add_codegen_error(initializer, fmt::format(
+                "Struct constructor '{}' expects {} field value(s), got {}.",
+                type_name,
+                info.field_type_names.size(),
+                args.size()
+            ));
+            return true;
+        }
+
+        llvm::Value* zero = llvm::ConstantInt::get(llvm::Type::getInt32Ty(context), 0);
+        for (std::size_t i = 0; i < args.size(); ++i) {
+            llvm::Type* field_type = llvm_type_from_clyth_type(info.field_type_names[i]);
+            if (field_type == nullptr) {
+                add_codegen_error(initializer, fmt::format(
+                    "Unsupported field type '{}' in struct constructor '{}'.",
+                    info.field_type_names[i],
+                    type_name
+                ));
+                return true;
+            }
+
+            llvm::Value* field_index = llvm::ConstantInt::get(llvm::Type::getInt32Ty(context), static_cast<std::uint32_t>(i));
+            llvm::Value* field_address = builder.CreateInBoundsGEP(
+                info.type,
+                receiver_address,
+                {zero, field_index},
+                fmt::format("{}.field{}.addr", type_name, i)
+            );
+
+            if (field_type == string_type_for()) {
+                ast::NodePtr literal_initializer = first_descendant_of_kind(args[i], ast::NodeKind::LiteralExpr);
+                if (literal_initializer) {
+                    const std::string literal_text = attr(literal_initializer, "literal").value_or(literal_initializer ? literal_initializer->text : "");
+                    if (is_clyth_string_literal(literal_text)) {
+                        if (!emit_string_literal_initializer_at_address(field_address, fmt::format("{}.field{}", type_name, i), literal_initializer)) {
+                            return true;
+                        }
+                        continue;
+                    }
+                }
+            }
+
+            llvm::Value* arg_value = emit_expression(args[i], semantics);
+            if (arg_value == nullptr) {
+                return true;
+            }
+
+            if (field_type == string_type_for() && arg_value->getType()->isPointerTy()) {
+                llvm::Value* zero64 = llvm::ConstantInt::get(llvm::Type::getInt64Ty(context), 0);
+                llvm::Value* assembled = llvm::UndefValue::get(string_type_for());
+                assembled = builder.CreateInsertValue(assembled, arg_value, {0}, fmt::format("{}.field{}.data", type_name, i));
+                assembled = builder.CreateInsertValue(assembled, zero64, {1}, fmt::format("{}.field{}.length", type_name, i));
+                assembled = builder.CreateInsertValue(assembled, zero64, {2}, fmt::format("{}.field{}.capacity", type_name, i));
+                builder.CreateStore(assembled, field_address);
+                continue;
+            }
+
+            if (arg_value->getType() != field_type && arg_value->getType()->isIntegerTy() && field_type->isIntegerTy()) {
+                arg_value = builder.CreateIntCast(arg_value, field_type, true, "structctorargcast");
+            }
+
+            if (arg_value->getType() != field_type) {
+                add_codegen_error(args[i], fmt::format(
+                    "Struct constructor argument {} for '{}' has incompatible type for field '{}'.",
+                    i,
+                    type_name,
+                    info.field_names[i]
+                ));
+                return true;
+            }
+
+            builder.CreateStore(arg_value, field_address);
+        }
+
+        return true;
     }
     llvm::Function* constructor = functions[method_it->second.lowered_name];
     if (constructor == nullptr) {
@@ -2311,6 +3066,14 @@ bool ClythLLVMCodegen::maybe_emit_constructor_initializer(
         }
         if (arg_value->getType() != param_type && arg_value->getType()->isIntegerTy() && param_type->isIntegerTy()) {
             arg_value = builder.CreateIntCast(arg_value, param_type, true, "ctorargcast");
+        }
+        if (arg_value->getType() != param_type && param_type == string_type_for() && arg_value->getType()->isPointerTy()) {
+            llvm::Value* zero64 = llvm::ConstantInt::get(llvm::Type::getInt64Ty(context), 0);
+            llvm::Value* assembled = llvm::UndefValue::get(string_type_for());
+            assembled = builder.CreateInsertValue(assembled, arg_value, {0}, "ctor.string.data");
+            assembled = builder.CreateInsertValue(assembled, zero64, {1}, "ctor.string.length");
+            assembled = builder.CreateInsertValue(assembled, zero64, {2}, "ctor.string.capacity");
+            arg_value = assembled;
         }
         if (arg_value->getType() != param_type) {
             add_codegen_error(args[i], fmt::format("Constructor argument {} for '{}' has incompatible type.", i, type_name));
@@ -2543,6 +3306,89 @@ bool ClythLLVMCodegen::emit_fixed_array_initializer(
     return true;
 }
 
+
+llvm::Value* ClythLLVMCodegen::emit_struct_constructor_expression(
+    const std::string& type_name,
+    const ast::NodePtr& call_node,
+    const semantic::SemanticResult& semantics
+) {
+    auto struct_it = structs.find(type_name);
+    if (struct_it == structs.end() || struct_it->second.type == nullptr) {
+        add_codegen_error(call_node, fmt::format("Unknown constructor type '{}'.", type_name));
+        return nullptr;
+    }
+
+    if (!current_scope || current_scope->function == nullptr) {
+        add_codegen_error(call_node, fmt::format("Constructor expression '{}' requires a function scope.", type_name));
+        return nullptr;
+    }
+
+    const auto args = call_arguments(call_node);
+
+    // Runtime modules commonly expose constructor factories as snake_case
+    // functions (`Router()` -> `new_router()`, `HttpsServer(config)` ->
+    // `new_https_server(config)`). Prefer that explicit function when it exists
+    // so public constructors can allocate native handles instead of falling back
+    // to a zero aggregate.
+    const std::string factory_name = fmt::format("new_{}", lower_snake_type_name(type_name));
+    auto factory_it = functions.find(factory_name);
+    if (factory_it != functions.end()) {
+        llvm::Function* factory = factory_it->second;
+        std::vector<llvm::Value*> lowered_args;
+        lowered_args.reserve(args.size());
+
+        const std::size_t fixed_param_count = factory->getFunctionType()->getNumParams();
+        if (args.size() != fixed_param_count) {
+            add_codegen_error(call_node, fmt::format(
+                "Constructor factory '{}' expects {} argument(s), got {}.",
+                factory_name,
+                fixed_param_count,
+                args.size()
+            ));
+            return nullptr;
+        }
+
+        for (std::size_t i = 0; i < args.size(); ++i) {
+            llvm::Value* arg_value = emit_expression(args[i], semantics);
+            if (arg_value == nullptr) {
+                return nullptr;
+            }
+            llvm::Type* param_type = factory->getFunctionType()->getParamType(i);
+            if (arg_value->getType() == string_type_for() && param_type->isPointerTy()) {
+                arg_value = emit_string_data_pointer(arg_value, "ctorfactory.string.data");
+            }
+            if (arg_value->getType() != param_type && arg_value->getType()->isIntegerTy() && param_type->isIntegerTy()) {
+                arg_value = builder.CreateIntCast(arg_value, param_type, true, "ctorfactoryargcast");
+            }
+            if (arg_value == nullptr || arg_value->getType() != param_type) {
+                add_codegen_error(args[i], fmt::format("Constructor factory argument {} for '{}' has incompatible type.", i, type_name));
+                return nullptr;
+            }
+            lowered_args.push_back(arg_value);
+        }
+
+        return builder.CreateCall(factory, lowered_args, factory->getReturnType()->isVoidTy() ? "" : "ctorfactorycall");
+    }
+
+    llvm::AllocaInst* temp = create_entry_alloca(
+        current_scope->function,
+        struct_it->second.type,
+        fmt::format("{}.ctor.tmp", type_name)
+    );
+    builder.CreateStore(llvm::ConstantAggregateZero::get(struct_it->second.type), temp);
+
+    if (!maybe_emit_constructor_initializer(type_name, temp, call_node, semantics)) {
+        add_codegen_error(call_node, fmt::format("Unable to lower constructor expression for '{}'.", type_name));
+        return nullptr;
+    }
+
+    if (diagnostics.has_errors()) {
+        return nullptr;
+    }
+
+    return builder.CreateLoad(struct_it->second.type, temp, fmt::format("{}.ctor.value", type_name));
+}
+
 llvm::Value* ClythLLVMCodegen::emit_call_suffix(
     const std::string& callee_name,
     const ast::NodePtr& call_node,
@@ -2550,6 +3396,40 @@ llvm::Value* ClythLLVMCodegen::emit_call_suffix(
 ) {
     auto function_it = functions.find(callee_name);
     if (function_it == functions.end()) {
+        if (llvm::AllocaInst* local = lookup_local(callee_name)) {
+            const auto maybe_type_name = lookup_symbol_type_name(callee_name);
+            llvm::FunctionType* function_type = maybe_type_name ? llvm_function_type_from_clyth_type(*maybe_type_name) : nullptr;
+            if (function_type == nullptr) {
+                add_codegen_error(call_node, fmt::format("Local '{}' is not callable.", callee_name));
+                return nullptr;
+            }
+
+            llvm::Value* callee_value = builder.CreateLoad(local->getAllocatedType(), local, callee_name);
+            std::vector<llvm::Value*> args;
+            const ast::NodePtr arg_list = first_child_with_label(call_node, "argumentList");
+            if (arg_list) {
+                for (const auto& arg : expression_children(arg_list)) {
+                    llvm::Value* arg_value = emit_expression(arg, semantics);
+                    if (arg_value == nullptr) {
+                        return nullptr;
+                    }
+                    if (args.size() < function_type->getNumParams()) {
+                        llvm::Type* param_type = function_type->getParamType(args.size());
+                        if (arg_value->getType() != param_type && arg_value->getType()->isIntegerTy() && param_type->isIntegerTy()) {
+                            arg_value = builder.CreateIntCast(arg_value, param_type, true, "fnptrargcast");
+                        }
+                    }
+                    args.push_back(arg_value);
+                }
+            }
+
+            if (args.size() != function_type->getNumParams()) {
+                add_codegen_error(call_node, fmt::format("Function pointer '{}' expects {} argument(s), got {}.", callee_name, function_type->getNumParams(), args.size()));
+                return nullptr;
+            }
+
+            return builder.CreateCall(function_type, callee_value, args, function_type->getReturnType()->isVoidTy() ? "" : "fnptrcall");
+        }
         // Inside a method body, an unqualified call to another method on the
         // same receiver is language-level method resolution, not a free
         // function lookup. This keeps runtime structs such as List/Set/Map
@@ -2560,6 +3440,11 @@ llvm::Value* ClythLLVMCodegen::emit_call_suffix(
                 return emit_method_call_suffix("this", callee_name, call_node, semantics);
             }
         }
+
+        if (structs.find(callee_name) != structs.end()) {
+            return emit_struct_constructor_expression(callee_name, call_node, semantics);
+        }
+
         add_codegen_error(call_node, fmt::format("Unknown function '{}'.", callee_name));
         return nullptr;
     }
@@ -2575,15 +3460,25 @@ llvm::Value* ClythLLVMCodegen::emit_call_suffix(
             if (arg_value == nullptr) {
                 return nullptr;
             }
-            if (arg_value->getType() == string_type_for()) {
-                arg_value = emit_string_data_pointer(arg_value, "call.string.data");
-            }
             if (args.size() < fixed_param_count) {
                 llvm::Type* param_type = callee->getFunctionType()->getParamType(args.size());
+                if (arg_value->getType() == string_type_for() && param_type->isPointerTy()) {
+                    arg_value = emit_string_data_pointer(arg_value, "call.string.data");
+                } else if (arg_value->getType()->isPointerTy() && param_type == string_type_for()) {
+                    llvm::Value* zero64 = llvm::ConstantInt::get(llvm::Type::getInt64Ty(context), 0);
+                    llvm::Value* assembled = llvm::UndefValue::get(string_type_for());
+                    assembled = builder.CreateInsertValue(assembled, arg_value, {0}, "call.string.value.data");
+                    assembled = builder.CreateInsertValue(assembled, zero64, {1}, "call.string.value.length");
+                    assembled = builder.CreateInsertValue(assembled, zero64, {2}, "call.string.value.capacity");
+                    arg_value = assembled;
+                }
                 if (arg_value->getType() != param_type && arg_value->getType()->isIntegerTy() && param_type->isIntegerTy()) {
                     arg_value = builder.CreateIntCast(arg_value, param_type, true, "callargcast");
                 }
             } else if (is_vararg && args.size() >= fixed_param_count) {
+                if (arg_value->getType() == string_type_for()) {
+                    arg_value = emit_string_data_pointer(arg_value, "vararg.string.data");
+                }
                 if (arg_value->getType()->isIntegerTy() && arg_value->getType()->getIntegerBitWidth() < 32) {
                     arg_value = builder.CreateIntCast(arg_value, llvm::Type::getInt32Ty(context), true, "vararg_int_promote");
                 } else if (arg_value->getType()->isFloatTy()) {
@@ -2660,6 +3555,16 @@ llvm::Value* ClythLLVMCodegen::emit_method_call_suffix(
             const std::size_t param_index = args.size();
             if (param_index < callee->getFunctionType()->getNumParams()) {
                 llvm::Type* param_type = callee->getFunctionType()->getParamType(param_index);
+                if (arg_value->getType() == string_type_for() && param_type->isPointerTy()) {
+                    arg_value = emit_string_data_pointer(arg_value, "method.string.data");
+                } else if (arg_value->getType()->isPointerTy() && param_type == string_type_for()) {
+                    llvm::Value* zero64 = llvm::ConstantInt::get(llvm::Type::getInt64Ty(context), 0);
+                    llvm::Value* assembled = llvm::UndefValue::get(string_type_for());
+                    assembled = builder.CreateInsertValue(assembled, arg_value, {0}, "method.string.value.data");
+                    assembled = builder.CreateInsertValue(assembled, zero64, {1}, "method.string.value.length");
+                    assembled = builder.CreateInsertValue(assembled, zero64, {2}, "method.string.value.capacity");
+                    arg_value = assembled;
+                }
                 if (arg_value->getType() != param_type && arg_value->getType()->isIntegerTy() && param_type->isIntegerTy()) {
                     arg_value = builder.CreateIntCast(arg_value, param_type, true, "methodargcast");
                 }
@@ -2765,6 +3670,15 @@ llvm::Value* ClythLLVMCodegen::emit_binary(const ast::NodePtr& node, const seman
         }
 
         const std::string op = i - 1 < operators.size() ? operators[i - 1] : "";
+
+        if ((op == "==" || op == "!=") && (lhs->getType() == string_type_for() || rhs->getType() == string_type_for())) {
+            if (lhs->getType() == string_type_for()) {
+                lhs = emit_string_data_pointer(lhs, "lhs.string.data");
+            }
+            if (rhs->getType() == string_type_for()) {
+                rhs = emit_string_data_pointer(rhs, "rhs.string.data");
+            }
+        }
 
         const bool numeric_float = lhs->getType()->isFloatingPointTy() || rhs->getType()->isFloatingPointTy();
         if (numeric_float) {
@@ -2908,7 +3822,7 @@ llvm::Constant* ClythLLVMCodegen::emit_global_constant_initializer(llvm::Type* t
             return llvm::ConstantPointerNull::get(llvm::cast<llvm::PointerType>(type));
         }
 
-        if (!literal.empty() && literal.front() == '"') {
+        if (is_clyth_string_literal(literal)) {
             const std::string unescaped = unescape_clyth_string_literal(literal);
             llvm::Constant* raw_string = llvm::ConstantDataArray::getString(context, unescaped, true);
             auto* global_string = new llvm::GlobalVariable(
@@ -2932,7 +3846,35 @@ llvm::Constant* ClythLLVMCodegen::emit_global_constant_initializer(llvm::Type* t
     return nullptr;
 }
 
+llvm::FunctionType* ClythLLVMCodegen::llvm_function_type_from_clyth_type(const std::string& type_name) {
+    auto function_type = parse_function_type_text(type_name);
+    if (!function_type) {
+        return nullptr;
+    }
+
+    llvm::Type* return_type = llvm_type_from_clyth_type(function_type->return_type_name);
+    if (return_type == nullptr) {
+        return nullptr;
+    }
+
+    std::vector<llvm::Type*> parameter_types;
+    parameter_types.reserve(function_type->parameter_type_names.size());
+    for (const std::string& parameter_type_name : function_type->parameter_type_names) {
+        llvm::Type* parameter_type = llvm_type_from_clyth_type(parameter_type_name);
+        if (parameter_type == nullptr) {
+            return nullptr;
+        }
+        parameter_types.push_back(parameter_type);
+    }
+
+    return llvm::FunctionType::get(return_type, parameter_types, false);
+}
+
 llvm::Type* ClythLLVMCodegen::llvm_type_from_clyth_type(const std::string& type_name) {
+    if (parse_function_type_text(type_name)) {
+        return llvm::PointerType::get(context, 0);
+    }
+
     if (type_name == "void") {
         return llvm::Type::getVoidTy(context);
     }
@@ -3057,7 +3999,7 @@ bool ClythLLVMCodegen::emit_string_literal_initializer_at_address(
     }
 
     const std::string literal = attr(literal_node, "literal").value_or(literal_node ? literal_node->text : "");
-    if (literal.empty() || literal.front() != '"') {
+    if (!is_clyth_string_literal(literal)) {
         add_codegen_error(literal_node, "String initializer must be a string literal in this backend pass.");
         return false;
     }
@@ -3145,6 +4087,17 @@ llvm::Function* ClythLLVMCodegen::declare_libc_realloc() {
     llvm::Type* i64 = llvm::Type::getInt64Ty(context);
     llvm::FunctionType* realloc_type = llvm::FunctionType::get(ptr_type, {ptr_type, i64}, false);
     return llvm::Function::Create(realloc_type, llvm::Function::ExternalLinkage, "realloc", module.get());
+}
+
+llvm::Function* ClythLLVMCodegen::declare_libc_snprintf() {
+    if (llvm::Function* existing = module->getFunction("snprintf")) {
+        return existing;
+    }
+    llvm::Type* ptr_type = llvm::PointerType::get(context, 0);
+    llvm::Type* i64 = llvm::Type::getInt64Ty(context);
+    llvm::Type* i32 = llvm::Type::getInt32Ty(context);
+    llvm::FunctionType* snprintf_type = llvm::FunctionType::get(i32, {ptr_type, i64, ptr_type}, true);
+    return llvm::Function::Create(snprintf_type, llvm::Function::ExternalLinkage, "snprintf", module.get());
 }
 
 llvm::Value* ClythLLVMCodegen::emit_dynamic_array_length(const LocalDynamicArrayInfo& info) {
@@ -3564,6 +4517,13 @@ llvm::Value* emit_key_match(llvm::IRBuilder<>& builder, llvm::Value* lhs, llvm::
         return nullptr;
     }
     llvm::Type* type = lhs->getType();
+    if (llvm::StructType* struct_type = llvm::dyn_cast<llvm::StructType>(type)) {
+        if (struct_type->hasName() && struct_type->getName() == "clyth.string") {
+            llvm::Value* lhs_data = builder.CreateExtractValue(lhs, {0}, name_hint + ".lhs.data");
+            llvm::Value* rhs_data = builder.CreateExtractValue(rhs, {0}, name_hint + ".rhs.data");
+            return builder.CreateICmpEQ(lhs_data, rhs_data, name_hint + ".match");
+        }
+    }
     if (type->isIntegerTy() || type->isPointerTy()) {
         return builder.CreateICmpEQ(lhs, rhs, name_hint + ".match");
     }
@@ -3759,6 +4719,15 @@ llvm::AllocaInst* ClythLLVMCodegen::lookup_local(const std::string& name) const 
 
 bool ClythLLVMCodegen::write_ir_file(const std::filesystem::path& output_path) {
     std::error_code ec;
+    const auto parent = output_path.parent_path();
+    if (!parent.empty()) {
+        std::filesystem::create_directories(parent, ec);
+        if (ec) {
+            diagnostics.add_error(SourceLocation{}, fmt::format("Failed to create LLVM IR output directory '{}': {}", parent.string(), ec.message()));
+            return false;
+        }
+    }
+
     llvm::raw_fd_ostream output(output_path.string(), ec, llvm::sys::fs::OF_Text);
 
     if (ec) {

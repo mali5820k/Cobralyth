@@ -168,24 +168,115 @@ static std::vector<std::filesystem::path> runtime_link_inputs_for(
         return inputs;
     }
 
-    const std::filesystem::path dma_module = runtime_root / "modules" / "module-dma" / "dma.clyth";
-    const std::filesystem::path dma_archive = runtime_root / "modules" / "module-dma" / "x86_64" / "libclyth_dma.a";
-    const std::filesystem::path legacy_dma_archive = runtime_root / "c-bindings" / "dma" / "libclyth_dma.a";
+    struct RuntimeArchiveRule {
+        std::filesystem::path module_source;
+        std::filesystem::path archive;
+        std::filesystem::path legacy_archive;
+    };
 
-    for (const auto& included : included_paths) {
-        std::error_code ec_a;
-        std::error_code ec_b;
-        const auto included_canonical = std::filesystem::weakly_canonical(included, ec_a);
-        const auto dma_canonical = std::filesystem::weakly_canonical(dma_module, ec_b);
-        if (!ec_a && !ec_b && included_canonical == dma_canonical) {
-            if (std::filesystem::exists(dma_archive)) {
-                inputs.push_back(dma_archive);
-            } else if (std::filesystem::exists(legacy_dma_archive)) {
-                inputs.push_back(legacy_dma_archive);
-            } else {
-                fmt::print(stderr, "ERROR: runtime module '{}' requires missing archive '{}'. Run ./build_compiler.sh first.\n", dma_module.string(), dma_archive.string());
+    const std::vector<RuntimeArchiveRule> rules {
+        {
+            runtime_root / "modules" / "module-dma" / "dma.clyth",
+            runtime_root / "modules" / "module-dma" / "x86_64" / "libclyth_dma.a",
+            runtime_root / "c-bindings" / "dma" / "libclyth_dma.a"
+        },
+        {
+            runtime_root / "modules" / "module-file-io" / "file-io.clyth",
+            runtime_root / "modules" / "module-file-io" / "x86_64" / "libclyth_file_io.a",
+            runtime_root / "c-bindings" / "file-io" / "x86_64" / "libclyth_file_io.a"
+        },
+        {
+            runtime_root / "modules" / "module-hash" / "hash.clyth",
+            runtime_root / "modules" / "module-hash" / "x86_64" / "libclyth_rapidhash.a",
+            runtime_root / "c-bindings" / "rapidhash" / "x86_64" / "libclyth_rapidhash.a"
+        },
+        {
+            runtime_root / "modules" / "module-router" / "router.clyth",
+            runtime_root / "modules" / "module-router" / "x86_64" / "libclyth_http.a",
+            runtime_root / "c-bindings" / "http" / "x86_64" / "libclyth_http.a"
+        },
+        {
+            runtime_root / "modules" / "module-https" / "https.clyth",
+            runtime_root / "modules" / "module-https" / "x86_64" / "libclyth_http.a",
+            runtime_root / "c-bindings" / "http" / "x86_64" / "libclyth_http.a"
+        },
+        {
+            runtime_root / "modules" / "module-json" / "json.clyth",
+            runtime_root / "modules" / "module-json" / "x86_64" / "libclyth_json.a",
+            runtime_root / "c-bindings" / "yyjson" / "x86_64" / "libclyth_json.a"
+        },
+        {
+            runtime_root / "modules" / "module-concurrency" / "concurrency.clyth",
+            runtime_root / "modules" / "module-concurrency" / "x86_64" / "libclyth_concurrency.a",
+            runtime_root / "c-bindings" / "concurrency" / "x86_64" / "libclyth_concurrency.a"
+        }
+    };
+
+    bool needs_libuv_archive = false;
+    std::set<std::filesystem::path> pushed;
+    for (const auto& rule : rules) {
+        std::error_code module_ec;
+        const auto module_canonical = std::filesystem::weakly_canonical(rule.module_source, module_ec);
+        if (module_ec) {
+            continue;
+        }
+
+        bool included_module = false;
+        for (const auto& included : included_paths) {
+            std::error_code included_ec;
+            const auto included_canonical = std::filesystem::weakly_canonical(included, included_ec);
+            if (!included_ec && included_canonical == module_canonical) {
+                included_module = true;
+                break;
             }
-            break;
+        }
+
+        if (!included_module) {
+            continue;
+        }
+
+        const auto module_source_text = rule.module_source.generic_string();
+        if (module_source_text.find("module-file-io/") != std::string::npos ||
+            module_source_text.find("module-router/") != std::string::npos ||
+            module_source_text.find("module-https/") != std::string::npos) {
+            needs_libuv_archive = true;
+        }
+
+        std::filesystem::path selected_archive;
+        if (std::filesystem::exists(rule.archive)) {
+            selected_archive = rule.archive;
+        } else if (std::filesystem::exists(rule.legacy_archive)) {
+            selected_archive = rule.legacy_archive;
+        }
+
+        if (selected_archive.empty()) {
+            fmt::print(stderr, "ERROR: runtime module '{}' requires missing archive '{}'. Run ./build_compiler.sh first.\n",
+                       rule.module_source.string(), rule.archive.string());
+            continue;
+        }
+
+        std::error_code archive_ec;
+        const auto archive_canonical = std::filesystem::weakly_canonical(selected_archive, archive_ec);
+        const auto archive_key = archive_ec ? selected_archive.lexically_normal() : archive_canonical;
+        if (pushed.insert(archive_key).second) {
+            inputs.push_back(selected_archive);
+        }
+    }
+
+    if (needs_libuv_archive) {
+        const auto arch = std::string("x86_64");
+        const std::filesystem::path libuv_archive =
+            runtime_root / "c-bindings" / "libuv" / arch / "libclyth_libuv.a";
+        if (std::filesystem::exists(libuv_archive)) {
+            std::error_code archive_ec;
+            const auto archive_canonical = std::filesystem::weakly_canonical(libuv_archive, archive_ec);
+            const auto archive_key = archive_ec ? libuv_archive.lexically_normal() : archive_canonical;
+            if (pushed.insert(archive_key).second) {
+                inputs.push_back(libuv_archive);
+            }
+        } else {
+            fmt::print(stderr, "ERROR: runtime modules using libuv require missing archive '{}'. Run ./build_compiler.sh first.\n",
+                       libuv_archive.string());
         }
     }
 
@@ -1555,6 +1646,62 @@ static bool read_clyth_source_with_includes(
     return true;
 }
 
+
+static std::string normalize_multiline_template_string_literals(const std::string& source) {
+    std::string out;
+    out.reserve(source.size());
+
+    bool in_template = false;
+    bool escaped = false;
+
+    for (char c : source) {
+        if (in_template) {
+            if (escaped) {
+                out.push_back(c);
+                escaped = false;
+                continue;
+            }
+
+            if (c == '\\') {
+                out.push_back(c);
+                escaped = true;
+                continue;
+            }
+
+            if (c == '`') {
+                out.push_back(c);
+                in_template = false;
+                continue;
+            }
+
+            if (c == '\r') {
+                continue;
+            }
+
+            if (c == '\n') {
+                out += "\\n";
+                continue;
+            }
+
+            if (c == '\t') {
+                out += "\\t";
+                continue;
+            }
+
+            out.push_back(c);
+            continue;
+        }
+
+        out.push_back(c);
+        if (c == '`') {
+            in_template = true;
+            escaped = false;
+        }
+    }
+
+    return out;
+}
+
 static int parse_clyth_file(CompilerOptions& opts) {
     std::string source_code;
 
@@ -1566,6 +1713,8 @@ static int parse_clyth_file(CompilerOptions& opts) {
         fmt::print(stderr, "ERROR: Source file is empty: {}\n", opts.main_file.string());
         return 1;
     }
+
+    source_code = normalize_multiline_template_string_literals(source_code);
 
     // Runtime packages are loaded only through explicit include statements such as
     // `include "collections"`. The compiler no longer injects List/Set/Map sources

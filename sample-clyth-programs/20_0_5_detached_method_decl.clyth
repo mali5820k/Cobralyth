@@ -1,0 +1,13 @@
+include "file-io"
+
+struct TestStruct {}
+
+void TestStruct.addTwo(int32 one, int32 two) {
+    println(`${one + two}`)
+}
+
+int32 main(string[] args) {
+    TestStruct value
+    value.addTwo(20, 22)
+    return 0
+}

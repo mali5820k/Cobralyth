@@ -1,6 +1,7 @@
 #include "clyth_semantic.hpp"
 
 #include <algorithm>
+#include <cctype>
 #include <sstream>
 
 namespace clyth::semantic {
@@ -24,11 +25,118 @@ bool is_builtin_type_name(const std::string& name) {
     return builtin_type_names().count(name) > 0;
 }
 
+
+std::vector<std::string> split_function_type_parameters(const std::string& text) {
+    std::vector<std::string> result;
+    std::string current;
+    int angle_depth = 0;
+    int paren_depth = 0;
+
+    for (char ch : text) {
+        if (ch == '<') {
+            ++angle_depth;
+            current.push_back(ch);
+            continue;
+        }
+        if (ch == '>') {
+            --angle_depth;
+            current.push_back(ch);
+            continue;
+        }
+        if (ch == '(') {
+            ++paren_depth;
+            current.push_back(ch);
+            continue;
+        }
+        if (ch == ')') {
+            --paren_depth;
+            current.push_back(ch);
+            continue;
+        }
+        if ((ch == ',' || ch == ':') && angle_depth == 0 && paren_depth == 0) {
+            if (!current.empty()) {
+                result.push_back(current);
+            }
+            current.clear();
+            continue;
+        }
+        if (!std::isspace(static_cast<unsigned char>(ch))) {
+            current.push_back(ch);
+        }
+    }
+
+    if (!current.empty()) {
+        result.push_back(current);
+    }
+
+    return result;
+}
+
+struct FunctionTypeParts {
+    std::string return_type_name;
+    std::vector<std::string> parameter_type_names;
+};
+
+std::optional<FunctionTypeParts> parse_function_type_text(const std::string& type_name) {
+    const std::string prefix = "function<";
+    if (type_name.rfind(prefix, 0) != 0 || type_name.empty() || type_name.back() != '>') {
+        return std::nullopt;
+    }
+
+    const std::string inner = type_name.substr(prefix.size(), type_name.size() - prefix.size() - 1);
+    if (inner.empty()) {
+        return std::nullopt;
+    }
+
+    auto trim = [](std::string value) {
+        auto not_space = [](unsigned char ch) { return !std::isspace(ch); };
+        value.erase(value.begin(), std::find_if(value.begin(), value.end(), not_space));
+        value.erase(std::find_if(value.rbegin(), value.rend(), not_space).base(), value.end());
+        return value;
+    };
+
+    int angle_depth = 0;
+    std::size_t open_paren = std::string::npos;
+    for (std::size_t i = 0; i < inner.size(); ++i) {
+        const char ch = inner[i];
+        if (ch == '<') {
+            ++angle_depth;
+            continue;
+        }
+        if (ch == '>') {
+            --angle_depth;
+            continue;
+        }
+        if (ch == '(' && angle_depth == 0) {
+            open_paren = i;
+            break;
+        }
+    }
+
+    if (open_paren == std::string::npos || inner.back() != ')') {
+        return std::nullopt;
+    }
+
+    FunctionTypeParts result;
+    result.return_type_name = trim(inner.substr(0, open_paren));
+    const std::string params = inner.substr(open_paren + 1, inner.size() - open_paren - 2);
+
+    if (result.return_type_name.empty()) {
+        return std::nullopt;
+    }
+
+    if (!trim(params).empty()) {
+        result.parameter_type_names = split_function_type_parameters(params);
+    }
+
+    return result;
+}
+
+
 bool looks_like_keyword(const std::string& text) {
     static const std::unordered_set<std::string> keywords {
         "include", "extern", "C", "struct", "mecc",
         "if", "else", "for", "while", "return", "break", "continue",
-        "malloc", "iso_malloc",
         "is", "in", "not",
         "true", "false", "null", "constructor", "destructor"
     };
@@ -102,6 +210,27 @@ void collect_nodes_by_kind(const ast::NodePtr& node, ast::NodeKind kind, std::ve
 
     for (const auto& child : node->children) {
         collect_nodes_by_kind(child, kind, out);
+    }
+}
+
+void collect_signature_params(const ast::NodePtr& node, std::vector<ast::NodePtr>& out) {
+    if (!node) {
+        return;
+    }
+
+    if (node->label == "paramList" || node->label == "externParamList") {
+        collect_nodes_by_kind(node, ast::NodeKind::Param, out);
+        return;
+    }
+
+    if (node->kind == ast::NodeKind::BlockStmt ||
+        node->kind == ast::NodeKind::MeccBlockStmt ||
+        node->kind == ast::NodeKind::LambdaExpr) {
+        return;
+    }
+
+    for (const auto& child : node->children) {
+        collect_signature_params(child, out);
     }
 }
 
@@ -256,6 +385,25 @@ bool SemanticContext::is_known_type(const TypeInfo& type) const {
     }
 
     const std::string& name = type.name;
+
+    // First-class function callback syntax: function<Return(Param1, Param2)>.
+    // The outer `function` marker is structural, while the return type and
+    // parameter types still need to be known Clyth types.
+    if (auto function_type = parse_function_type_text(name)) {
+        TypeInfo return_type = parse_type_text(function_type->return_type_name);
+        if (!is_known_type(return_type)) {
+            return false;
+        }
+
+        for (const std::string& parameter_type_name : function_type->parameter_type_names) {
+            TypeInfo parameter_type = parse_type_text(parameter_type_name);
+            if (!is_known_type(parameter_type)) {
+                return false;
+            }
+        }
+
+        return true;
+    }
 
     // Array syntax: T[N] and T[]. The element type must be known; lengths
     // and dynamic array layout are validated/lowered in later passes.
@@ -508,6 +656,7 @@ bool is_expression_node(const ast::NodePtr& node) {
         case ast::NodeKind::IndexExpr:
         case ast::NodeKind::PostfixExpr:
         case ast::NodeKind::AllocationExpr:
+        case ast::NodeKind::LambdaExpr:
         case ast::NodeKind::ListLiteralExpr:
         case ast::NodeKind::CurlyLiteralExpr:
             return true;
@@ -611,9 +760,21 @@ void TopLevelDeclarationPass::run(SemanticContext& context, const ast::ProgramPt
                 break;
             }
 
+            case ast::NodeKind::MethodBlock:
+                // Method blocks are official extension-style method declarations.
+                // They are validated and registered by MethodValidationPass after
+                // struct symbols are available.
+                break;
+
             case ast::NodeKind::FunctionDecl:
             case ast::NodeKind::MethodDecl:
             case ast::NodeKind::ExternDecl: {
+                if (child->kind == ast::NodeKind::MethodDecl && query::attr(child, "owner")) {
+                    // Qualified detached methods, e.g. `void Type.method(...)`,
+                    // are registered by MethodValidationPass as `Type.method`.
+                    break;
+                }
+
                 const auto name = query::declared_name(child);
                 const auto type = query::declared_type(child, context);
 
@@ -749,7 +910,7 @@ void FunctionSignaturePass::run(SemanticContext& context, const ast::ProgramPtr&
 
         std::unordered_set<std::string> param_names;
         std::vector<ast::NodePtr> params;
-        collect_nodes_by_kind(fn, ast::NodeKind::Param, params);
+        collect_signature_params(fn, params);
 
         for (const auto& param : params) {
             const auto param_name = query::declared_name(param);
@@ -834,7 +995,7 @@ void ScopeAndSymbolPass::visit_function(SemanticContext& context, const ast::Nod
     context.push_scope(fmt::format("function:{}", name));
 
     std::vector<ast::NodePtr> params;
-    collect_nodes_by_kind(node, ast::NodeKind::Param, params);
+    collect_signature_params(node, params);
 
     for (const auto& param : params) {
         const auto param_name = query::declared_name(param);
@@ -1133,15 +1294,42 @@ void MethodValidationPass::run(SemanticContext& context, const ast::ProgramPtr& 
     collect_nodes_by_kind(program, ast::NodeKind::MethodDecl, methods);
 
     for (const auto& method : methods) {
-        if (query::attr(method, "owner")) {
+        const auto owner_attr = query::attr(method, "owner");
+        const bool is_qualified = query::attr(method, "qualified").value_or("false") == "true";
+
+        if (!owner_attr || !is_qualified) {
             continue;
         }
 
-        // Qualified method syntax: ReturnType StructName.method_name(...)
-        // Current generic AST stores raw text, so this pass annotates conservatively.
-        if (method->text.find('.') != std::string::npos) {
-            method->attributes["qualified_method"] = "true";
+        const std::string owner = *owner_attr;
+        Symbol* owner_symbol = context.global_scope.find_local(owner);
+        if (owner_symbol == nullptr || owner_symbol->kind != SymbolKind::Struct) {
+            context.diagnostics.add_error(method->location, fmt::format("Qualified method references unknown struct '{}'.", owner));
+            continue;
         }
+
+        const auto method_name = query::declared_name(method);
+        if (!method_name) {
+            context.diagnostics.add_error(method->location, fmt::format("Qualified method declared for '{}' is missing a name.", owner));
+            continue;
+        }
+
+        if (!method_name->empty() && method_name->front() == '_') {
+            method->attributes["visibility"] = "private";
+        } else {
+            method->attributes["visibility"] = "public";
+        }
+
+        method->attributes["qualified_method"] = "true";
+
+        Symbol symbol;
+        symbol.name = owner + "." + *method_name;
+        symbol.kind = SymbolKind::Method;
+        symbol.type = query::declared_type(method, context).value_or(TypeInfo::unknown());
+        symbol.location = method->location;
+        symbol.declaration = method;
+
+        context.declare_global(symbol);
     }
 }
 

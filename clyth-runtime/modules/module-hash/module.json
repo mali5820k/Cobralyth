@@ -1,41 +1,34 @@
 {
   "name": "hash",
-  "version": "0.4.0-alpha",
+  "version": "0.5.0-alpha",
   "kind": "runtime-module",
+  "dependencies": [],
   "exports": [
     "hash.clyth"
   ],
-  "dependencies": [],
   "wrapper": {
     "license": "MIT"
   },
   "c_bindings": [
     {
-      "name": "rapidhash",
-      "enabled": false,
-      "backend": "rapidhash",
-      "license": "MIT or compatible upstream license pending vendored-source verification",
+      "name": "clyth_rapidhash",
+      "enabled": true,
+      "backend": "Nicoshev rapidhash v4",
+      "license": "MIT",
+      "architectures": {
+        "x86_64": {
+          "archive": "x86_64/libclyth_rapidhash.a"
+        },
+        "aarch64": {
+          "archive": "aarch64/libclyth_rapidhash.a"
+        },
+        "arm64": {
+          "archive": "arm64/libclyth_rapidhash.a"
+        }
+      },
       "source_directory": "../../c-bindings/rapidhash",
-      "architectures": {}
+      "upstream": "https://github.com/Nicoshev/rapidhash/tree/v4"
     }
   ],
-  "status": "stub-until-rapidhash-pinned",
-  "notes": "Hashing is runtime-owned. Enable bindings only after a pinned rapidhash source revision and exact upstream license text are present.",
-  "bindings": {
-    "enabled": false,
-    "language": "c",
-    "build_system": "zig-cc",
-    "fetch": {
-      "type": "git",
-      "repository": "https://github.com/Nicoshev/rapidhash.git",
-      "ref": "PIN_COMMIT_OR_TAG_BEFORE_ENABLE"
-    },
-    "build": [
-      "zig cc -c ../../c-bindings/rapidhash/src/clyth_rapidhash.c -I ../../c-bindings/rapidhash/include -o build/clyth_rapidhash.o",
-      "zig ar rcs build/libclyth_hash_rapidhash.a build/clyth_rapidhash.o"
-    ],
-    "outputs": [
-      "build/libclyth_hash_rapidhash.a"
-    ]
-  }
+  "notes": "Hash is the public Clyth module. rapidhash is the runtime backend and is built from upstream source during the runtime C binding build step."
 }

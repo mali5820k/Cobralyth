@@ -1,5 +1,7 @@
 // Clyth Runtime Module: collections/map
 // License: MIT
+
+include "hash"
 //
 // Alpha 0.4 primitive-first runtime Map.
 //

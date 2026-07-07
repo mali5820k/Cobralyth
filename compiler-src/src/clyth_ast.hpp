@@ -112,6 +112,7 @@ enum class NodeKind {
     IndexExpr,
     PostfixExpr,
     AllocationExpr,
+    LambdaExpr,
 
     ListLiteralExpr,
     CurlyLiteralExpr,
@@ -223,7 +224,9 @@ public:
     std::any visitPostfix(ClythV1Parser::PostfixContext* ctx) override;
     std::any visitPostfixSuffix(ClythV1Parser::PostfixSuffixContext* ctx) override;
     std::any visitPrimary(ClythV1Parser::PrimaryContext* ctx) override;
-    std::any visitAllocationExpression(ClythV1Parser::AllocationExpressionContext* ctx) override;
+    std::any visitLambdaExpression(ClythV1Parser::LambdaExpressionContext* ctx) override;
+    std::any visitLambdaParamList(ClythV1Parser::LambdaParamListContext* ctx) override;
+    std::any visitLambdaParam(ClythV1Parser::LambdaParamContext* ctx) override;
     std::any visitArgumentList(ClythV1Parser::ArgumentListContext* ctx) override;
     std::any visitLiteral(ClythV1Parser::LiteralContext* ctx) override;
     std::any visitCollectionLiteral(ClythV1Parser::CollectionLiteralContext* ctx) override;
@@ -235,6 +238,8 @@ public:
     std::any visitType(ClythV1Parser::TypeContext* ctx) override;
     std::any visitFixedArrayType(ClythV1Parser::FixedArrayTypeContext* ctx) override;
     std::any visitDynamicArrayType(ClythV1Parser::DynamicArrayTypeContext* ctx) override;
+    std::any visitFunctionType(ClythV1Parser::FunctionTypeContext* ctx) override;
+    std::any visitFunctionParamTypeList(ClythV1Parser::FunctionParamTypeListContext* ctx) override;
     std::any visitGenericType(ClythV1Parser::GenericTypeContext* ctx) override;
     std::any visitGenericArgList(ClythV1Parser::GenericArgListContext* ctx) override;
     std::any visitTypeAtom(ClythV1Parser::TypeAtomContext* ctx) override;

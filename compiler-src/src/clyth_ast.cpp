@@ -161,6 +161,7 @@ std::string node_kind_name(NodeKind kind) {
         case NodeKind::IndexExpr: return "IndexExpr";
         case NodeKind::PostfixExpr: return "PostfixExpr";
         case NodeKind::AllocationExpr: return "AllocationExpr";
+        case NodeKind::LambdaExpr: return "LambdaExpr";
         case NodeKind::ListLiteralExpr: return "ListLiteralExpr";
         case NodeKind::CurlyLiteralExpr: return "CurlyLiteralExpr";
         case NodeKind::CurlyEntry: return "CurlyEntry";
@@ -628,8 +629,12 @@ std::any ClythAST::visitMethodBlock(ClythV1Parser::MethodBlockContext* ctx) {
 
 std::any ClythAST::visitMethodDecl(ClythV1Parser::MethodDeclContext* ctx) {
     auto node = build_generic(ast::NodeKind::MethodDecl, ctx, "method");
-    node->attributes["qualified"] = ctx->getText().find('.') != std::string::npos ? "true" : "false";
-    if (ctx->methodSimpleName() != nullptr) {
+    const bool qualified = ctx != nullptr && ctx->DOT() != nullptr && ctx->IDENTIFIER() != nullptr;
+    node->attributes["qualified"] = qualified ? "true" : "false";
+    if (qualified) {
+        node->attributes["owner"] = ctx->IDENTIFIER()->getText();
+    }
+    if (ctx != nullptr && ctx->methodSimpleName() != nullptr) {
         node->attributes["name"] = ctx->methodSimpleName()->getText();
     }
     return node;
@@ -816,8 +821,22 @@ std::any ClythAST::visitPrimary(ClythV1Parser::PrimaryContext* ctx) {
     return build_generic(ast::NodeKind::Generic, ctx, "primary");
 }
 
-std::any ClythAST::visitAllocationExpression(ClythV1Parser::AllocationExpressionContext* ctx) {
-    return build_generic(ast::NodeKind::AllocationExpr, ctx, "allocation");
+std::any ClythAST::visitLambdaExpression(ClythV1Parser::LambdaExpressionContext* ctx) {
+    auto node = build_generic(ast::NodeKind::LambdaExpr, ctx, "lambda");
+    // Anonymous functions no longer carry an explicit return type in the lambda
+    // expression grammar. The semantic pass infers void when there are no
+    // return statements, or validates a consistent inferred return type later.
+    node->attributes["return_type"] = "void";
+    node->attributes["type"] = ctx->getText();
+    return node;
+}
+
+std::any ClythAST::visitLambdaParamList(ClythV1Parser::LambdaParamListContext* ctx) {
+    return build_generic(ast::NodeKind::Generic, ctx, "lambdaParamList");
+}
+
+std::any ClythAST::visitLambdaParam(ClythV1Parser::LambdaParamContext* ctx) {
+    return build_generic(ast::NodeKind::Param, ctx, "lambdaParam");
 }
 
 std::any ClythAST::visitArgumentList(ClythV1Parser::ArgumentListContext* ctx) {
@@ -885,6 +904,19 @@ std::any ClythAST::visitDynamicArrayType(ClythV1Parser::DynamicArrayTypeContext*
     node->attributes["name"] = ctx->getText();
     node->attributes["container"] = "array";
     node->attributes["array_kind"] = "dynamic";
+    return node;
+}
+
+std::any ClythAST::visitFunctionType(ClythV1Parser::FunctionTypeContext* ctx) {
+    auto node = build_generic(ast::NodeKind::Type, ctx, "functionType");
+    node->attributes["name"] = ctx->getText();
+    node->attributes["container"] = "function";
+    return node;
+}
+
+std::any ClythAST::visitFunctionParamTypeList(ClythV1Parser::FunctionParamTypeListContext* ctx) {
+    auto node = build_generic(ast::NodeKind::Generic, ctx, "functionParamTypeList");
+    node->attributes["text"] = ctx->getText();
     return node;
 }
 

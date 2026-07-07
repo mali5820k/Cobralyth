@@ -1,0 +1,66 @@
+// Clyth Runtime Module: https
+// License: MIT wrapper
+//
+// 0.5.0 server API surface. Clyth exposes one server-facing networking API:
+// create a ServerConfiguration, register routes, then call server.start().
+//
+// Plain HTTP is represented by an HTTPS-capable server configuration with no
+// certificate/key configured. TLS is configuration, not a separate application
+// model. The active 0.5.0 transport is libuv + llhttp; OpenSSL integration keeps
+// this same API shape when certificate support lands.
+
+include "router"
+
+struct ServerConfiguration {
+    int32 port,
+    Router router,
+    string certificate,
+    string key,
+    int64 native_handle,
+
+    constructor(int32 port, Router router) {
+        this.port = port
+        this.router = router
+        this.certificate = ""
+        this.key = ""
+        this.native_handle = clyth_server_configuration_create(port, router.native_handle, "", "")
+    }
+
+    constructor(int32 port, Router router, string certificate, string key) {
+        this.port = port
+        this.router = router
+        this.certificate = certificate
+        this.key = key
+        this.native_handle = clyth_server_configuration_create(port, router.native_handle, certificate, key)
+    }
+}
+
+struct Server {
+    ServerConfiguration configuration,
+    int64 native_handle,
+
+    constructor(ServerConfiguration configuration) {
+        this.configuration = configuration
+        this.native_handle = clyth_server_create(configuration.native_handle)
+    }
+}
+
+extern C int64 clyth_server_configuration_create(int32 port, int64 router_handle, string certificate, string key)
+extern C int64 clyth_server_create(int64 configuration_handle)
+extern C int32 clyth_server_start(int64 server_handle)
+
+ServerConfiguration new_server_configuration(int32 port, Router router) {
+    ServerConfiguration configuration = ServerConfiguration(port, router)
+    return configuration
+}
+
+Server new_server(ServerConfiguration configuration) {
+    Server server = Server(configuration)
+    return server
+}
+
+Server {
+    int32 start() {
+        return clyth_server_start(this.native_handle)
+    }
+}

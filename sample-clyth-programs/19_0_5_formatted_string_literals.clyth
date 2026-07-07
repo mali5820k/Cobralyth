@@ -1,0 +1,16 @@
+include "file-io"
+
+int32 main() {
+    string language = "Clyth"
+    int32 version = 5
+    bool supported = true
+
+    string message = `Welcome to ${language} 0.${version}.0 formatted strings: ${supported}`
+
+    if (message.length <= 0) {
+        return 1
+    }
+
+    println(message)
+    return 0
+}

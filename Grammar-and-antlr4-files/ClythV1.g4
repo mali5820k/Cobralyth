@@ -281,13 +281,21 @@ postfixSuffix
 primary
     : literal
     | collectionLiteral
-    | allocationExpression
+    | lambdaExpression
     | IDENTIFIER
     | LPAREN expression RPAREN
     ;
 
-allocationExpression
-    : (MALLOC | ISO_MALLOC) LPAREN type RPAREN
+lambdaExpression
+    : LPAREN lambdaParamList? RPAREN ARROW block
+    ;
+
+lambdaParamList
+    : lambdaParam (COMMA lambdaParam)* COMMA?
+    ;
+
+lambdaParam
+    : type IDENTIFIER
     ;
 
 argumentList
@@ -350,6 +358,7 @@ expressionList
 type
     : fixedArrayType
     | dynamicArrayType
+    | functionType
     | genericType
     | baseType
     ;
@@ -360,6 +369,14 @@ fixedArrayType
 
 dynamicArrayType
     : typeAtom LBRACKET RBRACKET
+    ;
+
+functionType
+    : FUNCTION LT type LPAREN functionParamTypeList? RPAREN GT
+    ;
+
+functionParamTypeList
+    : type (COMMA type)* COMMA?
     ;
 
 genericType
@@ -395,10 +412,9 @@ C_ABI   : 'C';
 PUBLIC  : 'public';
 PRIVATE : 'private';
 STRUCT  : 'struct';
+FUNCTION : 'function';
 
 MECC       : 'mecc';
-MALLOC     : 'malloc';
-ISO_MALLOC : 'iso_malloc';
 
 CONSTRUCTOR : 'constructor';
 DESTRUCTOR  : 'destructor';
@@ -455,6 +471,8 @@ MINUS_ASSIGN   : '-=';
 STAR_ASSIGN    : '*=';
 SLASH_ASSIGN   : '/=';
 PERCENT_ASSIGN : '%=';
+
+ARROW : '=>';
 
 ASSIGN : '=';
 

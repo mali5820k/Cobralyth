@@ -1,0 +1,101 @@
+// Clyth Runtime Module: router
+// License: MIT
+//
+// 0.5.0 route-driven server API surface.
+//
+// Public shape:
+//   router.get("/", (Request request, Response response) => { ... })
+//   router.post("/api/message", (Request request, Response response) => { ... })
+//   request.body()
+//   response.send(200, payload)
+//
+// Request and Response cross the native callback ABI as handle-only values.
+// Request metadata is stored by the libuv/llhttp runtime for the duration of
+// the route callback and accessed through methods. This keeps callback ABI
+// stable while preserving Express-style request ergonomics in Clyth code.
+
+struct Request {
+    int64 native_handle,
+
+    constructor(int64 handle) {
+        this.native_handle = handle
+    }
+}
+
+struct Response {
+    int64 native_handle,
+
+    constructor(int64 handle) {
+        this.native_handle = handle
+    }
+}
+
+struct Router {
+    int64 native_handle,
+
+    constructor() {
+        this.native_handle = clyth_router_create()
+    }
+}
+
+extern C int64 clyth_router_create()
+extern C int32 clyth_router_post(int64 router_handle, string path, function<void(Request, Response)> handler)
+extern C int32 clyth_router_get(int64 router_handle, string path, function<void(Request, Response)> handler)
+
+extern C string clyth_request_method(int64 request_handle)
+extern C string clyth_request_path(int64 request_handle)
+extern C string clyth_request_query(int64 request_handle)
+extern C string clyth_request_body(int64 request_handle)
+
+extern C int32 clyth_response_send(int64 response_handle, int32 code, string payload)
+
+Router new_router() {
+    Router router = Router()
+    return router
+}
+
+int32 router_post(Router router, string path, function<void(Request, Response)> handler) {
+    return clyth_router_post(router.native_handle, path, handler)
+}
+
+int32 router_get(Router router, string path, function<void(Request, Response)> handler) {
+    return clyth_router_get(router.native_handle, path, handler)
+}
+
+int32 response_send(Response response, int32 code, string payload) {
+    return clyth_response_send(response.native_handle, code, payload)
+}
+
+Router {
+    void post(string path, function<void(Request, Response)> handler) {
+        clyth_router_post(this.native_handle, path, handler)
+    }
+
+    void get(string path, function<void(Request, Response)> handler) {
+        clyth_router_get(this.native_handle, path, handler)
+    }
+}
+
+Request {
+    string method() {
+        return clyth_request_method(this.native_handle)
+    }
+
+    string path() {
+        return clyth_request_path(this.native_handle)
+    }
+
+    string query() {
+        return clyth_request_query(this.native_handle)
+    }
+
+    string body() {
+        return clyth_request_body(this.native_handle)
+    }
+}
+
+Response {
+    void send(int32 code, string payload) {
+        clyth_response_send(this.native_handle, code, payload)
+    }
+}

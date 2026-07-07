@@ -1,0 +1,22 @@
+include "https"
+
+int32 main(string[] args) {
+    Router router = Router()
+    router.post("/", (Request request, Response response) => {
+        response.send(200, `{"ok":true}`)
+    })
+
+    ServerConfiguration configuration = ServerConfiguration(9000, router)
+    Server app_server = Server(configuration)
+
+    if router.native_handle <= 0 { return 1 }
+    if configuration.native_handle <= 0 { return 1 }
+    if app_server.native_handle <= 0 { return 1 }
+
+    ServerConfiguration tls_configuration = ServerConfiguration(9443, router, "development-cert-placeholder", "development-key-placeholder")
+    if tls_configuration.native_handle <= 0 { return 1 }
+    if tls_configuration.certificate == "" { return 1 }
+    if tls_configuration.key == "" { return 1 }
+
+    return 0
+}

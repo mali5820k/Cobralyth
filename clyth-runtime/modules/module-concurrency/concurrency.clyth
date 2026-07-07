@@ -1,0 +1,53 @@
+// Clyth Runtime Module: concurrency
+// License: MIT
+//
+// Concurrency is runtime-owned. The compiler should lower async/await and
+// function values into this layer, while explicit POSIX thread access remains
+// available for systems code that wants native-thread control.
+
+extern C int64 clyth_posix_thread_start(function<int64(int64)> entry, int64 arg)
+extern C int32 clyth_posix_thread_completed(int64 thread)
+extern C int64 clyth_posix_thread_result(int64 thread)
+extern C int32 clyth_posix_thread_release(int64 thread)
+extern C int64 clyth_runtime_worker_thread_count()
+extern C void clyth_runtime_set_worker_thread_count(int64 count)
+
+struct RuntimeConfiguration {
+    int64 worker_threads,
+}
+
+struct PosixThread {
+    int64 native_handle,
+
+    bool completed() {
+        return clyth_posix_thread_completed(this.native_handle) == 1
+    }
+
+    int64 result() {
+        return clyth_posix_thread_result(this.native_handle)
+    }
+
+    int32 release() {
+        return clyth_posix_thread_release(this.native_handle)
+    }
+}
+
+PosixThread PosixThread(int64 native_handle) {
+    PosixThread thread = PosixThread()
+    thread.native_handle = native_handle
+    return thread
+}
+
+RuntimeConfiguration RuntimeConfiguration(int64 worker_threads) {
+    RuntimeConfiguration config = RuntimeConfiguration()
+    config.worker_threads = worker_threads
+    return config
+}
+
+int64 runtime_worker_threads() {
+    return clyth_runtime_worker_thread_count()
+}
+
+void configure_runtime(RuntimeConfiguration config) {
+    clyth_runtime_set_worker_thread_count(config.worker_threads)
+}

@@ -1,16 +1,97 @@
 // Clyth Runtime Module: json
+// License: MIT
 //
-// Status:
-//   Stub / API placeholder for a future native Clyth JSON implementation.
+// JSON is runtime-owned. The compiler does not special-case JSON parsing,
+// validation, or stringification. This module exposes a Clyth-facing JSON
+// object surface backed by the official yyjson C binding.
 //
-// License:
-//   MIT as part of the Clyth runtime.
+// 0.5.0 supported layer:
+//   - singleton/object-style JSON API
+//   - validation and root-kind checks through yyjson
+//   - JsonValue wrapper for raw/string payloads
+//   - JsonValue.to_string() for object-style string conversion
 //
-// Design note:
-//   JSON is intentionally planned as Clyth-space runtime code built from
-//   native strings, arrays, keyed arrays, List, Map, and Set. No external C
-//   dependency is selected for JSON at this time.
+// Follow-up hardening:
+//   - parse(string) -> JsonValue with owned runtime memory
+//   - stringify for primitives, arrays, maps, and structs
+//   - object/array builders and typed conversion helpers
+
+extern C int32 json_is_valid(string text)
+extern C int32 json_is_object(string text)
+extern C int32 json_is_array(string text)
+extern C int32 json_is_string(string text)
+extern C int32 json_is_number(string text)
+extern C int32 json_is_bool(string text)
+extern C int32 json_is_null(string text)
 
 struct JsonValue {
-    int32 kind
+    int32 kind,
+    string text,
+}
+
+JsonValue {
+    string to_string() {
+        return this.text
+    }
+}
+
+struct JSON {
+    int32 runtime_marker
+
+    constructor() {
+        this.runtime_marker = 0
+    }
+
+    bool is_valid(string text) {
+        return json_is_valid(text) == 1
+    }
+
+    bool is_object(string text) {
+        return json_is_object(text) == 1
+    }
+
+    bool is_array(string text) {
+        return json_is_array(text) == 1
+    }
+
+    bool is_string(string text) {
+        return json_is_string(text) == 1
+    }
+
+    bool is_number(string text) {
+        return json_is_number(text) == 1
+    }
+
+    bool is_bool(string text) {
+        return json_is_bool(text) == 1
+    }
+
+    bool is_null(string text) {
+        return json_is_null(text) == 1
+    }
+
+    JsonValue parse(string text) {
+        JsonValue value = JsonValue()
+        value.kind = 2
+        value.text = text
+        return value
+    }
+
+    string stringify(JsonValue value) {
+        return value.to_string()
+    }
+}
+
+JsonValue json_string(string value) {
+    JsonValue json = JsonValue()
+    json.kind = 1
+    json.text = value
+    return json
+}
+
+JsonValue json_raw(string value) {
+    JsonValue json = JsonValue()
+    json.kind = 2
+    json.text = value
+    return json
 }
