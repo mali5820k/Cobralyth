@@ -212,6 +212,7 @@ static std::vector<std::filesystem::path> runtime_link_inputs_for(
         }
     };
 
+    bool needs_libuv_archive = false;
     std::set<std::filesystem::path> pushed;
     for (const auto& rule : rules) {
         std::error_code module_ec;
@@ -234,6 +235,13 @@ static std::vector<std::filesystem::path> runtime_link_inputs_for(
             continue;
         }
 
+        const auto module_source_text = rule.module_source.generic_string();
+        if (module_source_text.find("module-file-io/") != std::string::npos ||
+            module_source_text.find("module-router/") != std::string::npos ||
+            module_source_text.find("module-https/") != std::string::npos) {
+            needs_libuv_archive = true;
+        }
+
         std::filesystem::path selected_archive;
         if (std::filesystem::exists(rule.archive)) {
             selected_archive = rule.archive;
@@ -252,6 +260,23 @@ static std::vector<std::filesystem::path> runtime_link_inputs_for(
         const auto archive_key = archive_ec ? selected_archive.lexically_normal() : archive_canonical;
         if (pushed.insert(archive_key).second) {
             inputs.push_back(selected_archive);
+        }
+    }
+
+    if (needs_libuv_archive) {
+        const auto arch = std::string("x86_64");
+        const std::filesystem::path libuv_archive =
+            runtime_root / "c-bindings" / "libuv" / arch / "libclyth_libuv.a";
+        if (std::filesystem::exists(libuv_archive)) {
+            std::error_code archive_ec;
+            const auto archive_canonical = std::filesystem::weakly_canonical(libuv_archive, archive_ec);
+            const auto archive_key = archive_ec ? libuv_archive.lexically_normal() : archive_canonical;
+            if (pushed.insert(archive_key).second) {
+                inputs.push_back(libuv_archive);
+            }
+        } else {
+            fmt::print(stderr, "ERROR: runtime modules using libuv require missing archive '{}'. Run ./build_compiler.sh first.\n",
+                       libuv_archive.string());
         }
     }
 

@@ -629,8 +629,12 @@ std::any ClythAST::visitMethodBlock(ClythV1Parser::MethodBlockContext* ctx) {
 
 std::any ClythAST::visitMethodDecl(ClythV1Parser::MethodDeclContext* ctx) {
     auto node = build_generic(ast::NodeKind::MethodDecl, ctx, "method");
-    node->attributes["qualified"] = ctx->getText().find('.') != std::string::npos ? "true" : "false";
-    if (ctx->methodSimpleName() != nullptr) {
+    const bool qualified = ctx != nullptr && ctx->DOT() != nullptr && ctx->IDENTIFIER() != nullptr;
+    node->attributes["qualified"] = qualified ? "true" : "false";
+    if (qualified) {
+        node->attributes["owner"] = ctx->IDENTIFIER()->getText();
+    }
+    if (ctx != nullptr && ctx->methodSimpleName() != nullptr) {
         node->attributes["name"] = ctx->methodSimpleName()->getText();
     }
     return node;

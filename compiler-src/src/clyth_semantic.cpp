@@ -760,9 +760,21 @@ void TopLevelDeclarationPass::run(SemanticContext& context, const ast::ProgramPt
                 break;
             }
 
+            case ast::NodeKind::MethodBlock:
+                // Method blocks are official extension-style method declarations.
+                // They are validated and registered by MethodValidationPass after
+                // struct symbols are available.
+                break;
+
             case ast::NodeKind::FunctionDecl:
             case ast::NodeKind::MethodDecl:
             case ast::NodeKind::ExternDecl: {
+                if (child->kind == ast::NodeKind::MethodDecl && query::attr(child, "owner")) {
+                    // Qualified detached methods, e.g. `void Type.method(...)`,
+                    // are registered by MethodValidationPass as `Type.method`.
+                    break;
+                }
+
                 const auto name = query::declared_name(child);
                 const auto type = query::declared_type(child, context);
 
@@ -1282,15 +1294,42 @@ void MethodValidationPass::run(SemanticContext& context, const ast::ProgramPtr& 
     collect_nodes_by_kind(program, ast::NodeKind::MethodDecl, methods);
 
     for (const auto& method : methods) {
-        if (query::attr(method, "owner")) {
+        const auto owner_attr = query::attr(method, "owner");
+        const bool is_qualified = query::attr(method, "qualified").value_or("false") == "true";
+
+        if (!owner_attr || !is_qualified) {
             continue;
         }
 
-        // Qualified method syntax: ReturnType StructName.method_name(...)
-        // Current generic AST stores raw text, so this pass annotates conservatively.
-        if (method->text.find('.') != std::string::npos) {
-            method->attributes["qualified_method"] = "true";
+        const std::string owner = *owner_attr;
+        Symbol* owner_symbol = context.global_scope.find_local(owner);
+        if (owner_symbol == nullptr || owner_symbol->kind != SymbolKind::Struct) {
+            context.diagnostics.add_error(method->location, fmt::format("Qualified method references unknown struct '{}'.", owner));
+            continue;
         }
+
+        const auto method_name = query::declared_name(method);
+        if (!method_name) {
+            context.diagnostics.add_error(method->location, fmt::format("Qualified method declared for '{}' is missing a name.", owner));
+            continue;
+        }
+
+        if (!method_name->empty() && method_name->front() == '_') {
+            method->attributes["visibility"] = "private";
+        } else {
+            method->attributes["visibility"] = "public";
+        }
+
+        method->attributes["qualified_method"] = "true";
+
+        Symbol symbol;
+        symbol.name = owner + "." + *method_name;
+        symbol.kind = SymbolKind::Method;
+        symbol.type = query::declared_type(method, context).value_or(TypeInfo::unknown());
+        symbol.location = method->location;
+        symbol.declaration = method;
+
+        context.declare_global(symbol);
     }
 }
 

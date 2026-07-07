@@ -322,7 +322,21 @@ build_one_runtime_c_binding(){
   local archive_path="$binding_arch_dir/$archive_name"
   mkdir -p "$binding_arch_dir"
 
-  "$ZIG_CC" -O2 -c "$source_path" -o "$object_path"
+  local extra_flags=()
+  if [[ "$binding_name" == "file_io" ]]; then
+    extra_flags+=(
+      -target "$CLYTH_ZIG_TARGET"
+      -D_GNU_SOURCE
+      -D_POSIX_C_SOURCE=200112L
+      -D_FILE_OFFSET_BITS=64
+      -I"$CLYTH_RUNTIME_C_BINDINGS/libuv/vendor/libuv/include"
+      -I"$CLYTH_RUNTIME_C_BINDINGS/libuv/vendor/libuv/src"
+    )
+  else
+    extra_flags+=(-target "$CLYTH_ZIG_TARGET")
+  fi
+
+  "$ZIG_CC" -O2 "${extra_flags[@]}" -c "$source_path" -o "$object_path"
   zig ar rcs "$archive_path" "$object_path"
   ok "Built runtime C binding object: $object_path"
   ok "Built runtime C binding archive: $archive_path"
@@ -335,14 +349,13 @@ build_one_runtime_c_binding(){
   done
 }
 
-build_http_runtime_c_binding(){
+build_libuv_runtime_c_binding(){
   local arch
   arch="$(runtime_arch_name)"
 
-  local source_dir="$CLYTH_RUNTIME_C_BINDINGS/http"
-  local binding_arch_dir="$source_dir/$arch"
-  local archive_path="$binding_arch_dir/libclyth_http.a"
   local libuv_dir="$CLYTH_RUNTIME_C_BINDINGS/libuv/vendor/libuv"
+  local binding_arch_dir="$CLYTH_RUNTIME_C_BINDINGS/libuv/$arch"
+  local archive_path="$binding_arch_dir/libclyth_libuv.a"
   mkdir -p "$binding_arch_dir"
 
   local common_flags=(
@@ -351,15 +364,9 @@ build_http_runtime_c_binding(){
     -D_GNU_SOURCE
     -D_POSIX_C_SOURCE=200112L
     -D_FILE_OFFSET_BITS=64
-    -I"$source_dir"
     -I"$libuv_dir/include"
     -I"$libuv_dir/src"
   )
-
-  local objects=()
-  local web_object="$binding_arch_dir/http.o"
-  "$ZIG_CC" "${common_flags[@]}" -c "$source_dir/web.c" -o "$web_object"
-  objects+=("$web_object")
 
   local libuv_sources=(
     src/fs-poll.c
@@ -398,6 +405,7 @@ build_http_runtime_c_binding(){
     src/unix/udp.c
   )
 
+  local objects=()
   local libuv_source
   for libuv_source in "${libuv_sources[@]}"; do
     local source_path="$libuv_dir/$libuv_source"
@@ -412,7 +420,37 @@ build_http_runtime_c_binding(){
   done
 
   zig ar rcs "$archive_path" "${objects[@]}"
-  ok "Built libuv-backed HTTP runtime archive: $archive_path"
+  ok "Built shared libuv runtime archive: $archive_path"
+}
+
+build_http_runtime_c_binding(){
+  local arch
+  arch="$(runtime_arch_name)"
+
+  local source_dir="$CLYTH_RUNTIME_C_BINDINGS/http"
+  local binding_arch_dir="$source_dir/$arch"
+  local archive_path="$binding_arch_dir/libclyth_http.a"
+  local libuv_dir="$CLYTH_RUNTIME_C_BINDINGS/libuv/vendor/libuv"
+  mkdir -p "$binding_arch_dir"
+
+  local common_flags=(
+    -O2
+    -target "$CLYTH_ZIG_TARGET"
+    -D_GNU_SOURCE
+    -D_POSIX_C_SOURCE=200112L
+    -D_FILE_OFFSET_BITS=64
+    -I"$source_dir"
+    -I"$libuv_dir/include"
+    -I"$libuv_dir/src"
+  )
+
+  local objects=()
+  local web_object="$binding_arch_dir/http.o"
+  "$ZIG_CC" "${common_flags[@]}" -c "$source_dir/web.c" -o "$web_object"
+  objects+=("$web_object")
+
+  zig ar rcs "$archive_path" "${objects[@]}"
+  ok "Built HTTPS runtime archive: $archive_path"
 
   local module_dir
   for module_dir in     "$CLYTH_RUNTIME_DIR/modules/module-router/$arch"     "$CLYTH_RUNTIME_DIR/modules/module-https/$arch"; do
@@ -491,6 +529,9 @@ build_runtime_c_bindings(){
     "$CLYTH_RUNTIME_C_BINDINGS/dma" "dma.c" "libclyth_dma.a" \
     "$CLYTH_RUNTIME_DIR/modules/module-dma/$arch"
 
+  ensure_web_stack_sources
+  build_libuv_runtime_c_binding
+
   build_one_runtime_c_binding "file_io" \
     "$CLYTH_RUNTIME_C_BINDINGS/file-io" "file.c" "libclyth_file_io.a" \
     "$CLYTH_RUNTIME_DIR/modules/module-file-io/$arch"
@@ -504,8 +545,6 @@ build_runtime_c_bindings(){
   build_one_runtime_c_binding "json" \
     "$CLYTH_RUNTIME_C_BINDINGS/yyjson" "json_bindings.c" "libclyth_json.a" \
     "$CLYTH_RUNTIME_DIR/modules/module-json/$arch"
-
-  ensure_web_stack_sources
 
   build_one_runtime_c_binding "concurrency" \
     "$CLYTH_RUNTIME_C_BINDINGS/concurrency" "concurrency.c" "libclyth_concurrency.a" \

@@ -1,62 +1,119 @@
 #include "file.h"
 
 #include <errno.h>
+#include <fcntl.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
 #include <sys/types.h>
-#include <dirent.h>
-#include <limits.h>
-#include <unistd.h>
+#include <uv.h>
+
+static uv_loop_t* file_loop(void) {
+    return uv_default_loop();
+}
+
+static int32_t uv_result_to_i32(ssize_t result) {
+    return result < 0 ? (int32_t)result : 0;
+}
 
 static int32_t errno_result(void) {
     return errno == 0 ? -1 : -errno;
 }
 
-static int32_t write_text_mode(const char* path, const char* content, const char* mode, int append_newline) {
-    if (path == NULL || content == NULL || mode == NULL) {
-        return -EINVAL;
-    }
+static int32_t clyth_uv_close_file(uv_file file) {
+    uv_fs_t req;
+    int result = uv_fs_close(file_loop(), &req, file, NULL);
+    uv_fs_req_cleanup(&req);
+    return uv_result_to_i32(result);
+}
 
-    FILE* file = fopen(path, mode);
-    if (file == NULL) {
-        return errno_result();
+static int32_t clyth_uv_write_all(uv_file file, const char* data, size_t length, int64_t offset) {
+    size_t written_total = 0;
+    while (written_total < length) {
+        uv_buf_t buffer = uv_buf_init((char*)data + written_total, (unsigned int)(length - written_total));
+        uv_fs_t req;
+        int result = uv_fs_write(file_loop(), &req, file, &buffer, 1, offset < 0 ? -1 : offset + (int64_t)written_total, NULL);
+        uv_fs_req_cleanup(&req);
+        if (result < 0) {
+            return result;
+        }
+        if (result == 0) {
+            return -EIO;
+        }
+        written_total += (size_t)result;
     }
-
-    const size_t length = strlen(content);
-    if (length > 0 && fwrite(content, 1, length, file) != length) {
-        const int saved_errno = errno == 0 ? EIO : errno;
-        fclose(file);
-        return -saved_errno;
-    }
-
-    if (append_newline && fputc('\n', file) == EOF) {
-        const int saved_errno = errno == 0 ? EIO : errno;
-        fclose(file);
-        return -saved_errno;
-    }
-
-    if (fclose(file) != 0) {
-        return errno_result();
-    }
-
     return 0;
 }
 
-static int32_t stat_mode(const char* path, mode_t mask) {
-    if (path == NULL) {
-        return 0;
+static int32_t clyth_uv_write_fd(uv_file file, const char* data, size_t length) {
+    if (data == NULL) {
+        return -EINVAL;
     }
-    struct stat info;
-    if (stat(path, &info) != 0) {
+    return clyth_uv_write_all(file, data, length, -1);
+}
+
+static int32_t clyth_uv_write_cstr_fd(uv_file file, const char* text, int append_newline) {
+    if (text == NULL) {
+        return -EINVAL;
+    }
+    int32_t result = clyth_uv_write_fd(file, text, strlen(text));
+    if (result != 0 || !append_newline) {
+        return result;
+    }
+    return clyth_uv_write_fd(file, "\n", 1);
+}
+
+static int32_t write_text_flags(const char* path, const char* content, int flags, int append_newline) {
+    if (path == NULL || content == NULL) {
+        return -EINVAL;
+    }
+
+    uv_fs_t open_req;
+    int open_result = uv_fs_open(file_loop(), &open_req, path, flags, 0664, NULL);
+    uv_fs_req_cleanup(&open_req);
+    if (open_result < 0) {
+        return open_result;
+    }
+
+    uv_file file = (uv_file)open_result;
+    const size_t length = strlen(content);
+    int32_t write_result = clyth_uv_write_all(file, content, length, -1);
+    if (write_result == 0 && append_newline) {
+        write_result = clyth_uv_write_all(file, "\n", 1, -1);
+    }
+
+    int32_t close_result = clyth_uv_close_file(file);
+    return write_result != 0 ? write_result : close_result;
+}
+
+static int32_t uv_stat_path(const char* path, uv_stat_t* out, int follow_symlink) {
+    if (path == NULL || out == NULL) {
+        return -EINVAL;
+    }
+    uv_fs_t req;
+    int result = follow_symlink
+        ? uv_fs_stat(file_loop(), &req, path, NULL)
+        : uv_fs_lstat(file_loop(), &req, path, NULL);
+    if (result == 0) {
+        *out = req.statbuf;
+    }
+    uv_fs_req_cleanup(&req);
+    return result;
+}
+
+static int32_t stat_mode(const char* path, int mask) {
+    uv_stat_t info;
+    int32_t result = uv_stat_path(path, &info, 1);
+    if (result != 0) {
         return 0;
     }
     return (info.st_mode & S_IFMT) == mask ? 1 : 0;
 }
 
 int32_t clyth_path_exists(const char* path) {
-    return path != NULL && access(path, F_OK) == 0 ? 1 : 0;
+    uv_stat_t info;
+    return uv_stat_path(path, &info, 1) == 0 ? 1 : 0;
 }
 
 int32_t clyth_file_exists(const char* path) {
@@ -76,96 +133,126 @@ int32_t clyth_is_directory(const char* path) {
 }
 
 int32_t clyth_is_symlink(const char* path) {
-    if (path == NULL) {
-        return 0;
-    }
-    struct stat info;
-    if (lstat(path, &info) != 0) {
+    uv_stat_t info;
+    int32_t result = uv_stat_path(path, &info, 0);
+    if (result != 0) {
         return 0;
     }
     return S_ISLNK(info.st_mode) ? 1 : 0;
 }
 
 int32_t clyth_create_file(const char* path) {
-    return write_text_mode(path, "", "ab", 0);
+    return write_text_flags(path, "", O_CREAT | O_WRONLY | O_APPEND, 0);
 }
 
 int32_t clyth_create_directory(const char* path) {
     if (path == NULL) {
         return -EINVAL;
     }
-    if (mkdir(path, 0775) == 0 || errno == EEXIST) {
-        return 0;
-    }
-    return errno_result();
+    uv_fs_t req;
+    int result = uv_fs_mkdir(file_loop(), &req, path, 0775, NULL);
+    uv_fs_req_cleanup(&req);
+    return result == UV_EEXIST ? 0 : result;
 }
 
 int32_t clyth_delete_file(const char* path) {
     if (path == NULL) {
         return -EINVAL;
     }
-    if (unlink(path) == 0) {
-        return 0;
-    }
-    return errno_result();
+    uv_fs_t req;
+    int result = uv_fs_unlink(file_loop(), &req, path, NULL);
+    uv_fs_req_cleanup(&req);
+    return result;
 }
 
 int32_t clyth_delete_directory(const char* path) {
     if (path == NULL) {
         return -EINVAL;
     }
-    if (rmdir(path) == 0) {
-        return 0;
-    }
-    return errno_result();
+    uv_fs_t req;
+    int result = uv_fs_rmdir(file_loop(), &req, path, NULL);
+    uv_fs_req_cleanup(&req);
+    return result;
 }
 
 int32_t clyth_delete_symlink(const char* path) {
     return clyth_delete_file(path);
 }
 
-int32_t clyth_copy_file(const char* source_path, const char* destination_path) {
-    if (source_path == NULL || destination_path == NULL) {
+static int32_t read_entire_file(const char* path, char** out_data, size_t* out_length) {
+    if (path == NULL || out_data == NULL || out_length == NULL) {
         return -EINVAL;
     }
+    *out_data = NULL;
+    *out_length = 0;
 
-    FILE* source = fopen(source_path, "rb");
-    if (source == NULL) {
-        return errno_result();
+    uv_fs_t open_req;
+    int open_result = uv_fs_open(file_loop(), &open_req, path, O_RDONLY, 0, NULL);
+    uv_fs_req_cleanup(&open_req);
+    if (open_result < 0) {
+        return open_result;
     }
-    FILE* destination = fopen(destination_path, "wb");
-    if (destination == NULL) {
-        const int saved_errno = errno_result();
-        fclose(source);
-        return saved_errno;
+    uv_file file = (uv_file)open_result;
+
+    uv_fs_t stat_req;
+    int stat_result = uv_fs_fstat(file_loop(), &stat_req, file, NULL);
+    if (stat_result < 0) {
+        uv_fs_req_cleanup(&stat_req);
+        clyth_uv_close_file(file);
+        return stat_result;
+    }
+    size_t length = stat_req.statbuf.st_size < 0 ? 0 : (size_t)stat_req.statbuf.st_size;
+    uv_fs_req_cleanup(&stat_req);
+
+    char* data = (char*)malloc(length + 1);
+    if (data == NULL) {
+        clyth_uv_close_file(file);
+        return -ENOMEM;
     }
 
-    char buffer[8192];
-    size_t read_count;
-    while ((read_count = fread(buffer, 1, sizeof(buffer), source)) > 0) {
-        if (fwrite(buffer, 1, read_count, destination) != read_count) {
-            const int saved_errno = errno == 0 ? EIO : errno;
-            fclose(source);
-            fclose(destination);
-            return -saved_errno;
+    size_t total = 0;
+    while (total < length) {
+        uv_buf_t buffer = uv_buf_init(data + total, (unsigned int)(length - total));
+        uv_fs_t read_req;
+        int read_result = uv_fs_read(file_loop(), &read_req, file, &buffer, 1, (int64_t)total, NULL);
+        uv_fs_req_cleanup(&read_req);
+        if (read_result < 0) {
+            free(data);
+            clyth_uv_close_file(file);
+            return read_result;
         }
+        if (read_result == 0) {
+            break;
+        }
+        total += (size_t)read_result;
     }
-
-    if (ferror(source)) {
-        const int saved_errno = errno == 0 ? EIO : errno;
-        fclose(source);
-        fclose(destination);
-        return -saved_errno;
-    }
-
-    if (fclose(source) != 0) {
-        fclose(destination);
-        return errno_result();
-    }
-    if (fclose(destination) != 0) {
-        return errno_result();
-    }
+    data[total] = '\0';
+    clyth_uv_close_file(file);
+    *out_data = data;
+    *out_length = total;
     return 0;
+}
+
+int32_t clyth_copy_file(const char* source_path, const char* destination_path) {
+    char* data = NULL;
+    size_t length = 0;
+    int32_t read_result = read_entire_file(source_path, &data, &length);
+    if (read_result != 0) {
+        return read_result;
+    }
+
+    uv_fs_t open_req;
+    int open_result = uv_fs_open(file_loop(), &open_req, destination_path, O_CREAT | O_WRONLY | O_TRUNC, 0664, NULL);
+    uv_fs_req_cleanup(&open_req);
+    if (open_result < 0) {
+        free(data);
+        return open_result;
+    }
+    uv_file destination = (uv_file)open_result;
+    int32_t write_result = clyth_uv_write_all(destination, data, length, 0);
+    int32_t close_result = clyth_uv_close_file(destination);
+    free(data);
+    return write_result != 0 ? write_result : close_result;
 }
 
 int32_t clyth_copy_directory(const char* source_path, const char* destination_path) {
@@ -184,7 +271,10 @@ int32_t clyth_rename_path(const char* old_path, const char* new_path) {
     if (old_path == NULL || new_path == NULL) {
         return -EINVAL;
     }
-    return rename(old_path, new_path) == 0 ? 0 : errno_result();
+    uv_fs_t req;
+    int result = uv_fs_rename(file_loop(), &req, old_path, new_path, NULL);
+    uv_fs_req_cleanup(&req);
+    return result;
 }
 
 int32_t clyth_move_path(const char* source_path, const char* destination_path) {
@@ -195,53 +285,64 @@ int32_t clyth_create_symlink(const char* target_path, const char* link_path) {
     if (target_path == NULL || link_path == NULL) {
         return -EINVAL;
     }
-    return symlink(target_path, link_path) == 0 ? 0 : errno_result();
+    uv_fs_t req;
+    int result = uv_fs_symlink(file_loop(), &req, target_path, link_path, 0, NULL);
+    uv_fs_req_cleanup(&req);
+    return result;
 }
 
 int32_t clyth_create_hardlink(const char* target_path, const char* link_path) {
     if (target_path == NULL || link_path == NULL) {
         return -EINVAL;
     }
-    return link(target_path, link_path) == 0 ? 0 : errno_result();
+    uv_fs_t req;
+    int result = uv_fs_link(file_loop(), &req, target_path, link_path, NULL);
+    uv_fs_req_cleanup(&req);
+    return result;
 }
 
 int64_t clyth_file_size(const char* path) {
-    if (path == NULL) {
-        return -EINVAL;
-    }
-    struct stat info;
-    if (stat(path, &info) != 0) {
-        return errno_result();
+    uv_stat_t info;
+    int32_t result = uv_stat_path(path, &info, 1);
+    if (result != 0) {
+        return result;
     }
     return (int64_t)info.st_size;
 }
 
 static int64_t directory_walk_size(const char* path, int count_files) {
-    DIR* dir = opendir(path);
-    if (dir == NULL) {
-        return errno_result();
+    if (path == NULL) {
+        return -EINVAL;
     }
+    uv_fs_t scan_req;
+    int scan_result = uv_fs_scandir(file_loop(), &scan_req, path, 0, NULL);
+    if (scan_result < 0) {
+        uv_fs_req_cleanup(&scan_req);
+        return scan_result;
+    }
+
     int64_t total = 0;
-    struct dirent* entry;
-    while ((entry = readdir(dir)) != NULL) {
-        if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0) {
+    uv_dirent_t entry;
+    while (uv_fs_scandir_next(&scan_req, &entry) != UV_EOF) {
+        if (strcmp(entry.name, ".") == 0 || strcmp(entry.name, "..") == 0) {
             continue;
         }
-        char child[PATH_MAX];
-        int written = snprintf(child, sizeof(child), "%s/%s", path, entry->d_name);
+        char child[4096];
+        int written = snprintf(child, sizeof(child), "%s/%s", path, entry.name);
         if (written < 0 || (size_t)written >= sizeof(child)) {
-            closedir(dir);
+            uv_fs_req_cleanup(&scan_req);
             return -ENAMETOOLONG;
         }
-        struct stat info;
-        if (lstat(child, &info) != 0) {
-            closedir(dir);
-            return errno_result();
+        uv_stat_t info;
+        int32_t stat_result = uv_stat_path(child, &info, 0);
+        if (stat_result != 0) {
+            uv_fs_req_cleanup(&scan_req);
+            return stat_result;
         }
         if (S_ISDIR(info.st_mode)) {
             int64_t nested = directory_walk_size(child, count_files);
             if (nested < 0) {
-                closedir(dir);
+                uv_fs_req_cleanup(&scan_req);
                 return nested;
             }
             total += nested;
@@ -251,31 +352,23 @@ static int64_t directory_walk_size(const char* path, int count_files) {
             total += (int64_t)info.st_size;
         }
     }
-    closedir(dir);
+    uv_fs_req_cleanup(&scan_req);
     return total;
 }
 
 int64_t clyth_directory_size(const char* path) {
-    if (path == NULL) {
-        return -EINVAL;
-    }
     return directory_walk_size(path, 0);
 }
 
 int64_t clyth_directory_num_files(const char* path) {
-    if (path == NULL) {
-        return -EINVAL;
-    }
     return directory_walk_size(path, 1);
 }
 
 int32_t clyth_file_permissions(const char* path) {
-    if (path == NULL) {
-        return -EINVAL;
-    }
-    struct stat info;
-    if (stat(path, &info) != 0) {
-        return errno_result();
+    uv_stat_t info;
+    int32_t result = uv_stat_path(path, &info, 1);
+    if (result != 0) {
+        return result;
     }
     return (int32_t)(info.st_mode & 07777);
 }
@@ -288,121 +381,118 @@ int32_t clyth_chmod_path(const char* path, int32_t mode) {
     if (path == NULL) {
         return -EINVAL;
     }
-    return chmod(path, (mode_t)mode) == 0 ? 0 : errno_result();
+    uv_fs_t req;
+    int result = uv_fs_chmod(file_loop(), &req, path, (int)mode, NULL);
+    uv_fs_req_cleanup(&req);
+    return result;
 }
 
 int32_t clyth_chown_path(const char* path, int32_t owner_uid, int32_t group_gid) {
     if (path == NULL) {
         return -EINVAL;
     }
-    return chown(path, (uid_t)owner_uid, (gid_t)group_gid) == 0 ? 0 : errno_result();
+    uv_fs_t req;
+    int result = uv_fs_chown(file_loop(), &req, path, (uv_uid_t)owner_uid, (uv_gid_t)group_gid, NULL);
+    uv_fs_req_cleanup(&req);
+    return result;
 }
 
 int32_t clyth_file_write_text(const char* path, const char* content) {
-    return write_text_mode(path, content, "wb", 0);
+    return write_text_flags(path, content, O_CREAT | O_WRONLY | O_TRUNC, 0);
 }
 
 int32_t clyth_file_append_text(const char* path, const char* content) {
-    return write_text_mode(path, content, "ab", 0);
+    return write_text_flags(path, content, O_CREAT | O_WRONLY | O_APPEND, 0);
 }
 
 int32_t clyth_file_write_line(const char* path, const char* content) {
-    return write_text_mode(path, content, "wb", 1);
+    return write_text_flags(path, content, O_CREAT | O_WRONLY | O_TRUNC, 1);
 }
 
 int32_t clyth_file_append_line(const char* path, const char* content) {
-    return write_text_mode(path, content, "ab", 1);
+    return write_text_flags(path, content, O_CREAT | O_WRONLY | O_APPEND, 1);
 }
 
 int32_t clyth_file_dos2unix(const char* path) {
-    if (path == NULL) {
-        return -EINVAL;
-    }
-    FILE* file = fopen(path, "rb");
-    if (file == NULL) {
-        return errno_result();
-    }
-    if (fseek(file, 0, SEEK_END) != 0) {
-        const int saved_errno = errno_result();
-        fclose(file);
-        return saved_errno;
-    }
-    long length = ftell(file);
-    if (length < 0) {
-        const int saved_errno = errno_result();
-        fclose(file);
-        return saved_errno;
-    }
-    rewind(file);
-    char* input = (char*)malloc((size_t)length + 1);
-    if (input == NULL) {
-        fclose(file);
-        return -ENOMEM;
-    }
-    size_t read_count = fread(input, 1, (size_t)length, file);
-    fclose(file);
-    if (read_count != (size_t)length) {
-        free(input);
-        return -EIO;
+    char* input = NULL;
+    size_t length = 0;
+    int32_t read_result = read_entire_file(path, &input, &length);
+    if (read_result != 0) {
+        return read_result;
     }
 
-    file = fopen(path, "wb");
-    if (file == NULL) {
-        const int saved_errno = errno_result();
+    char* output = (char*)malloc(length + 1);
+    if (output == NULL) {
         free(input);
-        return saved_errno;
+        return -ENOMEM;
     }
-    for (size_t i = 0; i < read_count; ++i) {
+    size_t out_len = 0;
+    for (size_t i = 0; i < length; ++i) {
         if (input[i] != '\r') {
-            fputc(input[i], file);
+            output[out_len++] = input[i];
         }
     }
+    output[out_len] = '\0';
+
+    uv_fs_t open_req;
+    int open_result = uv_fs_open(file_loop(), &open_req, path, O_CREAT | O_WRONLY | O_TRUNC, 0664, NULL);
+    uv_fs_req_cleanup(&open_req);
+    if (open_result < 0) {
+        free(input);
+        free(output);
+        return open_result;
+    }
+    uv_file file = (uv_file)open_result;
+    int32_t write_result = clyth_uv_write_all(file, output, out_len, 0);
+    int32_t close_result = clyth_uv_close_file(file);
     free(input);
-    return fclose(file) == 0 ? 0 : errno_result();
+    free(output);
+    return write_result != 0 ? write_result : close_result;
 }
 
 int32_t clyth_file_read_to_stdout(const char* path) {
-    if (path == NULL) {
-        return -EINVAL;
+    char* data = NULL;
+    size_t length = 0;
+    int32_t result = read_entire_file(path, &data, &length);
+    if (result != 0) {
+        return result;
     }
-    FILE* file = fopen(path, "rb");
-    if (file == NULL) {
-        return errno_result();
-    }
-    char buffer[4096];
-    size_t n;
-    while ((n = fread(buffer, 1, sizeof(buffer), file)) > 0) {
-        if (fwrite(buffer, 1, n, stdout) != n) {
-            fclose(file);
-            return -EIO;
-        }
-    }
-    if (ferror(file)) {
-        fclose(file);
-        return -EIO;
-    }
-    return fclose(file) == 0 ? 0 : errno_result();
+    int32_t write_result = clyth_uv_write_fd(1, data, length);
+    free(data);
+    return write_result;
 }
 
 int32_t clyth_file_read_line_to_stdout(const char* path, int64_t line_index) {
-    if (path == NULL || line_index < 0) {
+    if (line_index < 0) {
         return -EINVAL;
     }
-    FILE* file = fopen(path, "rb");
-    if (file == NULL) {
-        return errno_result();
+    char* data = NULL;
+    size_t length = 0;
+    int32_t result = read_entire_file(path, &data, &length);
+    if (result != 0) {
+        return result;
     }
-    char buffer[4096];
     int64_t current = 0;
-    while (fgets(buffer, sizeof(buffer), file) != NULL) {
-        if (current == line_index) {
-            fputs(buffer, stdout);
-            fclose(file);
-            return 0;
+    size_t start = 0;
+    for (size_t i = 0; i <= length; ++i) {
+        if (i == length || data[i] == '\n') {
+            if (current == line_index) {
+                int32_t write_result = clyth_uv_write_fd(1, data + start, i - start);
+                if (write_result == 0 && i < length && data[i] == '\n') {
+                    write_result = clyth_uv_write_fd(1, "\n", 1);
+                }
+                if (write_result != 0) {
+                    free(data);
+                    return write_result;
+                }
+                free(data);
+                return 0;
+            }
+            current += 1;
+            start = i + 1;
         }
-        current += 1;
     }
-    fclose(file);
+    free(data);
     return -ENOENT;
 }
 
@@ -410,36 +500,33 @@ int32_t clyth_list_files_to_stdout(const char* path) {
     if (path == NULL) {
         return -EINVAL;
     }
-    DIR* dir = opendir(path);
-    if (dir == NULL) {
-        return errno_result();
+    uv_fs_t scan_req;
+    int scan_result = uv_fs_scandir(file_loop(), &scan_req, path, 0, NULL);
+    if (scan_result < 0) {
+        uv_fs_req_cleanup(&scan_req);
+        return scan_result;
     }
-    struct dirent* entry;
-    while ((entry = readdir(dir)) != NULL) {
-        if (strcmp(entry->d_name, ".") != 0 && strcmp(entry->d_name, "..") != 0) {
-            printf("%s\n", entry->d_name);
+    uv_dirent_t entry;
+    while (uv_fs_scandir_next(&scan_req, &entry) != UV_EOF) {
+        if (strcmp(entry.name, ".") != 0 && strcmp(entry.name, "..") != 0) {
+            printf("%s\n", entry.name);
         }
     }
-    closedir(dir);
+    uv_fs_req_cleanup(&scan_req);
     return 0;
 }
 
 int32_t clyth_file_info_to_stdout(const char* path) {
-    if (path == NULL) {
-        return -EINVAL;
-    }
-    struct stat info;
-    if (stat(path, &info) != 0) {
-        return errno_result();
+    uv_stat_t info;
+    int32_t result = uv_stat_path(path, &info, 1);
+    if (result != 0) {
+        return result;
     }
     printf("size=%lld owner=%d group=%d permissions=%o\n", (long long)info.st_size, (int)info.st_uid, (int)info.st_gid, (unsigned)(info.st_mode & 07777));
     return 0;
 }
 
 int32_t clyth_directory_info_to_stdout(const char* path) {
-    if (path == NULL) {
-        return -EINVAL;
-    }
     int64_t size = clyth_directory_size(path);
     int64_t files = clyth_directory_num_files(path);
     int32_t perms = clyth_directory_permissions(path);
@@ -531,37 +618,19 @@ int32_t clyth_file_remove(const char* path) {
 }
 
 int32_t clyth_print(const char* text) {
-    if (text == NULL) {
-        return -EINVAL;
-    }
-    return fputs(text, stdout) >= 0 ? 0 : -EIO;
+    return clyth_uv_write_cstr_fd(1, text, 0);
 }
 
 int32_t clyth_println(const char* text) {
-    if (text == NULL) {
-        return -EINVAL;
-    }
-    if (fputs(text, stdout) < 0) {
-        return -EIO;
-    }
-    return fputc('\n', stdout) == EOF ? -EIO : 0;
+    return clyth_uv_write_cstr_fd(1, text, 1);
 }
 
 int32_t clyth_eprint(const char* text) {
-    if (text == NULL) {
-        return -EINVAL;
-    }
-    return fputs(text, stderr) >= 0 ? 0 : -EIO;
+    return clyth_uv_write_cstr_fd(2, text, 0);
 }
 
 int32_t clyth_eprintln(const char* text) {
-    if (text == NULL) {
-        return -EINVAL;
-    }
-    if (fputs(text, stderr) < 0) {
-        return -EIO;
-    }
-    return fputc('\n', stderr) == EOF ? -EIO : 0;
+    return clyth_uv_write_cstr_fd(2, text, 1);
 }
 
 /* Public Clyth-facing aliases. These keep the module API ergonomic while the

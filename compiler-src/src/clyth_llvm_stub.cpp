@@ -10,9 +10,12 @@
 #include <cstdlib>
 #include <sstream>
 #include <string_view>
+#include <unordered_map>
 
 namespace clyth::llvm_stub {
 namespace {
+
+bool is_identifier_like(const std::string& token);
 
 bool is_token(const ast::NodePtr& node, const std::string& text) {
     return node && node->kind == ast::NodeKind::Token && node->text == text;
@@ -304,6 +307,168 @@ std::vector<ast::NodePtr> direct_params(const ast::NodePtr& node) {
         }
     }
     return params;
+}
+
+
+void collect_return_statements(const ast::NodePtr& node, std::vector<ast::NodePtr>& out) {
+    if (!node) {
+        return;
+    }
+
+    if (node->kind == ast::NodeKind::LambdaExpr) {
+        // Do not let nested lambdas influence the current lambda's inferred return type.
+        return;
+    }
+
+    if (node->kind == ast::NodeKind::ReturnStmt) {
+        out.push_back(node);
+        return;
+    }
+
+    for (const auto& child : node->children) {
+        collect_return_statements(child, out);
+    }
+}
+
+std::optional<std::string> token_text_in_subtree(const ast::NodePtr& node, const std::string& text) {
+    if (!node) {
+        return std::nullopt;
+    }
+    if (node->kind == ast::NodeKind::Token && node->text == text) {
+        return node->text;
+    }
+    for (const auto& child : node->children) {
+        if (auto found = token_text_in_subtree(child, text)) {
+            return found;
+        }
+    }
+    return std::nullopt;
+}
+
+std::optional<std::string> first_identifier_text_in_subtree(const ast::NodePtr& node) {
+    if (!node) {
+        return std::nullopt;
+    }
+
+    if (node->kind == ast::NodeKind::Token && is_identifier_like(node->text)) {
+        static const std::vector<std::string> keywords = {
+            "return", "if", "else", "while", "for", "true", "false", "null"
+        };
+        if (std::find(keywords.begin(), keywords.end(), node->text) == keywords.end()) {
+            return node->text;
+        }
+    }
+
+    for (const auto& child : node->children) {
+        if (auto found = first_identifier_text_in_subtree(child)) {
+            return found;
+        }
+    }
+    return std::nullopt;
+}
+
+std::optional<std::string> infer_lambda_expr_type_name(
+    const ast::NodePtr& expr,
+    const std::unordered_map<std::string, std::string>& locals
+) {
+    if (!expr) {
+        return std::nullopt;
+    }
+
+    if (expr->kind == ast::NodeKind::LiteralExpr) {
+        const std::string literal = attr(expr, "literal").value_or(expr->text);
+        if (is_clyth_string_literal(literal)) {
+            return std::string("string");
+        }
+        if (literal == "true" || literal == "false") {
+            return std::string("bool");
+        }
+        if (!literal.empty() && std::isdigit(static_cast<unsigned char>(literal.front()))) {
+            return std::string("int32");
+        }
+    }
+
+    if (expr->kind == ast::NodeKind::IdentifierExpr || expr->kind == ast::NodeKind::Generic) {
+        if (auto ident = first_identifier_text_in_subtree(expr)) {
+            auto it = locals.find(*ident);
+            if (it != locals.end()) {
+                return it->second;
+            }
+        }
+    }
+
+    if (expr->kind == ast::NodeKind::BinaryExpr || expr->kind == ast::NodeKind::UnaryExpr) {
+        const auto children = expression_children(expr);
+        std::optional<std::string> first_type;
+        for (const auto& child : children) {
+            auto child_type = infer_lambda_expr_type_name(child, locals);
+            if (!child_type) {
+                continue;
+            }
+            if (!first_type) {
+                first_type = child_type;
+                continue;
+            }
+            if (*first_type != *child_type) {
+                return std::nullopt;
+            }
+        }
+        if (first_type) {
+            return first_type;
+        }
+    }
+
+    const auto children = expression_children(expr);
+    if (children.size() == 1) {
+        return infer_lambda_expr_type_name(children.front(), locals);
+    }
+
+    return std::nullopt;
+}
+
+std::string infer_lambda_return_type_name(const ast::NodePtr& lambda_node) {
+    std::unordered_map<std::string, std::string> locals;
+    for (const auto& param : direct_params(lambda_node)) {
+        if (auto name = declared_name(param)) {
+            locals[*name] = declared_type_name(param);
+        }
+    }
+
+    const ast::NodePtr body = first_child_of_kind(lambda_node, ast::NodeKind::BlockStmt);
+    std::vector<ast::NodePtr> returns;
+    collect_return_statements(body, returns);
+
+    if (returns.empty()) {
+        return "void";
+    }
+
+    std::optional<std::string> inferred;
+    for (const auto& ret : returns) {
+        const auto exprs = expression_children(ret);
+        if (exprs.empty()) {
+            if (inferred && *inferred != "void") {
+                return "void";
+            }
+            inferred = std::string("void");
+            continue;
+        }
+
+        auto type_name = infer_lambda_expr_type_name(exprs.front(), locals);
+        if (!type_name) {
+            // Keep the existing conservative behavior for expression forms that
+            // the 0.5.0 inference bridge cannot classify yet. The semantic
+            // rule is still "infer from returns"; the Pratt-parser frontend can
+            // replace this with full expression typing in 0.6.0.
+            return attr(lambda_node, "return_type").value_or("void");
+        }
+
+        if (inferred && *inferred != *type_name) {
+            return attr(lambda_node, "return_type").value_or("void");
+        }
+        inferred = type_name;
+    }
+
+    return inferred.value_or("void");
 }
 
 bool is_dynamic_array_type_name(const std::string& type_name) {
@@ -1905,7 +2070,10 @@ llvm::Value* ClythLLVMCodegen::emit_lambda_expression(const ast::NodePtr& node, 
         return nullptr;
     }
 
-    const std::string return_type_name = attr(node, "return_type").value_or("void");
+    std::string return_type_name = attr(node, "return_type").value_or("void");
+    if (return_type_name == "void") {
+        return_type_name = infer_lambda_return_type_name(node);
+    }
     llvm::Type* return_type = llvm_type_from_clyth_type(return_type_name);
     if (return_type == nullptr) {
         add_codegen_error(node, fmt::format("Unsupported lambda return type '{}'.", return_type_name));
@@ -4551,6 +4719,15 @@ llvm::AllocaInst* ClythLLVMCodegen::lookup_local(const std::string& name) const 
 
 bool ClythLLVMCodegen::write_ir_file(const std::filesystem::path& output_path) {
     std::error_code ec;
+    const auto parent = output_path.parent_path();
+    if (!parent.empty()) {
+        std::filesystem::create_directories(parent, ec);
+        if (ec) {
+            diagnostics.add_error(SourceLocation{}, fmt::format("Failed to create LLVM IR output directory '{}': {}", parent.string(), ec.message()));
+            return false;
+        }
+    }
+
     llvm::raw_fd_ostream output(output_path.string(), ec, llvm::sys::fs::OF_Text);
 
     if (ec) {
