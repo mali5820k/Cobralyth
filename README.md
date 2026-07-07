@@ -1,10 +1,10 @@
 # Clyth
 
-Clyth is an LLVM-based ahead-of-time systems programming language implemented in C++.
+Clyth is an LLVM-backed ahead-of-time systems programming language project focused on a small compiler architecture, explicit runtime boundaries, and native Linux artifacts built through a musl/libc++ toolchain path.
 
-Clyth's design goal is to keep the compiler focused, keep the runtime capable, and keep the language explicit enough for systems work while still giving application developers useful runtime modules.
+The current compiler lowers Clyth programs through LLVM IR generation, using LLVM as a mature optimization and native-code backend while keeping Clyth's language design, runtime model, and long-term compiler architecture independent.
 
-Alpha 0.5.0 is the **Runtime Ecosystem Foundation Release**. It moves Clyth beyond the "compiler experiment" stage and into a usable alpha language/runtime stack: first-class functions, lambda callbacks, explicit `this`, struct constructor semantics, runtime file I/O, rapidhash-backed collections, yyjson-backed JSON runtime module with singleton-style `JSON` object surface, and HTTP/HTTPS/router foundations built around Clyth-owned APIs.
+Alpha 0.5.0 is the **Runtime Ecosystem Foundation Release**. It moves Clyth beyond a compiler experiment by proving that Clyth code can compile to native executables, cross stable ABI boundaries, and drive useful runtime capabilities such as file I/O, JSON, hashing, and a libuv-backed server runtime.
 
 Documentation: https://mali5820k.github.io/clyth-docs/
 
@@ -12,233 +12,87 @@ Documentation: https://mali5820k.github.io/clyth-docs/
 
 ## Why Clyth Exists
 
-Clyth explores a systems-language design that preserves explicit control and predictable performance while reducing unnecessary ceremony around low-level programming.
+Clyth explores a systems-language design that keeps low-level control explicit while avoiding unnecessary ceremony around runtime capability. The compiler should own syntax, typing, semantic analysis, and lowering. Runtime capabilities should live behind Clyth-facing APIs and small, auditable native ABI boundaries.
 
-The long-term goal is a language capable of writing systems applications, backend services, embedded-facing runtime code, tooling, and eventually its own compiler/runtime ecosystem without forcing ordinary runtime capabilities into compiler internals.
+The long-term direction is a language capable of writing systems applications, backend services, embedded-facing runtime code, tooling, and eventually its own compiler/runtime ecosystem.
 
-Clyth is designed around these principles:
+Core principles:
 
-- Programs should express intent clearly.
-- The compiler should own syntax, typing, semantic analysis, and lowering.
-- Runtime capabilities should live in Clyth-space modules whenever possible.
-- C-backed runtime modules should expose small, auditable C ABIs.
-- Modules should become independently buildable and distributable.
-- Memory management should eventually support deterministic estate-based ownership through MECC.
-
----
-
-## Current Status
-
-Clyth currently compiles the Alpha 0.5.0 language subset into native Linux executables through LLVM IR and Zig/musl-based static linking.
-
-Implemented or stabilized areas include:
-
-- ANTLR4 lexer/parser frontend.
-- AST generation and semantic analysis infrastructure.
-- LLVM IR generation for the supported alpha subset.
-- `extern C` declarations and calls.
-- `int32 main(string[] args)` command-line argument support.
-- Local variables, global variables, user functions, function hoisting, and global hoisting.
-- `if`, `else`, `while`, `break`, and `continue`.
-- Fixed arrays and compact dynamic arrays.
-- Native string values.
-- Structs, fields, methods, constructors, explicit `this`, and default struct construction.
-- First-class function types using `function<Return, <Args...>>`.
-- Lambda/callback syntax such as `function<void, <Request request, Response response> => { ... }`.
-- Runtime collections implemented as Clyth modules: `List<T>`, `Set<T>`, and `Map<K,V>`.
-- Rapidhash-backed runtime hashing for collections.
-- File I/O runtime module with native C binding support.
-- HTTP/HTTPS/router API surfaces with Clyth `Request`, `Response`, `Router`, `HttpServer`, and `HttpsServer` values.
-- OpenSSL-only TLS direction; wolfSSL is intentionally excluded.
-- WebSocket direction through wslay, not the older monolithic WebSocket stack direction.
-- JSON runtime module backed by yyjson through a small C ABI binding, exposed through a Clyth `JSON` object with validation, parse, and stringify surface.
-- Return-code based regression runner.
-- Lean distribution packaging that avoids bundling LLVM source/build trees.
-
-The numbered regression suite currently protects 17 active samples spanning extern C, arrays, strings, structs/methods, generics, package imports, runtime collections, DMA, explicit `this`, first-class functions, file I/O, hashing, HTTP/HTTPS/router API surface, and lambda callbacks.
+- Keep the compiler focused.
+- Keep runtime APIs ergonomic.
+- Keep native boundaries explicit and auditable.
+- Prefer permissively licensed dependencies.
+- Avoid binding the language identity to a single backend implementation.
+- Use MECC later for deterministic estate-based ownership once the compiler architecture is ready.
 
 ---
 
-## Language Examples
+## 0.5.0 Status
 
-### Hello World
+Clyth currently compiles the supported alpha language subset into native Linux executables through LLVM IR and a Zig/musl-based link path.
 
-```clyth
-extern C int32 printf(string fmt, ...)
+The 0.5.0 release candidate validates:
 
-int32 main() {
-    printf("Hello from Clyth!\n")
-    return 0
-}
-```
+- structs, methods, constructors, and explicit `this`
+- extension-style method declarations
+- first-class function values and `function<Return(Args...)>` syntax
+- lambda callbacks
+- expression-based template interpolation
+- native string values and string return ABI
+- runtime printing through `print` / `println`
+- libuv-backed file I/O
+- yyjson-backed JSON runtime integration
+- rapidhash-backed hashing
+- HTTPS/server abstraction with plain HTTP when TLS certificates are not configured
+- router callbacks using `Request` and `Response` wrappers
+- stable handle-based ABI boundaries
+- recursive artifact audit for GNU/glibc/libstdc++ leakage
 
-### Runtime Printing
-
-`extern C printf` remains available as a low-level escape hatch, but user-facing printing belongs in `file-io` so Clyth can eventually support formatted strings and object `to_string` behavior without exposing C varargs everywhere.
-
-```clyth
-include "file-io"
-
-int32 main() {
-    println("Hello from Clyth runtime I/O")
-    return 0
-}
-```
-
-### First-Class Function Types
-
-```clyth
-int32 run_callback(function<int32, <int32>> callback) {
-    return callback(5)
-}
-
-int32 square(int32 value) {
-    return value * value
-}
-
-int32 main() {
-    if run_callback(square) == 25 {
-        return 0
-    }
-    return 1
-}
-```
-
-### Lambda Callback Syntax
-
-```clyth
-include "https"
-
-int32 main() {
-    Router router = Router()
-
-    router.post("/", function<void, <Request request, Response response> => {
-        if request.body != null {
-            print(request.body)
-        }
-        response.send_json(200, "{\"ok\":true}")
-    })
-
-    return 0
-}
-```
-
-### Collections
-
-```clyth
-include "collections"
-
-int32 main() {
-    Map<string, int32> scores = Map([
-        "one": 1,
-        "two": 2
-    ])
-
-    if scores.get("two") == 2 {
-        return 0
-    }
-    return 1
-}
-```
-
-### File I/O
-
-```clyth
-include "file-io"
-
-int32 main() {
-    string path = "example.txt"
-    create_file(path)
-    write_text(path, "hello")
-    append_line(path, " from Clyth")
-
-    if file_exists(path) {
-        delete_file(path)
-        return 0
-    }
-    return 1
-}
-```
-
-### HTTPS/Router Direction
-
-```clyth
-include "file-io"
-include "https"
-include "json"
-
-int32 main(string[] args) {
-    string key = file.read("path-to-key.pem")
-    string cert = file.read("path-to-cert.pem")
-
-    Router router = Router()
-
-    router.post("/", function<void, <Request request, Response response> => {
-        response.send_json(200, "{\"ok\":true}")
-    })
-
-    HttpsConfiguration config = HttpsConfiguration(key, cert, 9000, router)
-    HttpsServer server = HttpsServer(config)
-
-    return 0
-}
-```
+The regression suite currently passes 20/20 samples, and the ABI audit reports no GNU/glibc/libstdc++ markers in checked release artifacts.
 
 ---
 
-## Runtime Modules
+## Architecture Summary
 
-Clyth runtime functionality is organized under `clyth-runtime/`.
+Clyth separates user-facing APIs from native implementation details:
 
 ```text
-clyth-runtime/
-├── c-bindings/
-│   ├── dma/
-│   ├── file-io/
-│   ├── http/
-│   ├── openssl/
-│   └── rapidhash/
-├── modules/
-│   ├── module-collections/
-│   ├── module-dma/
-│   ├── module-file-io/
-│   ├── module-hash/
-│   ├── module-http/
-│   ├── module-https/
-│   ├── module-json/
-│   └── module-router/
-└── runtime_libraries.json
+Clyth application
+    ↓
+Clyth wrapper module
+    ↓
+Stable ABI boundary
+    ↓
+Native provider
+    ↓
+libuv / yyjson / rapidhash / OS
 ```
 
-The Clyth-owned HTTP/WebSocket/backend stack direction is:
+For example, the server API exposes Clyth `Request` and `Response` values while the native runtime stores request state behind handles. This keeps callback ABIs stable without forcing application code to depend on raw native layouts.
 
-```text
-libuv    -> event loop, async file I/O, TCP, timers, worker scheduling
-llhttp   -> HTTP/1.1 parser
-OpenSSL  -> TLS/HTTPS
-wslay    -> WebSocket framing after HTTP Upgrade
-```
-
-Clyth no longer targets wslay for the official runtime stack.
+Detailed architecture and module documentation live in the documentation site rather than this README.
 
 ---
 
-## JSON Status
+## MECC Memory Model Direction
 
-JSON is an official runtime module in 0.5.0. JSON remains runtime work, not compiler work, and is exposed through a Clyth-owned `JSON` object surface backed by yyjson through a small C ABI binding.
+MECC (**Memory-Explicit Control and Cleanup**) is Clyth's planned deterministic memory-management model.
 
-Current support:
+MECC explores a middle ground between fully manual allocation management and runtime-driven memory systems. The goal is to preserve predictable ownership behavior while reducing the amount of repetitive lifetime management required in larger systems.
 
-- HTTP/HTTPS APIs can send JSON payload strings.
-- `module-json` establishes `JsonValue` and early JSON value helpers.
-- JSON is documented as a Clyth-owned runtime feature built from strings, arrays, maps, keyed arrays, and struct formatting.
+Instead of treating every allocation as an isolated lifetime problem, MECC introduces ownership estates: groups of related allocations whose lifetimes can be analyzed, optimized, and cleaned up together.
 
-Near-term support:
+The planned MECC analysis pipeline focuses on:
 
-- `JSON.stringify(value)` for structs, arrays, maps, and primitives.
-- `JSON.parse(string)` returning a `JsonValue` tree.
-- Object/array builders.
-- `to_string()` / formatted string integration.
+- detecting ownership relationships
+- grouping related allocations into logical estates
+- reducing unnecessary object-level lifetime bookkeeping
+- automatically inserting cleanup paths where ownership is clear
+- falling back to explicit estate management when static analysis cannot prove safe behavior
+
+MECC does not attempt to hide memory management. It attempts to move ownership reasoning to a higher level where the compiler and developer can cooperate.
+
+Clyth 0.5.0 intentionally focuses on building realistic runtime foundations first — files, requests, responses, collections, callbacks, and module boundaries — so future MECC analysis operates against real application patterns rather than artificial examples.
 
 ---
 
@@ -250,54 +104,62 @@ Build the compiler:
 ./build_compiler.sh
 ```
 
-Fast development build without packaging the distribution:
+Fast development build without packaging:
 
 ```bash
 ./build_compiler.sh --skip-dist
 ```
 
-Run regression samples:
+Run the regression suite and ABI audit:
 
 ```bash
-./build_compiler.sh --skip-dist
-./sample-clyth-programs/run_language_samples.sh
-rm -rf sample-clyth-programs/.sample-bin
+./run_regression_tests.sh
+./audit_no_gnu_abi.sh
 ```
 
 ---
 
-## Regression Suite Policy
+## Distribution Policy
 
-Clyth's language regression suite uses numbered sample files:
+Clyth release artifacts should remain lean and auditable. Distribution bundles should include the compiler binary, runtime files, samples, documentation, inspection tools, and license files.
 
-```text
-NN_0_X_feature_name.clyth
-```
+They should not include:
 
-The runner compiles every numbered sample, executes the produced binary, and treats exit code `0` as pass. Any non-zero exit code is failure. Tests should validate behavior internally rather than depending on fragile stdout comparisons.
+- LLVM source trees
+- LLVM build directories
+- Zig toolchains
+- generated object caches
+- unrelated vendor source checkouts
 
----
-
-## Distribution
-
-The build script can create:
-
-```text
-dist-clyth/
-clyth-dist.tar.gz
-```
-
-The distribution should remain lean: compiler binary, runtime files, sample programs, useful inspection tools, and license files. LLVM source trees, LLVM build directories, Zig toolchains, generated object caches, and vendor source checkouts should not be copied into the distribution.
+The release audit should reject accidental GNU/glibc/libstdc++ runtime linkage in checked artifacts.
 
 ---
 
-## MECC Memory Model Direction
+## Roadmap
 
-MECC means **Managed Entanglement for Collapsible Collections**.
+### 0.5.0 — Runtime Ecosystem Foundation
 
-MECC is Clyth's planned deterministic memory-management model. Rather than tracing the whole heap or reference-counting every object individually, MECC groups related allocations into estates and manages lifetime at the estate level.
+Lock the current alpha language/runtime surface, prove the Clyth wrapper → ABI → native provider model, and release a clean musl/libc++-audited toolchain artifact.
 
-0.5.0 intentionally strengthens the runtime/module ecosystem before MECC so future ownership analysis has real application patterns to analyze: files, requests, responses, collections, async tasks, and runtime module boundaries.
+### 0.6.0 — Compiler Simplification and Bootstrap Path
+
+Begin transitioning Clyth from a C++ bootstrap compiler toward a compiler implemented in Clyth itself.
+
+Primary goals:
+
+- replace ANTLR with a compact Pratt parser
+- implement Clyth-owned AST and IR structures
+- create a Clyth LLVM IR emission library
+- reduce dependency on LLVM's C++ APIs
+- keep LLVM optimization/code generation as the backend pipeline
+- preserve the existing musl/libc++ artifact strategy
+
+### Later Milestones
+
+- support standalone x86_64 and aarch64 Linux musl targets
+- expand module build/distribution tooling
+- introduce MECC ownership analysis
+- move toward a self-hosted compiler and runtime ecosystem
 
 ---
 
@@ -305,7 +167,7 @@ MECC is Clyth's planned deterministic memory-management model. Rather than traci
 
 Clyth is AI-assisted, not AI-authored.
 
-Modern AI-assisted engineering tools have been used during development to accelerate implementation, debugging, refactoring, build-system iteration, and exploration of compiler/runtime design alternatives. That assistance does not define the project. The language design, architecture, roadmap, syntax direction, runtime policy, release decisions, and final code review remain human-directed.
+AI-assisted engineering tools have been used during development to accelerate implementation, debugging, refactoring, build-system iteration, and exploration of compiler/runtime design alternatives. The language design, architecture, roadmap, syntax direction, runtime policy, release decisions, and final code review remain human-directed.
 
 This project documents that workflow openly because tooling used during development should not be confused with authorship, design ownership, or release responsibility.
 
@@ -313,27 +175,10 @@ This project documents that workflow openly because tooling used during developm
 
 ## Legal Notes
 
-Clyth prefers permissive licensing for bundled runtime pieces and external dependencies.
+Clyth prefers permissively licensed dependencies and runtime pieces.
 
-Preferred external dependency licenses:
+Preferred external dependency licenses include MIT, BSD-2-Clause, BSD-3-Clause, Zlib, and Apache-2.0 when explicitly tracked.
 
-- MIT
-- BSD-2-Clause
-- BSD-3-Clause
-- Apache-2.0 when appropriate and explicitly tracked
-
-Avoided unless absolutely necessary:
-
-- GPL
-- LGPL
-- AGPL
-- other licenses that complicate static distribution
+Avoided unless absolutely necessary: GPL, LGPL, AGPL, or other licenses that complicate static distribution.
 
 Third-party project names are used to describe architecture and dependency relationships. Clyth is not affiliated with, endorsed by, or sponsored by those projects or their maintainers.
-
-
-## 0.5.0 JSON Runtime Note
-
-Clyth 0.5.0 treats JSON as runtime functionality, not compiler functionality. The official JSON module exposes a Clyth-owned `JSON` object surface backed by a thin C ABI shim over yyjson. libuv remains the event-loop / async I/O foundation; it is not responsible for JSON parsing.
-
-The first 0.5.0 JSON layer validates, classifies, and carries JSON payloads through `JsonValue`. Follow-up hardening expands this into owned parse trees, object/array builders, and stringify support for primitives, maps, arrays, structs, and HTTP/HTTPS response payloads.
