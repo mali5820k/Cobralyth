@@ -76,7 +76,7 @@ Detailed architecture and module documentation live in the documentation site ra
 
 ## MECC Memory Model Direction
 
-MECC (**Memory-Explicit Control and Cleanup**) is Clyth's planned deterministic memory-management model.
+MECC (**Managed Entanglement for Collapsible Collections**) is Clyth's planned deterministic memory-management model.
 
 MECC explores a middle ground between fully manual allocation management and runtime-driven memory systems. The goal is to preserve predictable ownership behavior while reducing the amount of repetitive lifetime management required in larger systems.
 
