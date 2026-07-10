@@ -1,0 +1,21 @@
+include "file-io"
+
+struct RuntimeState {}
+
+struct BorrowedWrapper {
+    Handle<RuntimeState> handle
+}
+
+struct OwnedWrapper {
+    OwnedHandle<RuntimeState> handle
+}
+
+void OwnedWrapper.free() {
+    println("owned wrapper free path reached")
+}
+
+int32 main() {
+    OwnedWrapper owned = OwnedWrapper()
+    owned.free()
+    return 0
+}

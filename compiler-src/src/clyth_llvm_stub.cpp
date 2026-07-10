@@ -3696,12 +3696,95 @@ llvm::Value* ClythLLVMCodegen::emit_binary(const ast::NodePtr& node, const seman
                 rhs = builder.CreateFPCast(rhs, target_type, "rhsfpcast");
             }
         } else if (lhs->getType()->isIntegerTy() && rhs->getType()->isIntegerTy() && lhs->getType() != rhs->getType()) {
+            const auto type_name_for_operand = [&](const ast::NodePtr& operand) -> std::string {
+                if (!operand) {
+                    return {};
+                }
+
+                const auto semantic_it = semantics.node_types.find(operand.get());
+                if (semantic_it != semantics.node_types.end() && !semantic_it->second.name.empty()) {
+                    return semantic_it->second.name;
+                }
+
+                // Identifier expressions are frequently wrapped by parser nodes that do not
+                // receive a direct semantic node_types entry. Resolve the declared symbol type
+                // as a fallback so unsigned values are never widened as signed integers.
+                if (auto identifier = first_identifier_text_in_subtree(operand)) {
+                    if (auto symbol_type = lookup_symbol_type_name(*identifier)) {
+                        return *symbol_type;
+                    }
+                }
+
+                for (const auto& child : operand->children) {
+                    if (!child) {
+                        continue;
+                    }
+                    const auto child_it = semantics.node_types.find(child.get());
+                    if (child_it != semantics.node_types.end() && !child_it->second.name.empty()) {
+                        return child_it->second.name;
+                    }
+                }
+
+                return {};
+            };
+            const auto is_unsigned_integer_name = [](const std::string& name) {
+                return name == "char" || name == "uint8" || name == "uint16" ||
+                       name == "uint32" || name == "uint64" || name == "uint" ||
+                       name == "uintptr" || name == "usize" || name == "size_t";
+            };
+
             const unsigned lhs_bits = lhs->getType()->getIntegerBitWidth();
             const unsigned rhs_bits = rhs->getType()->getIntegerBitWidth();
             llvm::Type* target_type = lhs_bits >= rhs_bits ? lhs->getType() : rhs->getType();
-            lhs = builder.CreateIntCast(lhs, target_type, true, "lhscast");
-            rhs = builder.CreateIntCast(rhs, target_type, true, "rhscast");
+            lhs = builder.CreateIntCast(
+                lhs,
+                target_type,
+                !is_unsigned_integer_name(type_name_for_operand(operands[i - 1])),
+                "lhscast");
+            rhs = builder.CreateIntCast(
+                rhs,
+                target_type,
+                !is_unsigned_integer_name(type_name_for_operand(operands[i])),
+                "rhscast");
         }
+
+        const auto operand_type_name = [&](const ast::NodePtr& operand) -> std::string {
+            if (!operand) {
+                return {};
+            }
+
+            const auto semantic_it = semantics.node_types.find(operand.get());
+            if (semantic_it != semantics.node_types.end() && !semantic_it->second.name.empty()) {
+                return semantic_it->second.name;
+            }
+
+            if (auto identifier = first_identifier_text_in_subtree(operand)) {
+                if (auto symbol_type = lookup_symbol_type_name(*identifier)) {
+                    return *symbol_type;
+                }
+            }
+
+            for (const auto& child : operand->children) {
+                if (!child) {
+                    continue;
+                }
+                const auto child_it = semantics.node_types.find(child.get());
+                if (child_it != semantics.node_types.end() && !child_it->second.name.empty()) {
+                    return child_it->second.name;
+                }
+            }
+
+            return {};
+        };
+        const auto unsigned_integer_operand = [&](const ast::NodePtr& operand) {
+            const std::string name = operand_type_name(operand);
+            return name == "char" || name == "uint8" || name == "uint16" ||
+                   name == "uint32" || name == "uint64" || name == "uint" ||
+                   name == "uintptr" || name == "usize" || name == "size_t";
+        };
+        const bool unsigned_integer_operation =
+            !numeric_float &&
+            (unsigned_integer_operand(operands[i - 1]) || unsigned_integer_operand(operands[i]));
 
         if (op == "+") {
             lhs = numeric_float ? builder.CreateFAdd(lhs, rhs, "faddtmp") : builder.CreateAdd(lhs, rhs, "addtmp");
@@ -3710,25 +3793,47 @@ llvm::Value* ClythLLVMCodegen::emit_binary(const ast::NodePtr& node, const seman
         } else if (op == "*") {
             lhs = numeric_float ? builder.CreateFMul(lhs, rhs, "fmultmp") : builder.CreateMul(lhs, rhs, "multmp");
         } else if (op == "/") {
-            lhs = numeric_float ? builder.CreateFDiv(lhs, rhs, "fdivtmp") : builder.CreateSDiv(lhs, rhs, "divtmp");
+            lhs = numeric_float
+                ? builder.CreateFDiv(lhs, rhs, "fdivtmp")
+                : (unsigned_integer_operation
+                    ? builder.CreateUDiv(lhs, rhs, "udivtmp")
+                    : builder.CreateSDiv(lhs, rhs, "divtmp"));
         } else if (op == "%") {
             if (numeric_float) {
                 add_codegen_error(node, "Modulo is not supported for floating-point operands.");
                 return nullptr;
             }
-            lhs = builder.CreateSRem(lhs, rhs, "modtmp");
+            lhs = unsigned_integer_operation
+                ? builder.CreateURem(lhs, rhs, "umodtmp")
+                : builder.CreateSRem(lhs, rhs, "modtmp");
         } else if (op == "==") {
             lhs = numeric_float ? builder.CreateFCmpOEQ(lhs, rhs, "feqtmp") : builder.CreateICmpEQ(lhs, rhs, "eqtmp");
         } else if (op == "!=") {
             lhs = numeric_float ? builder.CreateFCmpONE(lhs, rhs, "fnetmp") : builder.CreateICmpNE(lhs, rhs, "netmp");
         } else if (op == "<") {
-            lhs = numeric_float ? builder.CreateFCmpOLT(lhs, rhs, "flttmp") : builder.CreateICmpSLT(lhs, rhs, "lttmp");
+            lhs = numeric_float
+                ? builder.CreateFCmpOLT(lhs, rhs, "flttmp")
+                : (unsigned_integer_operation
+                    ? builder.CreateICmpULT(lhs, rhs, "ulttmp")
+                    : builder.CreateICmpSLT(lhs, rhs, "lttmp"));
         } else if (op == "<=") {
-            lhs = numeric_float ? builder.CreateFCmpOLE(lhs, rhs, "fletmp") : builder.CreateICmpSLE(lhs, rhs, "letmp");
+            lhs = numeric_float
+                ? builder.CreateFCmpOLE(lhs, rhs, "fletmp")
+                : (unsigned_integer_operation
+                    ? builder.CreateICmpULE(lhs, rhs, "ulettmp")
+                    : builder.CreateICmpSLE(lhs, rhs, "letmp"));
         } else if (op == ">") {
-            lhs = numeric_float ? builder.CreateFCmpOGT(lhs, rhs, "fgttmp") : builder.CreateICmpSGT(lhs, rhs, "gttmp");
+            lhs = numeric_float
+                ? builder.CreateFCmpOGT(lhs, rhs, "fgttmp")
+                : (unsigned_integer_operation
+                    ? builder.CreateICmpUGT(lhs, rhs, "ugttmp")
+                    : builder.CreateICmpSGT(lhs, rhs, "gttmp"));
         } else if (op == ">=") {
-            lhs = numeric_float ? builder.CreateFCmpOGE(lhs, rhs, "fgetmp") : builder.CreateICmpSGE(lhs, rhs, "getmp");
+            lhs = numeric_float
+                ? builder.CreateFCmpOGE(lhs, rhs, "fgetmp")
+                : (unsigned_integer_operation
+                    ? builder.CreateICmpUGE(lhs, rhs, "ugetmp")
+                    : builder.CreateICmpSGE(lhs, rhs, "getmp"));
         } else if (op == "&&" || op == "and") {
             llvm::Value* lhs_bool = value_to_bool(lhs);
             llvm::Value* rhs_bool = value_to_bool(rhs);

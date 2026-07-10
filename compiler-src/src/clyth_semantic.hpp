@@ -269,6 +269,18 @@ private:
     void visit_node(SemanticContext& context, const ast::NodePtr& node);
 };
 
+// Establishes the pre-MECC cleanup contract for owned resources.
+//
+// 0.5.0 does not yet insert scope-exit cleanup automatically. This pass makes
+// ownership visible to the compiler and rejects the one case that cannot be
+// safely inferred: an OwnedHandle<T> inside a struct without an explicit
+// Struct.free() method.
+class OwnershipCleanupPass final : public ISemanticPass {
+public:
+    std::string name() const override;
+    void run(SemanticContext& context, const ast::ProgramPtr& program) override;
+};
+
 // ============================================================
 // Semantic Pipeline
 // ============================================================

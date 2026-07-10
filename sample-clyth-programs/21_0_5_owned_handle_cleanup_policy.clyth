@@ -1,0 +1,31 @@
+include "file-io"
+
+// 0.5.0 ownership cleanup policy smoke test.
+//
+// Handle<T> is borrowed/opaque ABI state; OwnedHandle<T> marks native-owned
+// state that needs an explicit .free() release path.
+
+struct JsonDocument {}
+
+struct BorrowedView {
+    Handle<JsonDocument> handle,
+}
+
+struct OwnedDocument {
+    OwnedHandle<JsonDocument> handle,
+}
+
+OwnedDocument {
+    void free() {
+        // 0.5.0 establishes the cleanup contract. Real modules route this to
+        // an extern C release function such as json_document_release(handle).
+        println("OwnedDocument.free")
+    }
+}
+
+int32 main() {
+    BorrowedView view = BorrowedView()
+    OwnedDocument document = OwnedDocument()
+    document.free()
+    return 0
+}
