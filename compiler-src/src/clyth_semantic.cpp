@@ -133,6 +133,71 @@ std::optional<FunctionTypeParts> parse_function_type_text(const std::string& typ
 }
 
 
+std::string generic_base_name(const std::string& type_name) {
+    const std::size_t pos = type_name.find('<');
+    if (pos == std::string::npos || type_name.empty() || type_name.back() != '>') {
+        return "";
+    }
+    return type_name.substr(0, pos);
+}
+
+bool is_owned_handle_type_name(const std::string& type_name) {
+    const std::string base = generic_base_name(type_name);
+    return base == "OwnedHandle" || base == "owned_handle";
+}
+
+bool is_handle_type_name(const std::string& type_name) {
+    const std::string base = generic_base_name(type_name);
+    return base == "Handle" || base == "handle" || is_owned_handle_type_name(type_name);
+}
+
+bool is_noop_cleanup_type_name(const std::string& type_name) {
+    static const std::unordered_set<std::string> no_cleanup {
+        "uint8", "uint16", "uint32", "uint64", "uint",
+        "uintptr", "usize", "size_t",
+        "int8", "int16", "int32", "int64", "int",
+        "numeric", "float32", "float64", "float", "double",
+        "char", "bool", "void", "auto"
+    };
+    return no_cleanup.count(type_name) > 0;
+}
+
+bool is_known_runtime_cleanup_type_name(const std::string& type_name) {
+    if (type_name == "string") {
+        return true;
+    }
+    const std::string base = generic_base_name(type_name);
+    return base == "List" || base == "list" ||
+           base == "Map" || base == "map" ||
+           base == "Set" || base == "set";
+}
+
+bool is_fixed_array_type_name(const std::string& type_name) {
+    const std::size_t open = type_name.find('[');
+    if (open == std::string::npos || type_name.empty() || type_name.back() != ']') {
+        return false;
+    }
+    return open + 1 < type_name.size() - 1;
+}
+
+bool is_dynamic_array_type_name(const std::string& type_name) {
+    return type_name.size() >= 2 && type_name.substr(type_name.size() - 2) == "[]";
+}
+
+std::string array_element_type_name(const std::string& type_name) {
+    const std::size_t open = type_name.find('[');
+    if (open == std::string::npos) {
+        return type_name;
+    }
+    return type_name.substr(0, open);
+}
+
+bool has_method_symbol(const SemanticContext& context, const std::string& owner, const std::string& method_name) {
+    return context.global_scope.symbols.find(owner + "." + method_name) != context.global_scope.symbols.end();
+}
+
+
+
 bool looks_like_keyword(const std::string& text) {
     static const std::unordered_set<std::string> keywords {
         "include", "extern", "C", "struct", "mecc",
@@ -424,6 +489,8 @@ bool SemanticContext::is_known_type(const TypeInfo& type) const {
         if (base == "List" || base == "list" ||
             base == "Map" || base == "map" ||
             base == "Set" || base == "set" ||
+            base == "Handle" || base == "handle" ||
+            base == "OwnedHandle" || base == "owned_handle" ||
             base == "pointer") {
             return true;
         }
@@ -1334,6 +1401,117 @@ void MethodValidationPass::run(SemanticContext& context, const ast::ProgramPtr& 
 }
 
 
+std::string OwnershipCleanupPass::name() const {
+    return "OwnershipCleanupPass";
+}
+
+void OwnershipCleanupPass::run(SemanticContext& context, const ast::ProgramPtr& program) {
+    std::vector<ast::NodePtr> structs;
+    collect_nodes_by_kind(program, ast::NodeKind::StructDecl, structs);
+
+    std::unordered_set<std::string> struct_names;
+    for (const auto& struct_node : structs) {
+        if (auto name = query::declared_name(struct_node)) {
+            struct_names.insert(*name);
+        }
+    }
+
+    auto cleanup_status = [&](const std::string& raw_type_name) -> std::string {
+        std::string type_name = raw_type_name;
+
+        if (is_fixed_array_type_name(type_name)) {
+            type_name = array_element_type_name(type_name);
+        }
+
+        if (is_noop_cleanup_type_name(type_name)) {
+            return "no-op";
+        }
+
+        if (is_handle_type_name(type_name)) {
+            return is_owned_handle_type_name(type_name) ? "owned-handle" : "borrowed-handle";
+        }
+
+        if (is_known_runtime_cleanup_type_name(type_name) || is_dynamic_array_type_name(type_name)) {
+            return "known-runtime-cleanup";
+        }
+
+        if (struct_names.count(type_name) > 0) {
+            return has_method_symbol(context, type_name, "free")
+                ? "struct-free"
+                : "synthesizable-struct-free";
+        }
+
+        return "unknown";
+    };
+
+    for (const auto& struct_node : structs) {
+        const auto struct_name = query::declared_name(struct_node);
+        if (!struct_name) {
+            continue;
+        }
+
+        const bool has_explicit_free = has_method_symbol(context, *struct_name, "free");
+        bool needs_synthesized_free = false;
+
+        for (const auto& field : struct_node->children) {
+            if (!field || field->kind != ast::NodeKind::StructField) {
+                continue;
+            }
+
+            const auto field_name = query::declared_name(field).value_or("<unnamed>");
+            const auto field_type = query::declared_type(field, context);
+            if (!field_type) {
+                continue;
+            }
+
+            const std::string status = cleanup_status(field_type->name);
+
+            if (status == "owned-handle" && !has_explicit_free) {
+                context.diagnostics.add_error(
+                    field->location,
+                    fmt::format(
+                        "Struct '{}' contains owned ABI field '{}' of type '{}', but no explicit '{}.free()' method is defined. OwnedHandle<T> values require a release path because the compiler cannot infer the native ABI function that releases them.",
+                        *struct_name,
+                        field_name,
+                        field_type->name,
+                        *struct_name
+                    )
+                );
+                continue;
+            }
+
+            if (status == "unknown") {
+                context.diagnostics.add_error(
+                    field->location,
+                    fmt::format(
+                        "Struct '{}' contains field '{}' of type '{}' with an unknown cleanup policy. Use a primitive/known Clyth type, Handle<T> for borrowed ABI state, OwnedHandle<T> with an explicit free() method, or define a free() method for the field type.",
+                        *struct_name,
+                        field_name,
+                        field_type->name
+                    )
+                );
+                continue;
+            }
+
+            if (status != "no-op" && status != "borrowed-handle") {
+                needs_synthesized_free = true;
+            }
+        }
+
+        if (needs_synthesized_free && !has_explicit_free) {
+            struct_node->attributes["free"] = "compiler_synthesized";
+            struct_node->attributes["cleanup_policy"] = "known_member_cleanup";
+        } else if (has_explicit_free) {
+            struct_node->attributes["free"] = "user_defined";
+            struct_node->attributes["cleanup_policy"] = "explicit";
+        } else {
+            struct_node->attributes["cleanup_policy"] = "no_owned_cleanup";
+        }
+    }
+}
+
+
+
 std::string MeccSemanticPass::name() const {
     return "MeccSemanticPass";
 }
@@ -1471,6 +1649,7 @@ void ClythSemanticPipeline::register_default_passes() {
     add_pass(std::make_unique<StructValidationPass>());
     add_pass(std::make_unique<FunctionSignaturePass>());
     add_pass(std::make_unique<MethodValidationPass>());
+    add_pass(std::make_unique<OwnershipCleanupPass>());
     add_pass(std::make_unique<CollectionLiteralSemanticPass>());
     add_pass(std::make_unique<ScopeAndSymbolPass>());
     add_pass(std::make_unique<ControlFlowPass>());

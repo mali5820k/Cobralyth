@@ -1,0 +1,17 @@
+include "file-io"
+
+int32 main() {
+    char letter = 67
+    char[5] word = [67, 108, 121, 116, 104]
+
+    if letter != word[0] {
+        return 1
+    }
+
+    if word[4] != 104 {
+        return 2
+    }
+
+    println("char and char[5] fixed-array surface passed")
+    return 0
+}

@@ -1,41 +1,50 @@
-# If you prefer the allow list template instead of the deny list, see community template:
-# https://github.com/github/gitignore/blob/main/community/Golang/Go.AllowList.gitignore
-#
-# Binaries for programs and plugins
-*.exe
-*.exe~
-*.dll
-*.so
-*.a
+# Clyth generated build artifacts
+build-compiler/
+llvm-build/
+llvm-bundled/
+antlr4-cpp-runtime-lib/
+antlr4-cpp-runtime-src/build/
+fmt-build/
+dist-clyth/
+dist/
+
+# Runtime/native object outputs
+clyth-runtime/c-bindings/**/x86_64/
+clyth-runtime/c-bindings/**/aarch64/
+clyth-runtime/modules/**/x86_64/
+clyth-runtime/modules/**/aarch64/
 *.o
+*.obj
+*.a
+*.so
 *.dylib
+*.dll
+*.exe
 
-# Output of the go coverage tool, specifically when used with LiteIDE
-*.out
+# Sample outputs
+sample-clyth-programs/.sample-bin/
+*.ll
 
-# Dependency directories (remove the comment below to include it)
-# vendor/
+# Release/archive files
+*.tar
+*.tar.gz
+*.tgz
+*.zip
+*.7z
 
-compiler-dev/frontend/.vscode/settings.json
-.vscode/settings.json
-/build
-/libs_build
-/compiler-frontend/.antlr
-/build-compiler
+# Logs and temp files
+*.log
+*.tmp
+*.bak
+.DS_Store
+.cache/
+/.vscode
 /compiler-src/fmt
-/antlr4-cpp-runtime-lib
-/antlr4-cpp-runtime-src/build
+/llvm-project-src
 /compiler-src/src/clyth_antlr_files
-compiler-src/src/clyth_antlr_files/ClythV1Parser.h
-compiler-src/src/clyth_antlr_files/ClythV1Parser.cpp
-compiler-src/src/clyth_antlr_files/ClythV1Listener.h
-compiler-src/src/clyth_antlr_files/ClythV1Listener.cpp
-compiler-src/src/clyth_antlr_files/ClythV1Lexer.h
-compiler-src/src/clyth_antlr_files/ClythV1Lexer.cpp
-compiler-src/src/clyth_antlr_files/ClythV1BaseListener.h
-compiler-src/src/clyth_antlr_files/ClythV1BaseListener.cpp
-/llvm-build/
-/llvm-bundled/
-/llvm-project-src/
-/dist-clyth/
-/Notes/
+/clyth-runtime/c-bindings/libuv/vendor
+/clyth-runtime/c-bindings/llhttp/vendor
+/clyth-runtime/c-bindings/openssl/vendor
+/clyth-runtime/c-bindings/rapidhash/vendor
+/clyth-runtime/c-bindings/wslay/vendor
+/clyth-runtime/c-bindings/yyjson/vendor
