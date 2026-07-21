@@ -68,17 +68,32 @@ FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS
 IN THE SOFTWARE.
 ```
 
-## musl libc
+# Musl-libc
+# MIT license:
+    musl libc
 
-**Purpose in Clyth:** C standard library and system ABI target used for static Linux compiler and application binaries, currently supplied through the Zig toolchain target support.
+musl, pronounced like the word "mussel", is an MIT-licensed
+implementation of the standard C library targetting the Linux syscall
+API, suitable for use in a wide range of deployment environments. musl
+offers efficient static and dynamic linking support, lightweight code
+and low runtime overhead, strong fail-safe guarantees under correct
+usage, and correctness in the sense of standards conformance and
+safety. musl is built on the principle that these goals are best
+achieved through simple code that is easy to understand and maintain.
 
-**License type:** MIT License for musl as a whole, with compatible permissive terms and public-domain/fallback terms for specifically identified portions.
+The 1.1 release series for musl features coverage for all interfaces
+defined in ISO C99 and POSIX 2008 base, along with a number of
+non-standardized interfaces for compatibility with Linux, BSD, and
+glibc functionality.
 
-**SPDX identifier:** `MIT` for musl as a whole. See the reproduced upstream copyright file below for component-specific notices.
+For basic installation instructions, see the included INSTALL file.
+Information on full musl-targeted compiler toolchains, system
+bootstrapping, and Linux distributions built on musl can be found on
+the project website:
 
-**Bundled/toolchain license source:** `zig/lib/libc/musl/COPYRIGHT` (the corresponding upstream file is named `COPYRIGHT`).
+    http://www.musl-libc.org/
 
-```text
+# ADDITIONAL MUSL-LIBC license text:
 musl as a whole is licensed under the following standard MIT license:
 
 ----------------------------------------------------------------------
@@ -155,6 +170,7 @@ Kylie McClain
 Leah Neukirchen
 Luca Barbato
 Luka Perkov
+Lynn Ochs
 M Farkas-Dyck (Strake)
 Mahesh Bodapati
 Markus Wichmann
@@ -184,7 +200,6 @@ Stefan O'Rear
 Szabolcs Nagy
 Timo Teräs
 Trutz Behn
-Valentin Ochs
 Will Dietz
 William Haddon
 William Pitcock
@@ -224,7 +239,7 @@ domain. The code also comes with a fallback permissive license for use
 in jurisdictions that may not recognize the public domain.
 
 The smoothsort implementation (src/stdlib/qsort.c) is Copyright © 2011
-Valentin Ochs and is licensed under an MIT-style license.
+Lynn Ochs and is licensed under an MIT-style license.
 
 The x86_64 port was written by Nicholas J. Kain and is licensed under
 the standard MIT terms.
@@ -272,8 +287,6 @@ to be subject to copyright, resulting in confusion over whether it
 negated the permissions granted in the license. In the spirit of
 permissive licensing, and of not having licensing issues being an
 obstacle to adoption, that text has been removed.
-```
-
 
 ## llhttp
 
