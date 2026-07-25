@@ -1,0 +1,32 @@
+import parser.clyth
+import file-io
+import bootstrapping-stage1
+/**
+ * Runs the Stage 2 compiler driver from a request written by the CLI handler.
+ *
+ * Keeping process-argument parsing in the shell handler avoids depending on
+ * bootstrap argv lowering until native string[] process arguments are fully
+ * represented by the Clyth runtime.
+ */
+int32 main() {
+    string request = "share/clyth/stage2.request"
+    if file_exists(request) != 1 {
+        eprintln("missing Stage 2 compiler request file")
+        return 2
+    }
+
+    string source = bootstrap_string_copy(read_line(request, 0))
+    string output = bootstrap_string_copy(read_line(request, 1))
+    string stage0 = bootstrap_string_copy(read_line(request, 2))
+    string module_store = bootstrap_string_copy(read_line(request, 3))
+    string emit_ir = bootstrap_string_copy(read_line(request, 4))
+    bool emit_ir_only = false
+
+    if bootstrap_string_equals(emit_ir, "1") == 1 { emit_ir_only = true }
+    if bootstrap_string_is_empty(source) == 1 {
+        eprintln("Stage 2 request has no source file")
+        return 2
+    }
+
+    return compile_source(source, output, stage0, module_store, emit_ir_only)
+}

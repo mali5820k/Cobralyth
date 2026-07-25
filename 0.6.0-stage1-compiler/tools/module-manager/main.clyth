@@ -1,0 +1,97 @@
+import file-io
+import bootstrapping-stage1
+string module_source(string root, string module) {
+    return `${root}/c-bindings/${module}/${module}.c`
+}
+
+string module_object(string root, string module) {
+    return `${root}/build/${module}/${module}.o`
+}
+
+string module_archive(string root, string module) {
+    return `${root}/build/${module}/libclyth_${module}.a`
+}
+
+string installed_module(string store, string module) {
+    return `${store}/modules/module-${module}`
+}
+
+int32 build_module(string root, string module) {
+    string source = module_source(root, module)
+    if file_exists(source) != 1 {
+        eprint("module has no C binding: ")
+        eprintln(module)
+        return 2
+    }
+
+    string object = module_object(root, module)
+    string archive = module_archive(root, module)
+    string flags = `${root}/c-bindings/${module}/build.flags`
+    string command = `mkdir -p ${root}/build/${module} && EXTRA_FLAGS=\"\"; if [ -f ${flags} ]; then EXTRA_FLAGS=\"$(cat ${flags})\"; fi; zig cc -target native-linux-musl -O2 $EXTRA_FLAGS -c ${source} -o ${object} && zig ar rcs ${archive} ${object}`
+    return bash(command)
+}
+
+int32 install_module(string root, string module, string store) {
+    string module_root = `${root}/modules/module-${module}`
+    if directory_exists(module_root) != 1 {
+        eprint("unknown runtime module: ")
+        eprintln(module)
+        return 2
+    }
+
+    string destination = installed_module(store, module)
+    string archive = module_archive(root, module)
+    string command = `mkdir -p ${destination} && cp -R ${module_root}/. ${destination}/; if [ -f ${archive} ]; then mkdir -p ${destination}/x86_64 && cp ${archive} ${destination}/x86_64/; fi`
+    return bash(command)
+}
+
+int32 build_install_module(string root, string module, string store) {
+    string source = module_source(root, module)
+    if file_exists(source) == 1 {
+        int32 result = build_module(root, module)
+        if result != 0 { return result }
+    }
+    return install_module(root, module, store)
+}
+
+int32 uninstall_module(string module, string store) {
+    string destination = installed_module(store, module)
+    if directory_exists(destination) != 1 {
+        eprint("module is not installed: ")
+        eprintln(module)
+        return 2
+    }
+    return bash(`rm -rf ${destination}`)
+}
+
+int32 main() {
+    string request = ".bootstrap-build/clyth-module.request"
+    if file_exists(request) != 1 {
+        eprintln("missing module-manager request file")
+        return 2
+    }
+
+    string action = bootstrap_string_copy(read_line(request, 0))
+    string root = bootstrap_string_copy(read_line(request, 1))
+    string module = bootstrap_string_copy(read_line(request, 2))
+    string store = bootstrap_string_copy(read_line(request, 3))
+
+    if bootstrap_string_equals(action, "list") == 1 {
+        return bash(`find ${root}/modules -mindepth 1 -maxdepth 1 -type d -printf '%f\\n' | sort`)
+    }
+    if bootstrap_string_equals(action, "clean") == 1 {
+        return bash(`rm -rf ${root}/build`)
+    }
+    if bootstrap_string_is_empty(module) == 1 {
+        eprintln("module-manager request requires a module name")
+        return 2
+    }
+    if bootstrap_string_equals(action, "build") == 1 { return build_module(root, module) }
+    if bootstrap_string_equals(action, "install") == 1 { return install_module(root, module, store) }
+    if bootstrap_string_equals(action, "build-install") == 1 { return build_install_module(root, module, store) }
+    if bootstrap_string_equals(action, "uninstall") == 1 { return uninstall_module(module, store) }
+
+    eprint("unknown module-manager action: ")
+    eprintln(action)
+    return 2
+}

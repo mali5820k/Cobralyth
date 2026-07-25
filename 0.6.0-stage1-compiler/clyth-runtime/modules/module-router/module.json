@@ -1,0 +1,25 @@
+{
+  "name": "router",
+  "version": "0.5.0-alpha",
+  "kind": "runtime-module",
+  "exports": [
+    "router.clyth"
+  ],
+  "dependencies": [],
+  "wrapper": { "license": "MIT" },
+  "c_bindings": [
+    {
+      "name": "clyth_http",
+      "enabled": true,
+      "backend": "Clyth libuv-backed Web/Router C Binding",
+      "license": "MIT",
+      "source_directory": "../../c-bindings/http",
+      "architectures": {
+        "x86_64": { "archive": "x86_64/libclyth_http.a" },
+        "aarch64": { "archive": "aarch64/libclyth_http.a" },
+        "arm64": { "archive": "arm64/libclyth_http.a" }
+      }
+    }
+  ],
+  "notes": "Router callbacks are modeled as first-class function values. Request/Response are native handles in 0.5.0 and should become Clyth-space runtime structs later."
+}

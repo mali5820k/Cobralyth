@@ -1,0 +1,3 @@
+int32 imported_answer() {
+    return 42
+}

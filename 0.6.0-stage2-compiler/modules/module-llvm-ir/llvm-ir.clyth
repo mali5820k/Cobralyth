@@ -1,0 +1,184 @@
+// Clyth LLVM IR Generation Library
+// License: MIT
+//
+// This module constructs textual LLVM IR without linking LLVM's C++ API or
+// libc++. It is intentionally compiler-independent so the same primitives can
+// later serve the compiler, a JIT, DSLs, and research tools.
+//
+// Bootstrap note: rendering currently uses bootstrap_string_concat. That is a
+// temporary string-runtime bridge, not an LLVM dependency. Replace it with the
+// native Clyth string builder when that runtime type is available.
+
+import bootstrapping-stage1
+
+struct LLVMType {
+    string text
+
+    constructor(string text) {
+        this.text = text
+    }
+}
+
+struct LLVMValue {
+    LLVMType type
+    string text
+
+    constructor(LLVMType type, string text) {
+        this.type = type
+        this.text = text
+    }
+}
+
+struct LLVMModule {
+    string name
+    string target_triple
+    string target_datalayout
+    string body
+
+    constructor(string name) {
+        this.name = name
+        this.target_triple = ""
+        this.target_datalayout = ""
+        this.body = ""
+    }
+
+    void set_target(string triple, string datalayout) {
+        this.target_triple = triple
+        this.target_datalayout = datalayout
+    }
+
+    void append(string ir) {
+        this.body = bootstrap_string_concat(this.body, ir)
+    }
+
+    void append_line(string ir) {
+        this.body = bootstrap_string_concat3(this.body, ir, "\n")
+    }
+
+    string render() {
+        string output = bootstrap_string_concat3("; ModuleID = '", this.name, "'\n")
+
+        if bootstrap_string_is_empty(this.target_datalayout) != 1 {
+            output = bootstrap_string_concat3(output, "target datalayout = \"", this.target_datalayout)
+            output = bootstrap_string_concat(output, "\"\n")
+        }
+
+        if bootstrap_string_is_empty(this.target_triple) != 1 {
+            output = bootstrap_string_concat3(output, "target triple = \"", this.target_triple)
+            output = bootstrap_string_concat(output, "\"\n")
+        }
+
+        output = bootstrap_string_concat(output, "\n")
+        return bootstrap_string_concat(output, this.body)
+    }
+}
+
+LLVMType llvm_void() { return LLVMType("void") }
+LLVMType llvm_i1() { return LLVMType("i1") }
+LLVMType llvm_i8() { return LLVMType("i8") }
+LLVMType llvm_i16() { return LLVMType("i16") }
+LLVMType llvm_i32() { return LLVMType("i32") }
+LLVMType llvm_i64() { return LLVMType("i64") }
+LLVMType llvm_float() { return LLVMType("float") }
+LLVMType llvm_double() { return LLVMType("double") }
+LLVMType llvm_ptr() { return LLVMType("ptr") }
+
+LLVMType llvm_array_type(string length, LLVMType element_type) {
+    string text = bootstrap_string_concat3("[", length, " x ")
+    text = bootstrap_string_concat3(text, element_type.text, "]")
+    return LLVMType(text)
+}
+
+LLVMType llvm_vector_type(string length, LLVMType element_type) {
+    string text = bootstrap_string_concat3("<", length, " x ")
+    text = bootstrap_string_concat3(text, element_type.text, ">")
+    return LLVMType(text)
+}
+
+LLVMValue llvm_local(LLVMType type, string name) {
+    return LLVMValue(type, bootstrap_string_concat("%", name))
+}
+
+LLVMValue llvm_global(LLVMType type, string name) {
+    return LLVMValue(type, bootstrap_string_concat("@", name))
+}
+
+LLVMValue llvm_integer(LLVMType type, string literal) {
+    return LLVMValue(type, literal)
+}
+
+LLVMValue llvm_boolean(bool value) {
+    if value { return LLVMValue(llvm_i1(), "true") }
+    return LLVMValue(llvm_i1(), "false")
+}
+
+string llvm_typed_value(LLVMValue value) {
+    return bootstrap_string_concat3(value.type.text, " ", value.text)
+}
+
+string llvm_declare(string name, LLVMType return_type, string parameter_types) {
+    string line = bootstrap_string_concat3("declare ", return_type.text, " @")
+    line = bootstrap_string_concat3(line, name, "(")
+    line = bootstrap_string_concat3(line, parameter_types, ")")
+    return line
+}
+
+string llvm_function_begin(string name, LLVMType return_type, string parameters) {
+    string line = bootstrap_string_concat3("define ", return_type.text, " @")
+    line = bootstrap_string_concat3(line, name, "(")
+    return bootstrap_string_concat3(line, parameters, ") {")
+}
+
+string llvm_function_end() { return "}" }
+string llvm_label(string name) { return bootstrap_string_concat(name, ":") }
+
+string llvm_ret_void() { return "ret void" }
+string llvm_ret(LLVMValue value) {
+    return bootstrap_string_concat("ret ", llvm_typed_value(value))
+}
+
+string llvm_alloca(string result, LLVMType type) {
+    string line = bootstrap_string_concat3("%", result, " = alloca ")
+    return bootstrap_string_concat(line, type.text)
+}
+
+string llvm_load(string result, LLVMType type, LLVMValue address) {
+    string line = bootstrap_string_concat3("%", result, " = load ")
+    line = bootstrap_string_concat3(line, type.text, ", ptr ")
+    return bootstrap_string_concat(line, address.text)
+}
+
+string llvm_store(LLVMValue value, LLVMValue address) {
+    string line = bootstrap_string_concat("store ", llvm_typed_value(value))
+    line = bootstrap_string_concat(line, ", ptr ")
+    return bootstrap_string_concat(line, address.text)
+}
+
+string llvm_binary(string opcode, string result, LLVMValue left, LLVMValue right) {
+    string line = bootstrap_string_concat3("%", result, " = ")
+    line = bootstrap_string_concat3(line, opcode, " ")
+    line = bootstrap_string_concat3(line, left.type.text, " ")
+    line = bootstrap_string_concat3(line, left.text, ", ")
+    return bootstrap_string_concat(line, right.text)
+}
+
+string llvm_call(string result, LLVMType return_type, string name, string arguments) {
+    string line = ""
+    if bootstrap_string_is_empty(result) != 1 {
+        line = bootstrap_string_concat3("%", result, " = ")
+    }
+    line = bootstrap_string_concat3(line, "call ", return_type.text)
+    line = bootstrap_string_concat3(line, " @", name)
+    line = bootstrap_string_concat3(line, "(", arguments)
+    return bootstrap_string_concat(line, ")")
+}
+
+string llvm_br(string label) {
+    return bootstrap_string_concat("br label %", label)
+}
+
+string llvm_cond_br(LLVMValue condition, string true_label, string false_label) {
+    string line = bootstrap_string_concat3("br i1 ", condition.text, ", label %")
+    line = bootstrap_string_concat3(line, true_label, ", label %")
+    return bootstrap_string_concat(line, false_label)
+}

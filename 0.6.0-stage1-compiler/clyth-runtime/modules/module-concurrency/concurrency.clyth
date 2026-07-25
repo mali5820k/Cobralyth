@@ -1,0 +1,168 @@
+// Clyth Runtime Module: concurrency
+// License: MIT
+//
+// Concurrency is runtime-owned. The compiler should lower async/await and
+// function values into this layer, while explicit POSIX thread access remains
+// available for systems code that wants native-thread control.
+
+extern C int64 clyth_posix_thread_start(function<int64(int64)> entry, int64 arg)
+extern C int32 clyth_posix_thread_completed(int64 thread)
+extern C int64 clyth_posix_thread_result(int64 thread)
+extern C int32 clyth_posix_thread_release(int64 thread)
+extern C int64 clyth_runtime_worker_thread_count()
+extern C void clyth_runtime_set_worker_thread_count(int64 count)
+
+struct RuntimeConfiguration {
+    int64 worker_threads
+
+    constructor(int64 count) { worker_threads = count }
+}
+
+struct PosixThread {
+    int64 native_handle
+
+    constructor(int64 handle) { native_handle = handle }
+
+    bool completed() {
+        return clyth_posix_thread_completed(this.native_handle) == 1
+    }
+
+    int64 result() {
+        return clyth_posix_thread_result(this.native_handle)
+    }
+
+    int32 release() {
+        return clyth_posix_thread_release(this.native_handle)
+    }
+}
+
+int64 runtime_worker_threads() {
+    return clyth_runtime_worker_thread_count()
+}
+
+void configure_runtime(RuntimeConfiguration config) {
+    clyth_runtime_set_worker_thread_count(config.worker_threads)
+}
+
+// Generic synchronization handles. These are intentionally unaware of the
+// compiler, lexer, parser, or any particular queue representation.
+extern C int64 clyth_mutex_create()
+extern C int32 clyth_mutex_lock(int64 mutex)
+extern C int32 clyth_mutex_unlock(int64 mutex)
+extern C int32 clyth_mutex_release(int64 mutex)
+
+extern C int64 clyth_condition_create()
+extern C int32 clyth_condition_wait(int64 condition, int64 mutex)
+extern C int32 clyth_condition_signal(int64 condition)
+extern C int32 clyth_condition_broadcast(int64 condition)
+extern C int32 clyth_condition_release(int64 condition)
+
+extern C int64 clyth_atomic_int64_create(int64 value)
+extern C int64 clyth_atomic_int64_load(int64 value)
+extern C void clyth_atomic_int64_store(int64 value, int64 next)
+extern C int64 clyth_atomic_int64_add(int64 value, int64 amount)
+extern C int32 clyth_atomic_int64_release(int64 value)
+
+struct Mutex {
+    int64 native_handle
+
+    constructor() { native_handle = clyth_mutex_create() }
+    int32 lock() { return clyth_mutex_lock(native_handle) }
+    int32 unlock() { return clyth_mutex_unlock(native_handle) }
+    int32 release() {
+        int32 result = clyth_mutex_release(native_handle)
+        native_handle = 0
+        return result
+    }
+}
+
+struct Condition {
+    int64 native_handle
+
+    constructor() { native_handle = clyth_condition_create() }
+    int32 wait(Mutex mutex) { return clyth_condition_wait(native_handle, mutex.native_handle) }
+    int32 signal() { return clyth_condition_signal(native_handle) }
+    int32 broadcast() { return clyth_condition_broadcast(native_handle) }
+    int32 release() {
+        int32 result = clyth_condition_release(native_handle)
+        native_handle = 0
+        return result
+    }
+}
+
+struct AtomicInt64 {
+    int64 native_handle
+
+    constructor(int64 value) { native_handle = clyth_atomic_int64_create(value) }
+    int64 load() { return clyth_atomic_int64_load(native_handle) }
+    void store(int64 value) { clyth_atomic_int64_store(native_handle, value) }
+    int64 add(int64 amount) { return clyth_atomic_int64_add(native_handle, amount) }
+    int32 release() {
+        int32 result = clyth_atomic_int64_release(native_handle)
+        native_handle = 0
+        return result
+    }
+}
+
+extern C int64 clyth_worker_context_create(int64 integer_slots, int64 string_slots)
+extern C int32 clyth_worker_context_set_int(int64 context, int64 slot, int64 value)
+extern C int64 clyth_worker_context_get_int(int64 context, int64 slot)
+extern C int32 clyth_worker_context_set_string(int64 context, int64 slot, string value)
+extern C string clyth_worker_context_get_string(int64 context, int64 slot)
+extern C int32 clyth_worker_context_release(int64 context)
+
+extern C int64 clyth_message_channel_create(int64 capacity)
+extern C int32 clyth_message_channel_send(int64 channel, int32 kind, int32 file_index, int64 line, int64 column, string text)
+extern C int32 clyth_message_channel_receive(int64 channel)
+extern C int32 clyth_message_channel_close(int64 channel)
+extern C int32 clyth_message_channel_kind(int64 channel)
+extern C int32 clyth_message_channel_file(int64 channel)
+extern C int64 clyth_message_channel_line(int64 channel)
+extern C int64 clyth_message_channel_column(int64 channel)
+extern C string clyth_message_channel_text(int64 channel)
+extern C int32 clyth_message_channel_release(int64 channel)
+
+extern C int64 clyth_string_trie_create()
+extern C int32 clyth_string_trie_insert(int64 trie, string text, int32 value)
+extern C int32 clyth_string_trie_lookup(int64 trie, string text)
+extern C int32 clyth_string_trie_release(int64 trie)
+
+struct WorkerContext {
+    int64 native_handle
+
+    constructor(int64 integer_slots, int64 string_slots) {
+        native_handle = clyth_worker_context_create(integer_slots, string_slots)
+    }
+
+    int32 set_int(int64 slot, int64 value) { return clyth_worker_context_set_int(native_handle, slot, value) }
+    int64 get_int(int64 slot) { return clyth_worker_context_get_int(native_handle, slot) }
+    int32 set_string(int64 slot, string value) { return clyth_worker_context_set_string(native_handle, slot, value) }
+    string get_string(int64 slot) { return clyth_worker_context_get_string(native_handle, slot) }
+    int32 release() { return clyth_worker_context_release(native_handle) }
+}
+
+struct MessageChannel {
+    int64 native_handle
+
+    constructor(int64 capacity) { native_handle = clyth_message_channel_create(capacity) }
+    int32 send(int32 kind, int32 file_index, int64 line, int64 column, string text) {
+        return clyth_message_channel_send(native_handle, kind, file_index, line, column, text)
+    }
+    bool receive() { return clyth_message_channel_receive(native_handle) == 1 }
+    int32 current_kind() { return clyth_message_channel_kind(native_handle) }
+    int32 current_file_index() { return clyth_message_channel_file(native_handle) }
+    int64 current_line() { return clyth_message_channel_line(native_handle) }
+    int64 current_column() { return clyth_message_channel_column(native_handle) }
+    string current_text() { return clyth_message_channel_text(native_handle) }
+    int32 close() { return clyth_message_channel_close(native_handle) }
+    int32 release() { return clyth_message_channel_release(native_handle) }
+}
+
+struct StringTrie {
+    int64 native_handle
+
+    constructor() { native_handle = clyth_string_trie_create() }
+    int32 insert(string text, int32 value) { return clyth_string_trie_insert(native_handle, text, value) }
+    int32 lookup(string text) { return clyth_string_trie_lookup(native_handle, text) }
+    int32 release() { return clyth_string_trie_release(native_handle) }
+}

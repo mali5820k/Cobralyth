@@ -1,0 +1,28 @@
+{
+  "name": "bootstrapping-stage1",
+  "version": "0.6.0-alpha",
+  "kind": "runtime-module",
+  "exports": [
+    "bootstrapping-stage1.clyth"
+  ],
+  "dependencies": [],
+  "wrapper": {
+    "license": "MIT"
+  },
+  "c_bindings": [
+    {
+      "name": "clyth_bootstrapping_stage1",
+      "enabled": true,
+      "backend": "Temporary Stage 1 bootstrap C support",
+      "license": "MIT",
+      "source_directory": "../../c-bindings/bootstrapping-stage1",
+      "native_dependencies": [],
+      "architectures": {
+        "x86_64": { "archive": "x86_64/libclyth_bootstrapping-stage1.a" },
+        "aarch64": { "archive": "aarch64/libclyth_bootstrapping-stage1.a" },
+        "arm64": { "archive": "arm64/libclyth_bootstrapping-stage1.a" }
+      }
+    }
+  ],
+  "notes": "Private bootstrap-only operations used to work around incomplete Stage 0 string semantics while Stage 1 becomes self-hosting. This module is intentionally not part of the final language API."
+}

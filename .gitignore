@@ -5,7 +5,13 @@ llvm-bundled/
 antlr4-cpp-runtime-lib/
 antlr4-cpp-runtime-src/build/
 fmt-build/
-dist-clyth/
+0.5.0-compiler-dist/
+0.6.0-compiler-dist/
+0.6.0-stage1-compiler/.bootstrap-build/
+0.6.0-stage1-compiler/module-store/
+0.6.0-stage1-compiler/dist/
+0.6.0-stage2-compiler/.build/
+clyth-0.6.0-compiler-dist.tar.gz
 dist/
 
 # Runtime/native object outputs
