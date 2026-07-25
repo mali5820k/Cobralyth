@@ -1,56 +1,120 @@
-# Clyth generated build artifacts
-build-compiler/
-llvm-build/
-llvm-bundled/
-antlr4-cpp-runtime-lib/
-antlr4-cpp-runtime-src/build/
-fmt-build/
-0.5.0-compiler-dist/
-0.6.0-compiler-dist/
-0.6.0-stage1-compiler/.bootstrap-build/
-0.6.0-stage1-compiler/module-store/
-0.6.0-stage1-compiler/dist/
-0.6.0-stage2-compiler/.build/
-clyth-0.6.0-compiler-dist.tar.gz
-dist/
+################################################################################
+# Build Output
+################################################################################
 
-# Runtime/native object outputs
-clyth-runtime/c-bindings/**/x86_64/
-clyth-runtime/c-bindings/**/aarch64/
-clyth-runtime/modules/**/x86_64/
-clyth-runtime/modules/**/aarch64/
+build/
+dist/
+out/
+bin/
+obj/
+
+################################################################################
+# Bootstrap Compiler Outputs
+################################################################################
+
+bootstrap/*/build/
+bootstrap/*/dist/
+
+0.*-compiler/build/
+0.*-compiler/dist/
+
+################################################################################
+# Generated / Downloaded Vendor Trees
+################################################################################
+
+# Ignore every directory named "vendor", regardless of where it appears.
+# Build scripts are responsible for recreating and populating these trees.
+**/vendor/
+
+################################################################################
+# Runtime Build Output
+################################################################################
+
+**/runtime/build/
+**/runtime/build/**
+
+**/runtime/lib/
+**/runtime/lib/**
+
+################################################################################
+# Downloaded / Generated Dependencies
+################################################################################
+
+bootstrap/*/build-dependencies/build/
+bootstrap/*/build-dependencies/install/
+bootstrap/*/build-dependencies/downloads/
+
+################################################################################
+# CMake
+################################################################################
+
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+CTestTestfile.cmake
+install_manifest.txt
+compile_commands.json
+
+################################################################################
+# Ninja
+################################################################################
+
+.ninja_deps
+.ninja_log
+build.ninja
+
+################################################################################
+# Compiler Artifacts
+################################################################################
+
 *.o
 *.obj
 *.a
 *.so
-*.dylib
+*.so.*
 *.dll
+*.dylib
+*.lib
+*.exp
+*.pdb
 *.exe
 
-# Sample outputs
-sample-clyth-programs/.sample-bin/
+################################################################################
+# LLVM / Generated Compiler Output
+################################################################################
+
 *.ll
+*.bc
+*.s
+*.asm
 
-# Release/archive files
-*.tar
-*.tar.gz
-*.tgz
-*.zip
-*.7z
+################################################################################
+# Logs
+################################################################################
 
-# Logs and temp files
 *.log
-*.tmp
-*.bak
+
+################################################################################
+# Editors / IDEs
+################################################################################
+
+.vscode/
+.idea/
+
+*.swp
+*.swo
+*~
+
+################################################################################
+# Operating System
+################################################################################
+
 .DS_Store
-.cache/
-/.vscode
-/compiler-src/fmt
-/llvm-project-src
-/compiler-src/src/clyth_antlr_files
-/clyth-runtime/c-bindings/libuv/vendor
-/clyth-runtime/c-bindings/llhttp/vendor
-/clyth-runtime/c-bindings/openssl/vendor
-/clyth-runtime/c-bindings/rapidhash/vendor
-/clyth-runtime/c-bindings/wslay/vendor
-/clyth-runtime/c-bindings/yyjson/vendor
+Thumbs.db
+
+################################################################################
+# Python
+################################################################################
+
+__pycache__/
+*.pyc

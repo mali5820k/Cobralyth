@@ -1,11 +1,13 @@
 #!/usr/bin/env bash
-set -euo pipefail
+# Delegate uninstallation to the final distribution, which is the only layer
+# capable of knowing exactly which files were installed.
+set -Eeuo pipefail
 
-INSTALL_ROOT="${CLYTH_INSTALL_ROOT:-$HOME/.local/share/clyth}"
-BIN_DIR="${CLYTH_BIN_DIR:-$HOME/.local/bin}"
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+DIST="$ROOT/0.6.0-compiler/dist"
+if [[ -x "$DIST/uninstall.sh" ]]; then
+  exec "$DIST/uninstall.sh" "$@"
+fi
 
-rm -f "$BIN_DIR/clyth"
-rm -rf "$INSTALL_ROOT"
-
-echo "Removed Clyth from: $INSTALL_ROOT"
-echo "Removed symlink: $BIN_DIR/clyth"
+printf 'The final distribution does not provide an uninstall manifest.\n' >&2
+exit 1
