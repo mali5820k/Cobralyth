@@ -1,20 +1,10 @@
 # Clyth
 
-Clyth is a systems programming language project that currently targets
-LLVM IR for ahead-of-time native code generation. The project focuses on
-a small compiler architecture, explicit runtime boundaries, and native
-Linux artifacts built through a musl-oriented build pipeline.
+Clyth is a systems programming language designed for native software development with an emphasis on explicit runtime boundaries, deterministic tooling, and self-hosting.
 
-The current compiler lowers Clyth programs through LLVM IR generation,
-using LLVM as a mature optimization and native-code backend while
-keeping Clyth's language design, runtime model, and long-term compiler
-architecture independent.
+The compiler currently lowers Clyth source into LLVM IR before producing native executables through a musl-oriented toolchain. LLVM serves as the optimization and code-generation backend while the language, runtime, compiler architecture, and tooling remain independent of any single backend implementation.
 
-Alpha 0.5.0 is the **Runtime Ecosystem Foundation Release**. It moves
-Clyth beyond a compiler experiment by proving that Clyth code can
-compile to native executables, cross stable ABI boundaries, and drive
-useful runtime capabilities such as file I/O, JSON, hashing, and a
-libuv-backed server runtime.
+Version 0.6.0 focuses on completing the transition to a self-hosted compiler while preserving a small, understandable compiler architecture.
 
 ## Documentation
 
@@ -22,147 +12,162 @@ Official documentation:
 
 https://mali5820k.github.io/clyth-docs/
 
-------------------------------------------------------------------------
+---
 
-## Why Clyth Exists
+# Why Clyth Exists
 
-Clyth explores a systems-language design that keeps low-level control
-explicit while avoiding unnecessary ceremony around runtime capability.
-The compiler should own syntax, typing, semantic analysis, and lowering.
-Runtime capabilities should live behind Clyth-facing APIs and small,
-auditable native ABI boundaries.
+Clyth explores a systems-language design that keeps low-level control explicit while reducing unnecessary complexity around runtime capability.
 
-The long-term direction is a language capable of writing systems
-applications, backend services, embedded-facing runtime code, tooling,
-and eventually its own compiler/runtime ecosystem.
+The compiler owns parsing, semantic analysis, type checking, optimization, and code generation. Runtime functionality is exposed through Clyth-native APIs with small, auditable ABI boundaries.
+
+The long-term goal is a language capable of building:
+
+- Systems software
+- Backend services
+- Networking applications
+- Developer tooling
+- Embedded-oriented runtime components
+- Its own compiler and ecosystem
 
 Core principles:
 
--   Keep the compiler focused.
--   Keep runtime APIs ergonomic.
--   Keep native boundaries explicit and auditable.
--   Prefer permissively licensed dependencies.
--   Avoid binding the language identity to a single backend
-    implementation.
--   Use MECC later for deterministic estate-based ownership once the
-    compiler architecture is ready.
+- Small compiler architecture
+- Explicit runtime boundaries
+- Ergonomic native APIs
+- Permissively licensed dependencies
+- Backend independence
+- Deterministic tooling
 
-------------------------------------------------------------------------
+---
 
-## 0.5.0 Status
+# Current Capabilities
 
-Clyth currently compiles the supported alpha language subset into native
-Linux executables through LLVM IR and a musl-oriented native build
-pipeline.
+Current language and runtime support includes:
 
-The 0.5.0 Alpha release includes:
+- Structures, methods, constructors, and explicit `this`
+- Extension methods
+- First-class function values
+- Lambda expressions
+- Native strings
+- Template string interpolation
+- File I/O
+- JSON support
+- Hashing
+- libuv networking
+- HTTP/HTTPS server abstractions
+- Stable C ABI integration
+- Recursive artifact auditing for GNU ABI leakage
 
--   structs, methods, constructors, and explicit `this`
--   extension-style method declarations
--   first-class function values and `function<Return(Args...)>` syntax
--   lambda callbacks
--   expression-based template interpolation
--   native string values and string return ABI
--   runtime printing through `print` / `println`
--   libuv-backed file I/O
--   yyjson-backed JSON runtime integration
--   rapidhash-backed hashing
--   HTTPS/server abstraction with plain HTTP when TLS certificates are
-    not configured
--   router callbacks using `Request` and `Response` wrappers
--   stable handle-based ABI boundaries
--   recursive artifact audit for GNU/glibc/libstdc++ leakage
+Additional language features continue to be implemented as part of the 0.6.0 self-hosting effort.
 
-The regression suite currently passes **24/24** samples, and the ABI
-audit reports no GNU/glibc/libstdc++ markers in checked release
-artifacts.
+---
 
-------------------------------------------------------------------------
+# Repository Layout
 
-## Architecture Summary
+The repository is organized around the compiler bootstrap process.
 
-Clyth separates user-facing APIs from native implementation details:
+```text
+bootstrap/
+├── 0.5.0-compiler/
+│   ├── src/
+│   ├── modules/
+│   ├── runtime/
+│   ├── scripts/
+│   ├── build-dependencies/
+│   └── dist/
+│
+├── 0.5.1-compiler/
+│   ├── src/
+│   ├── modules/
+│   ├── runtime/
+│   ├── scripts/
+│   ├── build-dependencies/ -> ../0.5.0-compiler/build-dependencies
+│   └── dist/
+│
+├── shared-license-files/
+├── scripts/
+└── build_driver.sh
 
-``` text
-Clyth application
-    ↓
-Clyth wrapper module
-    ↓
-Stable ABI boundary
-    ↓
-Native provider
-    ↓
-libuv / yyjson / rapidhash / OS
+0.6.0-compiler/
+├── src/
+├── modules/
+├── runtime/
+├── scripts/
+└── dist/
+
+build/
 ```
 
-Detailed architecture and module documentation live in the documentation
-site rather than this README.
+## Bootstrap Stages
 
-------------------------------------------------------------------------
+### 0.5.0 Compiler
 
-## MECC Memory Model Direction
+The trusted bootstrap compiler.
 
-MECC (**Managed Entanglement for Collapsible Collections**) is Clyth's
-planned deterministic memory-management model. Clyth 0.5.0 intentionally
-focuses on building realistic runtime foundations first so future MECC
-analysis operates against real application patterns rather than
-artificial examples.
+This compiler serves as the initial seed used to begin the self-hosting process.
 
-------------------------------------------------------------------------
+---
 
-## Building
+### 0.5.1 Compiler
 
-``` bash
-./build_compiler.sh
+The intermediate bootstrap compiler.
+
+Built using the 0.5.0 compiler, it exists solely to validate that Clyth can successfully compile itself before producing the final compiler.
+
+---
+
+### 0.6.0 Compiler
+
+The final bootstrapped compiler.
+
+Unlike the bootstrap compilers, it owns its runtime modules, generated license manifest, tests, and distributable artifacts independently.
+
+---
+
+# Building
+
+Build the complete bootstrap chain:
+
+```bash
+./build_bootstrapped_compiler_from_toolchain.sh
 ```
 
-Fast development build:
+The bootstrap driver:
 
-``` bash
-./build_compiler.sh --skip-dist
-```
+1. Builds the 0.5.1 compiler
+2. Validates the 0.5.1 compiler
+3. Builds the 0.6.0 compiler
+4. Validates the final compiler
+5. Produces the distributable compiler
 
-Regression suite:
+The installation scripts consume only the final compiler distribution.
 
-``` bash
-./run_regression_tests.sh
-./audit_no_gnu_abi.sh
-```
+---
 
-------------------------------------------------------------------------
+# Roadmap
 
-## Roadmap
+The primary goals for the 0.6.0 release are:
 
-### 0.6.0 --- Self-Hosted Compiler
+- Complete the self-hosted compiler
+- Replace ANTLR with a Pratt parser
+- Implement a Clyth-owned parser, AST, semantic pipeline, and LLVM IR generation
+- Continue reducing compiler-side C++ dependencies
+- Preserve the musl-oriented toolchain
+- Expand the standard library
+- Continue development of **MECC (Managed Entanglement for Collapsible Collections)**
 
-Begin replacing the transitional C++ compiler with a compiler written in
-Clyth.
+Future releases will focus on tooling, editor integration, package management, improved diagnostics, and broader platform support once the compiler has fully bootstrapped itself.
 
-Primary goals:
+---
 
--   rewrite the compiler in Clyth
--   replace ANTLR with a Pratt parser
--   implement a Clyth-owned AST and IR
--   emit LLVM IR directly
--   reduce dependence on LLVM's C++ libraries
--   preserve the musl-oriented native toolchain
+# AI-Assisted Development
 
-------------------------------------------------------------------------
+Clyth is developed with AI-assisted engineering tools used for implementation, debugging, refactoring, and design exploration.
 
-## AI-Assisted Development Philosophy
+Architecture, language design, implementation decisions, and final review remain human-directed.
 
-Clyth is AI-assisted, not AI-authored.
+---
 
-AI-assisted engineering tools have been used during development to
-accelerate implementation, debugging, refactoring, build-system
-iteration, and exploration of compiler/runtime design alternatives.
-Language design, architecture, roadmap, release decisions, and final
-review remain human-directed.
+# Legal Notes
 
-------------------------------------------------------------------------
-
-## Legal Notes
-
-Clyth prefers permissively licensed dependencies. Third-party project
-names are referenced only to describe architecture and dependency
-relationships and do not imply endorsement or affiliation.
+Clyth prefers permissively licensed dependencies. Third-party project names are referenced solely to describe interoperability, architecture, or dependency relationships and do not imply endorsement or affiliation.
