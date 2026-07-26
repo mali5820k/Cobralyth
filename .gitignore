@@ -43,6 +43,8 @@ bootstrap/*/dist/
 bootstrap/*/build-dependencies/build/
 bootstrap/*/build-dependencies/install/
 bootstrap/*/build-dependencies/downloads/
+bootstrap/*/build-dependencies/antlr4-cpp-runtime-lib/
+bootstrap/*/.regression-build/
 
 ################################################################################
 # CMake
@@ -118,3 +120,10 @@ Thumbs.db
 
 __pycache__/
 *.pyc
+
+# Locally cloned/built bundled LLVM toolchain
+bootstrap/0.5.0-compiler/build-dependencies/llvm-project-src/
+bootstrap/0.5.0-compiler/build-dependencies/llvm-bundled/
+bootstrap/0.5.0-compiler/.build/
+bootstrap/0.5.1-compiler/.bootstrap-build/
+/0.6.0-compiler/.build

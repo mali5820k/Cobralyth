@@ -1,0 +1,22 @@
+// Temporary Stage 1 bootstrap support module.
+//
+// These C-backed operations deliberately bypass incomplete Stage 0 string
+// lowering. They are bootstrap implementation details, not the eventual
+// public Clyth string API.
+
+extern C int32 bootstrap_string_equals(string left, string right)
+extern C int32 bootstrap_string_not_equals(string left, string right)
+extern C int32 bootstrap_string_is_empty(string value)
+extern C int64 bootstrap_string_length(string value)
+extern C int32 bootstrap_string_starts_with(string value, string prefix)
+extern C int32 bootstrap_string_ends_with(string value, string suffix)
+extern C int32 bootstrap_string_contains(string value, string needle)
+extern C int64 bootstrap_string_index_of(string value, string needle)
+
+extern C string bootstrap_string_copy(string value)
+extern C string bootstrap_string_concat(string left, string right)
+extern C string bootstrap_string_concat3(string first, string second, string third)
+extern C string bootstrap_string_slice(string value, int64 start, int64 length)
+extern C string bootstrap_string_trim(string value)
+extern C string bootstrap_string_split_get(string value, string delimiter, int64 index)
+extern C int64 bootstrap_string_split_count(string value, string delimiter)

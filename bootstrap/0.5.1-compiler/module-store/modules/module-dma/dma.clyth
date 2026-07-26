@@ -1,0 +1,56 @@
+// Clyth Runtime Module: dma
+//
+// Backing C binding archive:
+//   clyth-runtime/c-bindings/dma/libclyth_dma.a
+//
+// License:
+//   MIT; see clyth-runtime/c-bindings/dma/LICENSE.md and
+//   clyth-runtime/EXTERNAL_LIBRARIES_LICENSES.md.
+//
+// Design note:
+//   DMA/MMIO access is intentionally exposed as explicit runtime functions
+//   that accept architecture-sized integer addresses. Clyth does not expose
+//   pointer arithmetic, volatile syntax, or raw malloc pointer workflows for
+//   this use case.
+
+extern C uint8 clyth_dma_read8(uintptr address)
+extern C uint16 clyth_dma_read16(uintptr address)
+extern C uint32 clyth_dma_read32(uintptr address)
+extern C uint64 clyth_dma_read64(uintptr address)
+
+extern C void clyth_dma_write8(uintptr address, uint8 value)
+extern C void clyth_dma_write16(uintptr address, uint16 value)
+extern C void clyth_dma_write32(uintptr address, uint32 value)
+extern C void clyth_dma_write64(uintptr address, uint64 value)
+
+uint8 dma_read8(uintptr address) {
+    return clyth_dma_read8(address)
+}
+
+uint16 dma_read16(uintptr address) {
+    return clyth_dma_read16(address)
+}
+
+uint32 dma_read32(uintptr address) {
+    return clyth_dma_read32(address)
+}
+
+uint64 dma_read64(uintptr address) {
+    return clyth_dma_read64(address)
+}
+
+void dma_write8(uintptr address, uint8 value) {
+    clyth_dma_write8(address, value)
+}
+
+void dma_write16(uintptr address, uint16 value) {
+    clyth_dma_write16(address, value)
+}
+
+void dma_write32(uintptr address, uint32 value) {
+    clyth_dma_write32(address, value)
+}
+
+void dma_write64(uintptr address, uint64 value) {
+    clyth_dma_write64(address, value)
+}

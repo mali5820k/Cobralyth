@@ -49,6 +49,8 @@ cp "$PROJECT_ROOT/install.sh" "$FINAL_DIST/install.sh"
 cp "$PROJECT_ROOT/uninstall.sh" "$FINAL_DIST/uninstall.sh"
 chmod +x "$FINAL_DIST/bin/clyth_compiler_bin" "$FINAL_DIST/install.sh" "$FINAL_DIST/uninstall.sh"
 
+"$SCRIPT_DIR/audit_no_gnu_abi.sh" "$FINAL_DIST"
+
 rm -f "$FINAL_TARBALL"
 tar -C "$FINAL_DIST" -czf "$FINAL_TARBALL" .
 printf 'Built Stage 2 distribution: %s\n' "$FINAL_DIST"

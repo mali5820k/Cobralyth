@@ -10,7 +10,11 @@ PROJECT_ROOT="$(cd "$STAGE1_DIR/../.." && pwd)"
 STAGE0_DIST="${CLYTH_STAGE0_DIST:-$PROJECT_ROOT/bootstrap/0.5.0-compiler/dist}"
 STAGE0="${CLYTH_STAGE0_COMPILER:-$STAGE0_DIST/bin/clyth_compiler_bin}"
 ZIG="${ZIG:-zig}"
+ZIG_CC="$SCRIPT_DIR/zig-c.sh"
+ZIG_CXX="$SCRIPT_DIR/zig-c++.sh"
 TARGET="${CLYTH_ZIG_TARGET:-native-linux-musl}"
+export CLYTH_ZIG_CC="$ZIG_CC"
+export CLYTH_ZIG_CXX="$ZIG_CXX"
 ARCH="${CLYTH_ARCH:-x86_64}"
 RUNTIME="$STAGE1_DIR/clyth-runtime"
 STORE="$STAGE1_DIR/module-store"
@@ -22,6 +26,8 @@ mkdir -p "$STAGE0_DIST" "$STAGE1_DIR"
 
 [[ -x "$STAGE0" ]] || { printf 'missing Stage 0 compiler: %s\n' "$STAGE0" >&2; exit 1; }
 command -v "$ZIG" >/dev/null 2>&1 || [[ -x "$ZIG" ]] || { printf 'missing Zig compiler: %s\n' "$ZIG" >&2; exit 1; }
+[[ -x "$ZIG_CC" && -x "$ZIG_CXX" ]] || { printf 'missing executable Zig wrappers under %s\n' "$SCRIPT_DIR" >&2; exit 1; }
+"$SCRIPT_DIR/fetch_runtime_vendors.sh" "$RUNTIME"
 
 rm -rf "$BUILD" "$STORE" "$DIST"
 mkdir -p "$BUILD/libuv" "$STORE/modules" "$DIST/bin" "$DIST/libexec" "$DIST/share/clyth"
@@ -53,7 +59,7 @@ build_runtime_archive() {
   }
 
   mkdir -p "$(dirname "$archive_path")"
-  "$ZIG" cc -target "$TARGET" -O2 "$@" -c "$source_path" -o "$object_path"
+  "$ZIG_CC" -target "$TARGET" -O2 "$@" -c "$source_path" -o "$object_path"
   "$ZIG" ar rcs "$archive_path" "$object_path"
 }
 
@@ -61,7 +67,7 @@ mkdir -p "$(dirname "$LIBUV_ARCHIVE")"
 objects=()
 for source in "${LIBUV_SOURCES[@]}"; do
   object="$BUILD/libuv/${source//\//_}.o"
-  "$ZIG" cc -target "$TARGET" -O2 -D_GNU_SOURCE -D_POSIX_C_SOURCE=200112L \
+  "$ZIG_CC" -target "$TARGET" -O2 -D_GNU_SOURCE -D_POSIX_C_SOURCE=200112L \
     -D_FILE_OFFSET_BITS=64 -I"$LIBUV/include" -I"$LIBUV/src" \
     -c "$LIBUV/$source" -o "$object"
   objects+=("$object")
@@ -106,10 +112,10 @@ BOOTSTRAP_SUPPORT_SOURCE="$RUNTIME/c-bindings/bootstrapping-stage1/bootstrapping
 BOOTSTRAP_SUPPORT_OBJECT="$BUILD/bootstrapping-stage1.o"
 BOOTSTRAP_SUPPORT_ARCHIVE="$RUNTIME/modules/module-bootstrapping-stage1/$ARCH/libclyth_bootstrapping-stage1.a"
 mkdir -p "$(dirname "$FILE_ARCHIVE")" "$(dirname "$BOOTSTRAP_SUPPORT_ARCHIVE")"
-"$ZIG" cc -target "$TARGET" -O2 -D_GNU_SOURCE -D_POSIX_C_SOURCE=200112L \
+"$ZIG_CC" -target "$TARGET" -O2 -D_GNU_SOURCE -D_POSIX_C_SOURCE=200112L \
   -D_FILE_OFFSET_BITS=64 -I"$LIBUV/include" -I"$LIBUV/src" \
   -c "$RUNTIME/c-bindings/file-io/file.c" -o "$FILE_OBJECT"
-"$ZIG" cc -target "$TARGET" -O2 -c "$BOOTSTRAP_SUPPORT_SOURCE" -o "$BOOTSTRAP_SUPPORT_OBJECT"
+"$ZIG_CC" -target "$TARGET" -O2 -c "$BOOTSTRAP_SUPPORT_SOURCE" -o "$BOOTSTRAP_SUPPORT_OBJECT"
 
 # Stage 0 has a frozen, hard-coded runtime archive map. Since it already links
 # module-file-io for both bootstrap executables, place the temporary Stage 1
@@ -198,4 +204,6 @@ printf '%s\n%s\n%s\n%s\n%s\n' \
 (cd "$ROOT" && exec "$ROOT/libexec/clyth-stage1-driver")
 WRAPPER
 chmod +x "$DIST/bin/clyth-stage1" "$DIST/bin/clyth-module" "$DIST/libexec/"*
+"$SCRIPT_DIR/audit_no_gnu_abi.sh" "$DIST"
+
 printf 'Built Stage 1 distribution: %s\n' "$DIST"

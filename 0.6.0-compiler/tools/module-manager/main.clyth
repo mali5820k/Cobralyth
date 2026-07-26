@@ -27,7 +27,7 @@ int32 build_module(string root, string module) {
     string object = module_object(root, module)
     string archive = module_archive(root, module)
     string flags = `${root}/c-bindings/${module}/build.flags`
-    string command = `mkdir -p ${root}/build/${module} && EXTRA_FLAGS=\"\"; if [ -f ${flags} ]; then EXTRA_FLAGS=\"$(cat ${flags})\"; fi; zig cc -target native-linux-musl -O2 $EXTRA_FLAGS -c ${source} -o ${object} && zig ar rcs ${archive} ${object}`
+    string command = `mkdir -p ${root}/build/${module} && EXTRA_FLAGS=\"\"; if [ -f ${flags} ]; then EXTRA_FLAGS=\"$(cat ${flags})\"; fi; "$CLYTH_ZIG_CC" -target native-linux-musl -O2 $EXTRA_FLAGS -c ${source} -o ${object} && zig ar rcs ${archive} ${object}`
     return bash(command)
 }
 

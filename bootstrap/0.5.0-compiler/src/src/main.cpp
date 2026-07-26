@@ -1892,6 +1892,9 @@ static int parse_clyth_file(CompilerOptions& opts) {
 
     clyth::llvm_stub::ClythLLVMCodegen codegen(diagnostics);
     clyth::llvm_stub::CodegenConfig codegen_config;
+    if (const char* zig_cc = std::getenv("CLYTH_ZIG_CC"); zig_cc && *zig_cc) {
+        codegen_config.linker_command = zig_cc;
+    }
     codegen_config.module_name = opts.main_file.stem().string();
     codegen_config.dump_codegen_plan = opts.dump_codegen_plan || opts.debug_mode;
     codegen_config.output_binary_path = opts.output_binary_name;

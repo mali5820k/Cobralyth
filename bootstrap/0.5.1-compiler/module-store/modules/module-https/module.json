@@ -1,0 +1,25 @@
+{
+  "name": "https",
+  "version": "0.5.0-alpha",
+  "kind": "runtime-module",
+  "exports": [
+    "https.clyth"
+  ],
+  "dependencies": ["router"],
+  "wrapper": { "license": "MIT" },
+  "c_bindings": [
+    {
+      "name": "clyth_http",
+      "enabled": true,
+      "backend": "Clyth libuv/llhttp server binding with TLS-ready configuration surface",
+      "license": "MIT wrapper; OpenSSL backend is Apache-2.0 when enabled",
+      "source_directory": "../../c-bindings/http",
+      "architectures": {
+        "x86_64": { "archive": "x86_64/libclyth_http.a" },
+        "aarch64": { "archive": "aarch64/libclyth_http.a" },
+        "arm64": { "archive": "arm64/libclyth_http.a" }
+      }
+    }
+  ],
+  "notes": "Canonical 0.5.0 server API. ServerConfiguration(port, router) starts plain HTTP; ServerConfiguration(port, router, certificate, key) reserves the same surface for TLS. TLS is configuration, not a separate server model."
+}
