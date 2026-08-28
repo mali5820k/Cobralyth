@@ -1,0 +1,706 @@
+// AUTO-TRANSLATED BOOTSTRAP SEED FROM FROZEN GO V1.0.0 IMPLEMENTATION.
+// Source: compiler/go/internal/frontend/ast/ast.go
+// This file preserves implementation logic for the Go -> Clyth bootstrap port.
+
+// package ast
+
+import "../token/token.clyth"
+
+// Go interfaces are represented as explicit tagged pointer carriers in the
+// self-hosted compiler.  This keeps the source-level structure of the Go
+// implementation while expressing dynamic AST dispatch in Clyth itself.
+struct Decl {
+    int32 kind
+    MeccConfigDirectiveDecl* mecc_config
+    ErrorTypeDirectiveDecl* error_type
+    ImportDecl* import_decl
+    FunctionDecl* function_decl
+    StructDecl* struct_decl
+    EnumDecl* enum_decl
+    MethodBlockDecl* method_block_decl
+    ProtocolDecl* protocol_decl
+    GlobalVarDecl* global_var_decl
+}
+
+struct Stmt {
+    int32 kind
+    BlockStmt* block_stmt
+    MeccConfigDirectiveStmt* mecc_config
+    VarDeclStmt* var_decl
+    ReturnStmt* return_stmt
+    IfStmt* if_stmt
+    WhileStmt* while_stmt
+    ForStmt* for_stmt
+    SwitchStmt* switch_stmt
+    BreakStmt* break_stmt
+    ContinueStmt* continue_stmt
+    ExprStmt* expr_stmt
+}
+
+struct Expr {
+    int32 kind
+    IdentifierExpr* identifier
+    LiteralExpr* literal
+    UnaryExpr* unary
+    BinaryExpr* binary
+    AssignExpr* assign
+    CallExpr* call
+    GenericSpecializationExpr* generic_specialization
+    MemberExpr* member
+    IndexExpr* index
+    ArrayExpr* array
+    KeyValueExpr* key_value
+    LambdaExpr* lambda
+    NewExpr* new_expr
+    CastExpr* cast_expr
+    uint64 hash() { return 17 }
+}
+
+
+// Node is the self-hosted equivalent of Go's ast.Node interface.  It carries
+// the concrete tagged declaration/statement/expression value explicitly so
+// semantic analysis, lifetime planning and lowering can share one source-span
+// abstraction without relying on interface dispatch.
+struct Node {
+    int32 category
+    Decl declaration
+    Stmt statement
+    Expr expression
+    FieldDecl* field
+    MethodDecl* method
+    Parameter* parameter
+    ProtocolMember* protocol_member
+    TypeRef* type_ref
+    SwitchCase* switch_case
+    uint64 hash() { return 23 }
+}
+
+int32 NODE_DECL = 1
+int32 NODE_STMT = 2
+int32 NODE_EXPR = 3
+
+Node node_from_decl(Decl value) { Node n; n.category=NODE_DECL; n.declaration=value; return n }
+Node node_from_stmt(Stmt value) { Node n; n.category=NODE_STMT; n.statement=value; return n }
+Node node_from_expr(Expr value) { Node n; n.category=NODE_EXPR; n.expression=value; return n }
+
+Span node_span(Node value) {
+    if value.category == NODE_DECL { return decl_span(value.declaration) }
+    if value.category == NODE_STMT { return stmt_span(value.statement) }
+    if value.category == NODE_EXPR { return expr_span(value.expression) }
+    if value.category == 10 && value.field != null { return value.field.SourceSpan }
+    if value.category == 11 && value.method != null { return value.method.Function.SourceSpan }
+    if value.category == 12 && value.parameter != null { return value.parameter.SourceSpan }
+    if value.category == 13 && value.protocol_member != null { return value.protocol_member.SourceSpan }
+    if value.category == 14 && value.type_ref != null { return value.type_ref.SourceSpan }
+    if value.category == 15 && value.switch_case != null { return value.switch_case.SourceSpan }
+    Span empty
+    return empty
+}
+
+struct Program {
+	Decl[] Declarations
+	Span SourceSpan
+}
+
+// MeccConfigDirectiveDecl is a file-scope compiler directive.  It is parsed as
+// structured compiler metadata rather than textual macro substitution.
+struct MeccConfigDirectiveDecl {
+	string Property
+	bool Value
+	Span SourceSpan
+}
+
+// ErrorTypeDirectiveDecl registers a compile-time ErrorType identity. It is
+// compiler metadata, not a runtime variable or textual macro expansion.
+struct ErrorTypeDirectiveDecl {
+	string Name
+	Span SourceSpan
+}
+
+// type ImportKind = string  // TODO bootstrap nominal alias
+
+
+struct ImportDecl {
+	string Kind
+	string Target
+	string Alias
+	Span SourceSpan
+}
+
+// type Visibility = string  // TODO bootstrap nominal alias
+
+
+struct ArrayDimension {
+	bool Dynamic
+	Expr Size
+	Span SourceSpan
+}
+
+struct TypeRef {
+	string Name
+	TypeRef*[] GenericArgs
+	bool Const
+	int64 PointerDepth
+	ArrayDimension[] Arrays
+	CallableType* Callable
+	Span SourceSpan
+}
+
+struct CallableType {
+	TypeRef* Return
+	TypeRef*[] Parameters
+	bool Variadic
+}
+
+struct GenericParameter {
+	string Name
+	Span SourceSpan
+}
+
+struct Parameter {
+	string Name
+	TypeRef* Type
+	Expr DefaultValue
+	bool Variadic
+	Span SourceSpan
+}
+
+struct FunctionDecl {
+	string Name
+	string Receiver
+	TypeRef* ReturnType
+	Parameter*[] Parameters
+	BlockStmt* Body
+	bool Extern
+	string ABI
+	string Visibility
+	Span SourceSpan
+}
+
+struct ConstructorDecl {
+	Parameter*[] Parameters
+	BlockStmt* Body
+	string Visibility
+	Span SourceSpan
+}
+
+struct DestructorDecl {
+	BlockStmt* Body
+	string Visibility
+	Span SourceSpan
+}
+
+struct StructMember {
+    int32 kind
+    FieldDecl* field
+    MethodDecl* method
+    ConstructorMember* constructor_member
+    DestructorMember* destructor_member
+}
+struct FieldDecl {
+	string Name
+	TypeRef* Type
+	string Visibility
+	Expr Initializer
+	Span SourceSpan
+}
+
+struct MethodDecl { FunctionDecl Function }
+
+struct ConstructorMember { ConstructorDecl Constructor }
+
+struct DestructorMember { DestructorDecl Destructor }
+
+struct StructDecl {
+	string Name
+	GenericParameter[] GenericParameters
+	TypeRef*[] Bases
+	StructMember[] Members
+	Span SourceSpan
+}
+
+struct EnumMember {
+	string Name
+	Expr Value
+	Span SourceSpan
+}
+
+struct EnumDecl {
+	string Name
+	EnumMember*[] Members
+	Span SourceSpan
+}
+
+struct MethodBlockDecl {
+	TypeRef* Receiver
+	StructMember[] Members
+	Span SourceSpan
+}
+
+struct ProtocolMember {
+	string Name
+	TypeRef* ReturnType
+	Parameter*[] Parameters
+	Span SourceSpan
+}
+
+struct ProtocolDecl {
+	string SelfType
+	string Name
+	GenericParameter[] GenericParameters
+	ProtocolMember*[] Members
+	Span SourceSpan
+}
+
+struct GlobalVarDecl {
+	string Name
+	TypeRef* Type
+	Expr Initializer
+	Span SourceSpan
+}
+
+struct BlockStmt {
+	Stmt[] Statements
+	Span SourceSpan
+}
+
+// MeccConfigDirectiveStmt applies a lexically-scoped MECC policy override.
+// Nested blocks inherit their parent policy and restore it when the block ends.
+struct MeccConfigDirectiveStmt {
+	string Property
+	bool Value
+	Span SourceSpan
+}
+
+struct VarDeclStmt {
+	string Name
+	TypeRef* Type
+	Expr Initializer
+	Span SourceSpan
+}
+
+struct ReturnStmt {
+	Expr Value
+	Span SourceSpan
+}
+
+struct IfStmt {
+	Expr Condition
+	Stmt Then
+	Stmt Else
+	Span SourceSpan
+}
+
+struct WhileStmt {
+	Expr Condition
+	Stmt Body
+	Span SourceSpan
+}
+
+struct ForStmt {
+	Stmt Init
+	Expr Condition
+	Expr Post
+	Stmt Body
+	Span SourceSpan
+}
+
+struct SwitchCase {
+	Expr Value
+	Stmt[] Statements
+	bool Default
+	Span SourceSpan
+}
+
+struct SwitchStmt {
+	Expr Value
+	SwitchCase*[] Cases
+	Span SourceSpan
+}
+
+struct BreakStmt {
+	Span SourceSpan
+}
+
+struct ContinueStmt {
+	Span SourceSpan
+}
+
+struct ExprStmt {
+	Expr Expression
+	Span SourceSpan
+}
+
+struct IdentifierExpr {
+	string Name
+	Span SourceSpan
+}
+
+// type LiteralKind = string  // TODO bootstrap nominal alias
+
+
+struct LiteralExpr {
+	string Kind
+	string Raw
+	Span SourceSpan
+}
+
+struct UnaryExpr {
+	string Operator
+	Expr Operand
+	bool Prefix
+	Span SourceSpan
+}
+
+struct BinaryExpr {
+	string Operator
+	Expr Left
+	Expr Right
+	Span SourceSpan
+}
+
+struct AssignExpr {
+	string Operator
+	Expr Target
+	Expr Value
+	Span SourceSpan
+}
+
+struct CallExpr {
+	Expr Callee
+	Expr[] Arguments
+	Span SourceSpan
+}
+
+struct GenericSpecializationExpr {
+	Expr Target
+	TypeRef*[] TypeArguments
+	Span SourceSpan
+}
+
+struct MemberExpr {
+	Expr Object
+	string Name
+	Span SourceSpan
+}
+
+struct IndexExpr {
+	Expr Object
+	Expr Index
+	Span SourceSpan
+}
+
+struct ArrayExpr {
+	Expr[] Elements
+	Span SourceSpan
+}
+
+struct KeyValueExpr {
+	Expr Key
+	Expr Value
+	Span SourceSpan
+}
+
+struct LambdaExpr {
+	TypeRef* ReturnType
+	Parameter*[] Parameters
+	BlockStmt* Body
+	Span SourceSpan
+}
+
+struct NewExpr {
+	Expr Value
+	Span SourceSpan
+}
+
+struct CastExpr {
+	TypeRef* Type
+	Expr Value
+	Span SourceSpan
+}
+
+
+
+// ---- Explicit interface/tag helpers used by the translated frontend ----
+int32 DECL_MECC_CONFIG = 1
+int32 DECL_ERROR_TYPE = 2
+int32 DECL_IMPORT = 3
+int32 DECL_FUNCTION = 4
+int32 DECL_STRUCT = 5
+int32 DECL_ENUM = 6
+int32 DECL_METHOD_BLOCK = 7
+int32 DECL_PROTOCOL = 8
+int32 DECL_GLOBAL_VAR = 9
+
+int32 STMT_BLOCK = 1
+int32 STMT_MECC_CONFIG = 2
+int32 STMT_VAR = 3
+int32 STMT_RETURN = 4
+int32 STMT_IF = 5
+int32 STMT_WHILE = 6
+int32 STMT_FOR = 7
+int32 STMT_SWITCH = 8
+int32 STMT_BREAK = 9
+int32 STMT_CONTINUE = 10
+int32 STMT_EXPR = 11
+
+int32 EXPR_IDENTIFIER = 1
+int32 EXPR_LITERAL = 2
+int32 EXPR_UNARY = 3
+int32 EXPR_BINARY = 4
+int32 EXPR_ASSIGN = 5
+int32 EXPR_CALL = 6
+int32 EXPR_GENERIC_SPECIALIZATION = 7
+int32 EXPR_MEMBER = 8
+int32 EXPR_INDEX = 9
+int32 EXPR_ARRAY = 10
+int32 EXPR_KEY_VALUE = 11
+int32 EXPR_LAMBDA = 12
+int32 EXPR_NEW = 13
+int32 EXPR_CAST = 14
+
+int32 MEMBER_FIELD = 1
+int32 MEMBER_METHOD = 2
+int32 MEMBER_CONSTRUCTOR = 3
+int32 MEMBER_DESTRUCTOR = 4
+
+Span decl_span(Decl value) {
+    if value.kind == DECL_MECC_CONFIG { return value.mecc_config.SourceSpan }
+    if value.kind == DECL_ERROR_TYPE { return value.error_type.SourceSpan }
+    if value.kind == DECL_IMPORT { return value.import_decl.SourceSpan }
+    if value.kind == DECL_FUNCTION { return value.function_decl.SourceSpan }
+    if value.kind == DECL_STRUCT { return value.struct_decl.SourceSpan }
+    if value.kind == DECL_ENUM { return value.enum_decl.SourceSpan }
+    if value.kind == DECL_METHOD_BLOCK { return value.method_block_decl.SourceSpan }
+    if value.kind == DECL_PROTOCOL { return value.protocol_decl.SourceSpan }
+    if value.kind == DECL_GLOBAL_VAR { return value.global_var_decl.SourceSpan }
+    Span empty
+    return empty
+}
+
+Span stmt_span(Stmt value) {
+    if value.kind == STMT_BLOCK { return value.block_stmt.SourceSpan }
+    if value.kind == STMT_MECC_CONFIG { return value.mecc_config.SourceSpan }
+    if value.kind == STMT_VAR { return value.var_decl.SourceSpan }
+    if value.kind == STMT_RETURN { return value.return_stmt.SourceSpan }
+    if value.kind == STMT_IF { return value.if_stmt.SourceSpan }
+    if value.kind == STMT_WHILE { return value.while_stmt.SourceSpan }
+    if value.kind == STMT_FOR { return value.for_stmt.SourceSpan }
+    if value.kind == STMT_SWITCH { return value.switch_stmt.SourceSpan }
+    if value.kind == STMT_BREAK { return value.break_stmt.SourceSpan }
+    if value.kind == STMT_CONTINUE { return value.continue_stmt.SourceSpan }
+    if value.kind == STMT_EXPR { return value.expr_stmt.SourceSpan }
+    Span empty
+    return empty
+}
+
+Span expr_span(Expr value) {
+    if value.kind == EXPR_IDENTIFIER { return value.identifier.SourceSpan }
+    if value.kind == EXPR_LITERAL { return value.literal.SourceSpan }
+    if value.kind == EXPR_UNARY { return value.unary.SourceSpan }
+    if value.kind == EXPR_BINARY { return value.binary.SourceSpan }
+    if value.kind == EXPR_ASSIGN { return value.assign.SourceSpan }
+    if value.kind == EXPR_CALL { return value.call.SourceSpan }
+    if value.kind == EXPR_GENERIC_SPECIALIZATION { return value.generic_specialization.SourceSpan }
+    if value.kind == EXPR_MEMBER { return value.member.SourceSpan }
+    if value.kind == EXPR_INDEX { return value.index.SourceSpan }
+    if value.kind == EXPR_ARRAY { return value.array.SourceSpan }
+    if value.kind == EXPR_KEY_VALUE { return value.key_value.SourceSpan }
+    if value.kind == EXPR_LAMBDA { return value.lambda.SourceSpan }
+    if value.kind == EXPR_NEW { return value.new_expr.SourceSpan }
+    if value.kind == EXPR_CAST { return value.cast_expr.SourceSpan }
+    Span empty
+    return empty
+}
+
+Span member_span(StructMember value) {
+    if value.kind == MEMBER_FIELD { return value.field.SourceSpan }
+    if value.kind == MEMBER_METHOD { return value.method.Function.SourceSpan }
+    if value.kind == MEMBER_CONSTRUCTOR { return value.constructor_member.Constructor.SourceSpan }
+    if value.kind == MEMBER_DESTRUCTOR { return value.destructor_member.Destructor.SourceSpan }
+    Span empty
+    return empty
+}
+
+MeccConfigDirectiveDecl* bootstrap_as_mecc_config_directive_decl(Decl value) { return value.mecc_config }
+ErrorTypeDirectiveDecl* bootstrap_as_error_type_directive_decl(Decl value) { return value.error_type }
+ImportDecl* bootstrap_as_import_decl(Decl value) { return value.import_decl }
+FunctionDecl* bootstrap_as_function_decl(Decl value) { return value.function_decl }
+StructDecl* bootstrap_as_struct_decl(Decl value) { return value.struct_decl }
+EnumDecl* bootstrap_as_enum_decl(Decl value) { return value.enum_decl }
+MethodBlockDecl* bootstrap_as_method_block_decl(Decl value) { return value.method_block_decl }
+ProtocolDecl* bootstrap_as_protocol_decl(Decl value) { return value.protocol_decl }
+GlobalVarDecl* bootstrap_as_global_var_decl(Decl value) { return value.global_var_decl }
+
+BlockStmt* bootstrap_as_block_stmt(Stmt value) { return value.block_stmt }
+MeccConfigDirectiveStmt* bootstrap_as_mecc_config_directive_stmt(Stmt value) { return value.mecc_config }
+VarDeclStmt* bootstrap_as_var_decl_stmt(Stmt value) { return value.var_decl }
+ReturnStmt* bootstrap_as_return_stmt(Stmt value) { return value.return_stmt }
+IfStmt* bootstrap_as_if_stmt(Stmt value) { return value.if_stmt }
+WhileStmt* bootstrap_as_while_stmt(Stmt value) { return value.while_stmt }
+ForStmt* bootstrap_as_for_stmt(Stmt value) { return value.for_stmt }
+SwitchStmt* bootstrap_as_switch_stmt(Stmt value) { return value.switch_stmt }
+BreakStmt* bootstrap_as_break_stmt(Stmt value) { return value.break_stmt }
+ContinueStmt* bootstrap_as_continue_stmt(Stmt value) { return value.continue_stmt }
+ExprStmt* bootstrap_as_expr_stmt(Stmt value) { return value.expr_stmt }
+
+IdentifierExpr* bootstrap_as_identifier_expr(Expr value) { return value.identifier }
+LiteralExpr* bootstrap_as_literal_expr(Expr value) { return value.literal }
+UnaryExpr* bootstrap_as_unary_expr(Expr value) { return value.unary }
+BinaryExpr* bootstrap_as_binary_expr(Expr value) { return value.binary }
+AssignExpr* bootstrap_as_assign_expr(Expr value) { return value.assign }
+CallExpr* bootstrap_as_call_expr(Expr value) { return value.call }
+GenericSpecializationExpr* bootstrap_as_generic_specialization_expr(Expr value) { return value.generic_specialization }
+MemberExpr* bootstrap_as_member_expr(Expr value) { return value.member }
+IndexExpr* bootstrap_as_index_expr(Expr value) { return value.index }
+ArrayExpr* bootstrap_as_array_expr(Expr value) { return value.array }
+KeyValueExpr* bootstrap_as_key_value_expr(Expr value) { return value.key_value }
+LambdaExpr* bootstrap_as_lambda_expr(Expr value) { return value.lambda }
+NewExpr* bootstrap_as_new_expr(Expr value) { return value.new_expr }
+CastExpr* bootstrap_as_cast_expr(Expr value) { return value.cast_expr }
+
+FieldDecl* bootstrap_as_field_decl(StructMember value) { return value.field }
+MethodDecl* bootstrap_as_method_decl(StructMember value) { return value.method }
+ConstructorMember* bootstrap_as_constructor_member(StructMember value) { return value.constructor_member }
+DestructorMember* bootstrap_as_destructor_member(StructMember value) { return value.destructor_member }
+
+Decl wrap_mecc_config_decl(MeccConfigDirectiveDecl* p) { Decl d; d.kind=DECL_MECC_CONFIG; d.mecc_config=p; return d }
+Decl wrap_error_type_decl(ErrorTypeDirectiveDecl* p) { Decl d; d.kind=DECL_ERROR_TYPE; d.error_type=p; return d }
+Decl wrap_import_decl(ImportDecl* p) { Decl d; d.kind=DECL_IMPORT; d.import_decl=p; return d }
+Decl wrap_function_decl(FunctionDecl* p) { Decl d; d.kind=DECL_FUNCTION; d.function_decl=p; return d }
+Decl wrap_struct_decl(StructDecl* p) { Decl d; d.kind=DECL_STRUCT; d.struct_decl=p; return d }
+Decl wrap_enum_decl(EnumDecl* p) { Decl d; d.kind=DECL_ENUM; d.enum_decl=p; return d }
+Decl wrap_method_block_decl(MethodBlockDecl* p) { Decl d; d.kind=DECL_METHOD_BLOCK; d.method_block_decl=p; return d }
+Decl wrap_protocol_decl(ProtocolDecl* p) { Decl d; d.kind=DECL_PROTOCOL; d.protocol_decl=p; return d }
+Decl wrap_global_var_decl(GlobalVarDecl* p) { Decl d; d.kind=DECL_GLOBAL_VAR; d.global_var_decl=p; return d }
+
+Stmt wrap_block_stmt(BlockStmt* p) { Stmt s; s.kind=STMT_BLOCK; s.block_stmt=p; return s }
+Stmt wrap_mecc_config_stmt(MeccConfigDirectiveStmt* p) { Stmt s; s.kind=STMT_MECC_CONFIG; s.mecc_config=p; return s }
+Stmt wrap_var_stmt(VarDeclStmt* p) { Stmt s; s.kind=STMT_VAR; s.var_decl=p; return s }
+Stmt wrap_return_stmt(ReturnStmt* p) { Stmt s; s.kind=STMT_RETURN; s.return_stmt=p; return s }
+Stmt wrap_if_stmt(IfStmt* p) { Stmt s; s.kind=STMT_IF; s.if_stmt=p; return s }
+Stmt wrap_while_stmt(WhileStmt* p) { Stmt s; s.kind=STMT_WHILE; s.while_stmt=p; return s }
+Stmt wrap_for_stmt(ForStmt* p) { Stmt s; s.kind=STMT_FOR; s.for_stmt=p; return s }
+Stmt wrap_switch_stmt(SwitchStmt* p) { Stmt s; s.kind=STMT_SWITCH; s.switch_stmt=p; return s }
+Stmt wrap_break_stmt(BreakStmt* p) { Stmt s; s.kind=STMT_BREAK; s.break_stmt=p; return s }
+Stmt wrap_continue_stmt(ContinueStmt* p) { Stmt s; s.kind=STMT_CONTINUE; s.continue_stmt=p; return s }
+Stmt wrap_expr_stmt(ExprStmt* p) { Stmt s; s.kind=STMT_EXPR; s.expr_stmt=p; return s }
+
+Expr wrap_identifier_expr(IdentifierExpr* p) { Expr e; e.kind=EXPR_IDENTIFIER; e.identifier=p; return e }
+Expr wrap_literal_expr(LiteralExpr* p) { Expr e; e.kind=EXPR_LITERAL; e.literal=p; return e }
+Expr wrap_unary_expr(UnaryExpr* p) { Expr e; e.kind=EXPR_UNARY; e.unary=p; return e }
+Expr wrap_binary_expr(BinaryExpr* p) { Expr e; e.kind=EXPR_BINARY; e.binary=p; return e }
+Expr wrap_assign_expr(AssignExpr* p) { Expr e; e.kind=EXPR_ASSIGN; e.assign=p; return e }
+Expr wrap_call_expr(CallExpr* p) { Expr e; e.kind=EXPR_CALL; e.call=p; return e }
+Expr wrap_generic_specialization_expr(GenericSpecializationExpr* p) { Expr e; e.kind=EXPR_GENERIC_SPECIALIZATION; e.generic_specialization=p; return e }
+Expr wrap_member_expr(MemberExpr* p) { Expr e; e.kind=EXPR_MEMBER; e.member=p; return e }
+Expr wrap_index_expr(IndexExpr* p) { Expr e; e.kind=EXPR_INDEX; e.index=p; return e }
+Expr wrap_array_expr(ArrayExpr* p) { Expr e; e.kind=EXPR_ARRAY; e.array=p; return e }
+Expr wrap_key_value_expr(KeyValueExpr* p) { Expr e; e.kind=EXPR_KEY_VALUE; e.key_value=p; return e }
+Expr wrap_lambda_expr(LambdaExpr* p) { Expr e; e.kind=EXPR_LAMBDA; e.lambda=p; return e }
+Expr wrap_new_expr(NewExpr* p) { Expr e; e.kind=EXPR_NEW; e.new_expr=p; return e }
+Expr wrap_cast_expr(CastExpr* p) { Expr e; e.kind=EXPR_CAST; e.cast_expr=p; return e }
+
+StructMember wrap_field_member(FieldDecl* p) { StructMember m; m.kind=MEMBER_FIELD; m.field=p; return m }
+StructMember wrap_method_member(MethodDecl* p) { StructMember m; m.kind=MEMBER_METHOD; m.method=p; return m }
+StructMember wrap_constructor_member(ConstructorMember* p) { StructMember m; m.kind=MEMBER_CONSTRUCTOR; m.constructor_member=p; return m }
+StructMember wrap_destructor_member(DestructorMember* p) { StructMember m; m.kind=MEMBER_DESTRUCTOR; m.destructor_member=p; return m }
+
+// Named constructors preserve the field intent of the frozen Go composite literals.
+
+Node node_from_field_decl(FieldDecl* p) { Node n; n.category=10; n.field=p; return n }
+Node node_from_method_decl(MethodDecl* p) { Node n; n.category=11; n.method=p; return n }
+Node node_from_parameter(Parameter* p) { Node n; n.category=12; n.parameter=p; return n }
+Node node_from_protocol_member(ProtocolMember* p) { Node n; n.category=13; n.protocol_member=p; return n }
+Node node_from_type_ref(TypeRef* p) { Node n; n.category=14; n.type_ref=p; return n }
+Node node_from_switch_case(SwitchCase* p) { Node n; n.category=15; n.switch_case=p; return n }
+FieldDecl* node_as_field_decl(Node n) { return n.field }
+MethodDecl* node_as_method_decl(Node n) { return n.method }
+FunctionDecl* node_as_function_decl(Node n) { if n.category == NODE_DECL { return n.declaration.function_decl }; return null }
+
+Node node_from_mecc_config_directive_decl(MeccConfigDirectiveDecl* p) { return node_from_decl(wrap_mecc_config_decl(p)) }
+Node node_from_error_type_directive(ErrorTypeDirectiveDecl* p) { return node_from_decl(wrap_error_type_decl(p)) }
+Node node_from_import_decl(ImportDecl* p) { return node_from_decl(wrap_import_decl(p)) }
+Node node_from_function_decl(FunctionDecl* p) { return node_from_decl(wrap_function_decl(p)) }
+Node node_from_struct_decl(StructDecl* p) { return node_from_decl(wrap_struct_decl(p)) }
+Node node_from_enum_decl(EnumDecl* p) { return node_from_decl(wrap_enum_decl(p)) }
+Node node_from_method_block_decl(MethodBlockDecl* p) { return node_from_decl(wrap_method_block_decl(p)) }
+Node node_from_protocol_decl(ProtocolDecl* p) { return node_from_decl(wrap_protocol_decl(p)) }
+Node node_from_global_var_decl(GlobalVarDecl* p) { return node_from_decl(wrap_global_var_decl(p)) }
+Node node_from_block_stmt(BlockStmt* p) { return node_from_stmt(wrap_block_stmt(p)) }
+Node node_from_var_decl_stmt(VarDeclStmt* p) { return node_from_stmt(wrap_var_stmt(p)) }
+Node node_from_return_stmt(ReturnStmt* p) { return node_from_stmt(wrap_return_stmt(p)) }
+Node node_from_if_stmt(IfStmt* p) { return node_from_stmt(wrap_if_stmt(p)) }
+Node node_from_while_stmt(WhileStmt* p) { return node_from_stmt(wrap_while_stmt(p)) }
+Node node_from_for_stmt(ForStmt* p) { return node_from_stmt(wrap_for_stmt(p)) }
+Node node_from_switch_stmt(SwitchStmt* p) { return node_from_stmt(wrap_switch_stmt(p)) }
+Node node_from_break_stmt(BreakStmt* p) { return node_from_stmt(wrap_break_stmt(p)) }
+Node node_from_continue_stmt(ContinueStmt* p) { return node_from_stmt(wrap_continue_stmt(p)) }
+Node node_from_expr_stmt(ExprStmt* p) { return node_from_stmt(wrap_expr_stmt(p)) }
+Node node_from_identifier_expr(IdentifierExpr* p) { return node_from_expr(wrap_identifier_expr(p)) }
+Node node_from_literal_expr(LiteralExpr* p) { return node_from_expr(wrap_literal_expr(p)) }
+Node node_from_unary_expr(UnaryExpr* p) { return node_from_expr(wrap_unary_expr(p)) }
+Node node_from_binary_expr(BinaryExpr* p) { return node_from_expr(wrap_binary_expr(p)) }
+Node node_from_assign_expr(AssignExpr* p) { return node_from_expr(wrap_assign_expr(p)) }
+Node node_from_call_expr(CallExpr* p) { return node_from_expr(wrap_call_expr(p)) }
+Node node_from_member_expr(MemberExpr* p) { return node_from_expr(wrap_member_expr(p)) }
+Node node_from_index_expr(IndexExpr* p) { return node_from_expr(wrap_index_expr(p)) }
+Node node_from_new_expr(NewExpr* p) { return node_from_expr(wrap_new_expr(p)) }
+
+Program* bootstrap_make_Program() { return new Program() }
+Decl bootstrap_make_MeccConfigDirectiveDecl_Property_Value_SourceSpan(string property, bool value, Span span) { MeccConfigDirectiveDecl* p=new MeccConfigDirectiveDecl(); p.Property=property; p.Value=value; p.SourceSpan=span; Decl wrapped; wrapped.kind=DECL_MECC_CONFIG; wrapped.mecc_config=p; return wrapped }
+Decl bootstrap_make_ErrorTypeDirectiveDecl_Name_SourceSpan(string name, Span span) { ErrorTypeDirectiveDecl* p=new ErrorTypeDirectiveDecl(); p.Name=name; p.SourceSpan=span; Decl wrapped; wrapped.kind=DECL_ERROR_TYPE; wrapped.error_type=p; return wrapped }
+Decl bootstrap_make_ImportDecl_Kind_Target_Alias_SourceSpan(string kind, string target, string alias, Span span) { ImportDecl* p=new ImportDecl(); p.Kind=kind; p.Target=target; p.Alias=alias; p.SourceSpan=span; Decl wrapped; wrapped.kind=DECL_IMPORT; wrapped.import_decl=p; return wrapped }
+Decl bootstrap_make_FunctionDecl_Name_ReturnType_Parameters_Extern_ABI_SourceSpan(string name, TypeRef* rt, Parameter*[] params, bool ext, string abi, Span span) { FunctionDecl* p=new FunctionDecl(); p.Name=name; p.ReturnType=rt; p.Parameters=params; p.Extern=ext; p.ABI=abi; p.SourceSpan=span; Decl wrapped; wrapped.kind=DECL_FUNCTION; wrapped.function_decl=p; return wrapped }
+Decl bootstrap_make_FunctionDecl_Name_Receiver_ReturnType_Parameters_Body_SourceSpan(string name, string receiver, TypeRef* rt, Parameter*[] params, BlockStmt* body, Span span) { FunctionDecl* p=new FunctionDecl(); p.Name=name; p.Receiver=receiver; p.ReturnType=rt; p.Parameters=params; p.Body=body; p.SourceSpan=span; Decl wrapped; wrapped.kind=DECL_FUNCTION; wrapped.function_decl=p; return wrapped }
+FunctionDecl bootstrap_make_FunctionDecl_Name_ReturnType_Parameters_Body_Visibility_SourceSpan(string name, TypeRef* rt, Parameter*[] params, BlockStmt* body, string vis, Span span) { FunctionDecl p; p.Name=name; p.ReturnType=rt; p.Parameters=params; p.Body=body; p.Visibility=vis; p.SourceSpan=span; return p }
+Decl bootstrap_make_StructDecl_Name_GenericParameters_Bases_Members_SourceSpan(string name, GenericParameter[] gens, TypeRef*[] bases, StructMember[] members, Span span) { StructDecl* p=new StructDecl(); p.Name=name; p.GenericParameters=gens; p.Bases=bases; p.Members=members; p.SourceSpan=span; Decl wrapped; wrapped.kind=DECL_STRUCT; wrapped.struct_decl=p; return wrapped }
+Decl bootstrap_make_EnumDecl_Name_Members_SourceSpan(string name, EnumMember*[] members, Span span) { EnumDecl* p=new EnumDecl(); p.Name=name; p.Members=members; p.SourceSpan=span; Decl wrapped; wrapped.kind=DECL_ENUM; wrapped.enum_decl=p; return wrapped }
+EnumMember* bootstrap_make_EnumMember_Name_Value_SourceSpan(string name, Expr value, Span span) { EnumMember* p=new EnumMember(); p.Name=name; p.Value=value; p.SourceSpan=span; return p }
+Decl bootstrap_make_MethodBlockDecl_Receiver_Members_SourceSpan(TypeRef* receiver, StructMember[] members, Span span) { MethodBlockDecl* p=new MethodBlockDecl(); p.Receiver=receiver; p.Members=members; p.SourceSpan=span; Decl wrapped; wrapped.kind=DECL_METHOD_BLOCK; wrapped.method_block_decl=p; return wrapped }
+ProtocolMember* bootstrap_make_ProtocolMember_Name_ReturnType_Parameters_SourceSpan(string name, TypeRef* rt, Parameter*[] params, Span span) { ProtocolMember* p=new ProtocolMember(); p.Name=name; p.ReturnType=rt; p.Parameters=params; p.SourceSpan=span; return p }
+Decl bootstrap_make_ProtocolDecl_SelfType_Name_GenericParameters_Members_SourceSpan(string selfType, string name, GenericParameter[] gens, ProtocolMember*[] members, Span span) { ProtocolDecl* p=new ProtocolDecl(); p.SelfType=selfType; p.Name=name; p.GenericParameters=gens; p.Members=members; p.SourceSpan=span; Decl wrapped; wrapped.kind=DECL_PROTOCOL; wrapped.protocol_decl=p; return wrapped }
+Decl bootstrap_make_GlobalVarDecl_Name_Type_Initializer_SourceSpan(string name, TypeRef* t, Expr init, Span span) { GlobalVarDecl* p=new GlobalVarDecl(); p.Name=name; p.Type=t; p.Initializer=init; p.SourceSpan=span; Decl wrapped; wrapped.kind=DECL_GLOBAL_VAR; wrapped.global_var_decl=p; return wrapped }
+ConstructorDecl bootstrap_make_ConstructorDecl_Parameters_Body_Visibility_SourceSpan(Parameter*[] params, BlockStmt* body, string vis, Span span) { ConstructorDecl p; p.Parameters=params; p.Body=body; p.Visibility=vis; p.SourceSpan=span; return p }
+DestructorDecl bootstrap_make_DestructorDecl_Body_Visibility_SourceSpan(BlockStmt* body, string vis, Span span) { DestructorDecl p; p.Body=body; p.Visibility=vis; p.SourceSpan=span; return p }
+StructMember bootstrap_make_ConstructorMember_ConstructorDecl(ConstructorDecl c) { ConstructorMember* p=new ConstructorMember(); p.Constructor=c; StructMember wrapped; wrapped.kind=MEMBER_CONSTRUCTOR; wrapped.constructor_member=p; return wrapped }
+StructMember bootstrap_make_DestructorMember_DestructorDecl(DestructorDecl d) { DestructorMember* p=new DestructorMember(); p.Destructor=d; StructMember wrapped; wrapped.kind=MEMBER_DESTRUCTOR; wrapped.destructor_member=p; return wrapped }
+StructMember bootstrap_make_MethodDecl_FunctionDecl(FunctionDecl f) { MethodDecl* p=new MethodDecl(); p.Function=f; StructMember wrapped; wrapped.kind=MEMBER_METHOD; wrapped.method=p; return wrapped }
+StructMember bootstrap_make_FieldDecl_Name_Type_Visibility_Initializer_SourceSpan(string name, TypeRef* t, string vis, Expr init, Span span) { FieldDecl* p=new FieldDecl(); p.Name=name; p.Type=t; p.Visibility=vis; p.Initializer=init; p.SourceSpan=span; StructMember wrapped; wrapped.kind=MEMBER_FIELD; wrapped.field=p; return wrapped }
+GenericParameter bootstrap_make_GenericParameter_Name_SourceSpan(string name, Span span) { GenericParameter p; p.Name=name; p.SourceSpan=span; return p }
+TypeRef* bootstrap_make_TypeRef_Name_Const_SourceSpan(string name, bool isConst, Span span) { TypeRef* p=new TypeRef(); p.Name=name; p.Const=isConst; p.SourceSpan=span; return p }
+TypeRef* bootstrap_make_TypeRef_Callable_SourceSpan(CallableType* callable, Span span) { TypeRef* p=new TypeRef(); p.Callable=callable; p.SourceSpan=span; return p }
+CallableType* bootstrap_make_CallableType_Return_Parameters_Variadic(TypeRef* rt, TypeRef*[] params, bool variadic) { CallableType* p=new CallableType(); p.Return=rt; p.Parameters=params; p.Variadic=variadic; return p }
+ArrayDimension bootstrap_make_ArrayDimension_Dynamic_SourceSpan(bool dynamic, Span span) { ArrayDimension d; d.Dynamic=dynamic; d.SourceSpan=span; return d }
+Parameter* bootstrap_make_Parameter_Variadic_SourceSpan(bool variadic, Span span) { Parameter* p=new Parameter(); p.Variadic=variadic; p.SourceSpan=span; return p }
+Parameter* bootstrap_make_Parameter_Name_Type_DefaultValue_Variadic_SourceSpan(string name, TypeRef* t, Expr defaultValue, bool variadic, Span span) { Parameter* p=new Parameter(); p.Name=name; p.Type=t; p.DefaultValue=defaultValue; p.Variadic=variadic; p.SourceSpan=span; return p }
+Parameter* bootstrap_make_Parameter_Name_SourceSpan(string name, Span span) { Parameter* p=new Parameter(); p.Name=name; p.SourceSpan=span; return p }
+Parameter* bootstrap_make_Parameter_Name_Type_SourceSpan(string name, TypeRef* t, Span span) { Parameter* p=new Parameter(); p.Name=name; p.Type=t; p.SourceSpan=span; return p }
+BlockStmt* bootstrap_make_BlockStmt_Statements_SourceSpan(Stmt[] statements, Span span) { BlockStmt* p=new BlockStmt(); p.Statements=statements; p.SourceSpan=span; return p }
+Stmt bootstrap_make_MeccConfigDirectiveStmt_Property_Value_SourceSpan(string property, bool value, Span span) { MeccConfigDirectiveStmt* p=new MeccConfigDirectiveStmt(); p.Property=property; p.Value=value; p.SourceSpan=span; Stmt wrapped; wrapped.kind=STMT_MECC_CONFIG; wrapped.mecc_config=p; return wrapped }
+Stmt bootstrap_make_VarDeclStmt_Name_Type_Initializer_SourceSpan(string name, TypeRef* t, Expr init, Span span) { VarDeclStmt* p=new VarDeclStmt(); p.Name=name; p.Type=t; p.Initializer=init; p.SourceSpan=span; Stmt wrapped; wrapped.kind=STMT_VAR; wrapped.var_decl=p; return wrapped }
+Stmt bootstrap_make_ReturnStmt_SourceSpan(Span span) { ReturnStmt* p=new ReturnStmt(); p.SourceSpan=span; Stmt wrapped; wrapped.kind=STMT_RETURN; wrapped.return_stmt=p; return wrapped }
+Stmt bootstrap_make_ReturnStmt_Value_SourceSpan(Expr value, Span span) { ReturnStmt* p=new ReturnStmt(); p.Value=value; p.SourceSpan=span; Stmt wrapped; wrapped.kind=STMT_RETURN; wrapped.return_stmt=p; return wrapped }
+Stmt bootstrap_make_IfStmt_Condition_Then_Else_SourceSpan(Expr c, Stmt thenStmt, Stmt elseStmt, Span span) { IfStmt* p=new IfStmt(); p.Condition=c; p.Then=thenStmt; p.Else=elseStmt; p.SourceSpan=span; Stmt wrapped; wrapped.kind=STMT_IF; wrapped.if_stmt=p; return wrapped }
+Stmt bootstrap_make_WhileStmt_Condition_Body_SourceSpan(Expr c, Stmt body, Span span) { WhileStmt* p=new WhileStmt(); p.Condition=c; p.Body=body; p.SourceSpan=span; Stmt wrapped; wrapped.kind=STMT_WHILE; wrapped.while_stmt=p; return wrapped }
+Stmt bootstrap_make_ForStmt_Init_Condition_Post_Body_SourceSpan(Stmt init, Expr c, Expr post, Stmt body, Span span) { ForStmt* p=new ForStmt(); p.Init=init; p.Condition=c; p.Post=post; p.Body=body; p.SourceSpan=span; Stmt wrapped; wrapped.kind=STMT_FOR; wrapped.for_stmt=p; return wrapped }
+SwitchCase* bootstrap_make_SwitchCase() { return new SwitchCase() }
+Stmt bootstrap_make_SwitchStmt_Value_Cases_SourceSpan(Expr value, SwitchCase*[] cases, Span span) { SwitchStmt* p=new SwitchStmt(); p.Value=value; p.Cases=cases; p.SourceSpan=span; Stmt wrapped; wrapped.kind=STMT_SWITCH; wrapped.switch_stmt=p; return wrapped }
+Stmt bootstrap_make_BreakStmt_SourceSpan(Span span) { BreakStmt* p=new BreakStmt(); p.SourceSpan=span; Stmt wrapped; wrapped.kind=STMT_BREAK; wrapped.break_stmt=p; return wrapped }
+Stmt bootstrap_make_ContinueStmt_SourceSpan(Span span) { ContinueStmt* p=new ContinueStmt(); p.SourceSpan=span; Stmt wrapped; wrapped.kind=STMT_CONTINUE; wrapped.continue_stmt=p; return wrapped }
+Stmt bootstrap_make_ExprStmt_Expression_SourceSpan(Expr value, Span span) { ExprStmt* p=new ExprStmt(); p.Expression=value; p.SourceSpan=span; Stmt wrapped; wrapped.kind=STMT_EXPR; wrapped.expr_stmt=p; return wrapped }
+Expr bootstrap_make_IdentifierExpr_Name_SourceSpan(string name, Span span) { IdentifierExpr* p=new IdentifierExpr(); p.Name=name; p.SourceSpan=span; Expr wrapped; wrapped.kind=EXPR_IDENTIFIER; wrapped.identifier=p; return wrapped }
+Expr bootstrap_make_LiteralExpr_Kind_Raw_SourceSpan(string kind, string raw, Span span) { LiteralExpr* p=new LiteralExpr(); p.Kind=kind; p.Raw=raw; p.SourceSpan=span; Expr e; e.kind=EXPR_LITERAL; e.literal=p; return e }
+Expr bootstrap_make_UnaryExpr_Operator_Operand_Prefix_SourceSpan(string op, Expr operand, bool prefix, Span span) { UnaryExpr* p=new UnaryExpr(); p.Operator=op; p.Operand=operand; p.Prefix=prefix; p.SourceSpan=span; Expr wrapped; wrapped.kind=EXPR_UNARY; wrapped.unary=p; return wrapped }
+Expr bootstrap_make_BinaryExpr_Operator_Left_Right_SourceSpan(string op, Expr left, Expr right, Span span) { BinaryExpr* p=new BinaryExpr(); p.Operator=op; p.Left=left; p.Right=right; p.SourceSpan=span; Expr wrapped; wrapped.kind=EXPR_BINARY; wrapped.binary=p; return wrapped }
+Expr bootstrap_make_AssignExpr_Operator_Target_Value_SourceSpan(string op, Expr target, Expr value, Span span) { AssignExpr* p=new AssignExpr(); p.Operator=op; p.Target=target; p.Value=value; p.SourceSpan=span; Expr wrapped; wrapped.kind=EXPR_ASSIGN; wrapped.assign=p; return wrapped }
+Expr bootstrap_make_CallExpr_Callee_Arguments_SourceSpan(Expr callee, Expr[] args, Span span) { CallExpr* p=new CallExpr(); p.Callee=callee; p.Arguments=args; p.SourceSpan=span; Expr wrapped; wrapped.kind=EXPR_CALL; wrapped.call=p; return wrapped }
+Expr bootstrap_make_GenericSpecializationExpr_Target_TypeArguments_SourceSpan(Expr target, TypeRef*[] args, Span span) { GenericSpecializationExpr* p=new GenericSpecializationExpr(); p.Target=target; p.TypeArguments=args; p.SourceSpan=span; Expr wrapped; wrapped.kind=EXPR_GENERIC_SPECIALIZATION; wrapped.generic_specialization=p; return wrapped }
+Expr bootstrap_make_MemberExpr_Object_Name_SourceSpan(Expr object, string name, Span span) { MemberExpr* p=new MemberExpr(); p.Object=object; p.Name=name; p.SourceSpan=span; Expr wrapped; wrapped.kind=EXPR_MEMBER; wrapped.member=p; return wrapped }
+Expr bootstrap_make_IndexExpr_Object_Index_SourceSpan(Expr object, Expr index, Span span) { IndexExpr* p=new IndexExpr(); p.Object=object; p.Index=index; p.SourceSpan=span; Expr wrapped; wrapped.kind=EXPR_INDEX; wrapped.index=p; return wrapped }
+Expr bootstrap_make_ArrayExpr_Elements_SourceSpan(Expr[] elems, Span span) { ArrayExpr* p=new ArrayExpr(); p.Elements=elems; p.SourceSpan=span; Expr wrapped; wrapped.kind=EXPR_ARRAY; wrapped.array=p; return wrapped }
+Expr bootstrap_make_KeyValueExpr_Key_Value_SourceSpan(Expr key, Expr value, Span span) { KeyValueExpr* p=new KeyValueExpr(); p.Key=key; p.Value=value; p.SourceSpan=span; Expr wrapped; wrapped.kind=EXPR_KEY_VALUE; wrapped.key_value=p; return wrapped }
+Expr bootstrap_make_LambdaExpr_Parameters_Body_SourceSpan(Parameter*[] params, BlockStmt* body, Span span) { LambdaExpr* p=new LambdaExpr(); p.Parameters=params; p.Body=body; p.SourceSpan=span; Expr wrapped; wrapped.kind=EXPR_LAMBDA; wrapped.lambda=p; return wrapped }
+Expr bootstrap_make_LambdaExpr_ReturnType_Parameters_Body_SourceSpan(TypeRef* rt, Parameter*[] params, BlockStmt* body, Span span) { LambdaExpr* p=new LambdaExpr(); p.ReturnType=rt; p.Parameters=params; p.Body=body; p.SourceSpan=span; Expr wrapped; wrapped.kind=EXPR_LAMBDA; wrapped.lambda=p; return wrapped }
+Expr bootstrap_make_NewExpr_Value_SourceSpan(Expr value, Span span) { NewExpr* p=new NewExpr(); p.Value=value; p.SourceSpan=span; Expr wrapped; wrapped.kind=EXPR_NEW; wrapped.new_expr=p; return wrapped }
+Expr bootstrap_make_CastExpr_Type_Value_SourceSpan(TypeRef* t, Expr value, Span span) { CastExpr* p=new CastExpr(); p.Type=t; p.Value=value; p.SourceSpan=span; Expr wrapped; wrapped.kind=EXPR_CAST; wrapped.cast_expr=p; return wrapped }

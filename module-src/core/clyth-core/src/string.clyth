@@ -1,0 +1,28 @@
+/**
+ * Canonical Clyth string structural primitive.
+ *
+ * The V1 intrinsic ABI reserves 15 inline bytes for small-string storage.
+ * A null array_ptr denotes inline storage; a non-null array_ptr denotes heap
+ * storage. length is the logical character count. C ABI conversion is handled
+ * at the FFI boundary rather than defining Clyth strings as C strings.
+ */
+intrinsic_struct string : Indexable {
+    char* array_ptr
+    char[15] local_stack_cache
+    uint64 length
+
+    char on_read_index(uint64 index) {
+        if array_ptr == null {
+            return local_stack_cache[index]
+        }
+        return array_ptr[index]
+    }
+
+    void on_write_index(uint64 index, char value) {
+        if array_ptr == null {
+            local_stack_cache[index] = value
+            return
+        }
+        array_ptr[index] = value
+    }
+}

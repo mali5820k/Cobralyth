@@ -1,0 +1,1426 @@
+import "../token/token.clyth"
+import "../ast/ast.clyth"
+import "../lexer/lexer.clyth"
+import string
+
+struct ParserError {
+	Span Span
+	string Message
+
+    constructor(Span span, string message) { Span = span; Message = message }
+}
+
+string ParserErrorString(ParserError e) { // translated Go receiver method
+	return `${e.Span.Start.Line}:${e.Span.Start.Column}: ${e.Message}`
+}
+
+struct Parser {
+	Token[] tokens
+	int64 pos
+	ParserError[] errs
+}
+
+bool parser_stage2_trace_enabled() { return environment_value_copy("CLYTH_STAGE2_TRACE") != "" }
+void parser_stage2_trace(string text) { if parser_stage2_trace_enabled() { println("stage2-parser: "+text) } }
+
+struct NewResult {
+    Parser* parser
+    LexerError[] lexErrors
+}
+
+struct ParseResult {
+    Program* program
+    ParserError[] parseErrors
+    LexerError[] lexErrors
+}
+
+struct ExpressionParseResult {
+    Expr expression
+    ParserError[] parseErrors
+    LexerError[] lexErrors
+}
+
+ParserError[] append_parser_error(ParserError[] values, ParserError value) {
+    int64 n = values.length
+    ParserError[] replacement = array<ParserError>(n + 1)
+    int64 i = 0
+    while i < n { replacement[i] = values[i]; i += 1 }
+    replacement[n] = value
+    return replacement
+}
+
+Decl[] append_decl(Decl[] values, Decl value) {
+    int64 n = values.length
+    Decl[] replacement = array<Decl>(n + 1)
+    int64 i = 0
+    while i < n { replacement[i] = values[i]; i += 1 }
+    replacement[n] = value
+    return replacement
+}
+
+EnumMember*[] append_enum_member(EnumMember*[] values, EnumMember* value) {
+    int64 n = values.length
+    EnumMember*[] replacement = array<EnumMember*>(n + 1)
+    int64 i = 0
+    while i < n { replacement[i] = values[i]; i += 1 }
+    replacement[n] = value
+    return replacement
+}
+
+StructMember[] append_struct_member(StructMember[] values, StructMember value) {
+    int64 n = values.length
+    StructMember[] replacement = array<StructMember>(n + 1)
+    int64 i = 0
+    while i < n { replacement[i] = values[i]; i += 1 }
+    replacement[n] = value
+    return replacement
+}
+
+ProtocolMember*[] append_protocol_member(ProtocolMember*[] values, ProtocolMember* value) {
+    int64 n = values.length
+    ProtocolMember*[] replacement = array<ProtocolMember*>(n + 1)
+    int64 i = 0
+    while i < n { replacement[i] = values[i]; i += 1 }
+    replacement[n] = value
+    return replacement
+}
+
+GenericParameter[] append_generic_parameter(GenericParameter[] values, GenericParameter value) {
+    int64 n = values.length
+    GenericParameter[] replacement = array<GenericParameter>(n + 1)
+    int64 i = 0
+    while i < n { replacement[i] = values[i]; i += 1 }
+    replacement[n] = value
+    return replacement
+}
+
+TypeRef*[] append_type_ref(TypeRef*[] values, TypeRef* value) {
+    int64 n = values.length
+    TypeRef*[] replacement = array<TypeRef*>(n + 1)
+    int64 i = 0
+    while i < n { replacement[i] = values[i]; i += 1 }
+    replacement[n] = value
+    return replacement
+}
+
+Parameter*[] append_parameter(Parameter*[] values, Parameter* value) {
+    int64 n = values.length
+    Parameter*[] replacement = array<Parameter*>(n + 1)
+    int64 i = 0
+    while i < n { replacement[i] = values[i]; i += 1 }
+    replacement[n] = value
+    return replacement
+}
+
+Stmt[] append_stmt(Stmt[] values, Stmt value) {
+    int64 n = values.length
+    Stmt[] replacement = array<Stmt>(n + 1)
+    int64 i = 0
+    while i < n { replacement[i] = values[i]; i += 1 }
+    replacement[n] = value
+    return replacement
+}
+
+SwitchCase*[] append_switch_case(SwitchCase*[] values, SwitchCase* value) {
+    int64 n = values.length
+    SwitchCase*[] replacement = array<SwitchCase*>(n + 1)
+    int64 i = 0
+    while i < n { replacement[i] = values[i]; i += 1 }
+    replacement[n] = value
+    return replacement
+}
+
+Expr[] append_expr(Expr[] values, Expr value) {
+    int64 n = values.length
+    values = array<Expr>(values, n + 1)
+    values[n] = value
+    return values
+}
+
+ArrayDimension[] append_array_dimension(ArrayDimension[] values, ArrayDimension value) {
+    int64 n = values.length
+    ArrayDimension[] replacement = array<ArrayDimension>(n + 1)
+    int64 i = 0
+    while i < n { replacement[i] = values[i]; i += 1 }
+    replacement[n] = value
+    return replacement
+}
+
+NewResult ParserNew(string source) {
+    parser_stage2_trace("lex begin bytes="+`${bootstrap_string_length(source)}`)
+    LexResult lexed = Lex(source)
+    parser_stage2_trace("lex end tokens="+`${lexed.tokens.length}`+" errors="+`${lexed.errors.length}`)
+    Parser* p = new Parser()
+    parser_stage2_trace("parser allocation complete")
+    p.tokens = lexed.tokens
+    p.pos = 0
+    
+    NewResult result
+    result.parser = p
+    result.lexErrors = lexed.errors
+    return result
+}
+
+ParseResult Parse(string source) {
+    parser_stage2_trace("parse enter")
+    NewResult created = ParserNew(source)
+    parser_stage2_trace("program parse begin")
+    Program* program = ParseProgram(created.parser)
+    parser_stage2_trace("program parse end pos="+`${created.parser.pos}`+" errors="+`${created.parser.errs.length}`)
+    ParseResult result
+    result.program = program
+    result.parseErrors = ParserErrors(created.parser)
+    result.lexErrors = created.lexErrors
+    return result
+}
+
+// ParseExpression parses one standalone Clyth expression. It is used by
+// compiler-owned surfaces such as interpolated-string bodies so those bodies
+// share the canonical Pratt grammar instead of maintaining a second parser.
+ExpressionParseResult ParseExpression(string source) {
+    NewResult created = ParserNew(source)
+    Parser* p = created.parser
+    skipNewlines(p)
+    Expr expression = parseExpression(p, 1)
+    skipNewlines(p)
+    if !at(p, Kind.EOF) {
+        errorAt(p, current(p), "unexpected token after expression")
+    }
+    ExpressionParseResult result
+    result.expression = expression
+    result.parseErrors = ParserErrors(p)
+    result.lexErrors = created.lexErrors
+    return result
+}
+
+ParserError[] ParserErrors(Parser* p) {
+    return p.errs
+}
+Token current(Parser* p) {
+	if p.pos >= p.tokens.length {
+		return p.tokens[p.tokens.length-1]
+	}
+	return p.tokens[p.pos]
+}
+Token previous(Parser* p) { // translated Go receiver method
+	if p.pos == 0 {
+		return current(p)
+	}
+	return p.tokens[p.pos-1]
+}
+Token peek(Parser* p, int64 n) { // translated Go receiver method
+	auto i = p.pos + n
+	if i >= p.tokens.length {
+		return p.tokens[p.tokens.length-1]
+	}
+	return p.tokens[i]
+}
+bool isNameKind(Kind k) {
+	return k == Kind.Identifier || k == Kind.Auto
+}
+bool at(Parser* p, Kind kind) {
+    return current(p).Kind == kind
+}
+Token advance(Parser* p) {
+	auto t = current(p)
+	if t.Kind != Kind.EOF {
+		p.pos++
+	}
+	return t
+}
+bool match(Parser* p, Kind first, Kind second = Kind.Illegal) {
+    if at(p, first) { advance(p); return true }
+    if second != Kind.Illegal && at(p, second) { advance(p); return true }
+    return false
+}
+Token expect(Parser* p, Kind kind, string msg) { // translated Go receiver method
+	if at(p, kind) {
+		return advance(p)
+	}
+	errorAt(p, current(p), msg)
+	return current(p)
+}
+void errorAt(Parser* p, Token t, string msg) { // translated Go receiver method
+	p.errs = append_parser_error(p.errs, ParserError(t.Span, msg))
+}
+void skipNewlines(Parser* p) { // translated Go receiver method
+	while match(p, Kind.Newline, Kind.Semicolon) {
+	}
+}
+void consumeStmtEnd(Parser* p) { // translated Go receiver method
+	while match(p, Kind.Semicolon, Kind.Newline) {
+	}
+}
+void skipInlineNewlines(Parser* p) { // translated Go receiver method
+	while match(p, Kind.Newline) {
+	}
+}
+
+Program* ParseProgram(Parser* p) { // translated Go receiver method
+	skipNewlines(p)
+	auto start = current(p).Span
+	auto program = bootstrap_make_Program()
+	while !at(p, Kind.EOF) {
+		auto before = p.pos
+        if parser_stage2_trace_enabled() {
+            Token trace_token = current(p)
+            parser_stage2_trace("declaration begin pos="+`${before}`+" line="+`${trace_token.Span.Start.Line}`+" token="+trace_token.Lexeme)
+        }
+        Decl d = parseDeclaration(p)
+        if parser_stage2_trace_enabled() { parser_stage2_trace("declaration end pos="+`${p.pos}`+" kind="+`${d.kind}`) }
+        if d.kind != 0 {
+            program.Declarations = append_decl(program.Declarations, d)
+        }
+		if p.pos == before {
+			errorAt(p, current(p), "expected declaration")
+			advance(p)
+		}
+		skipNewlines(p)
+	}
+	auto end = current(p).Span
+	program.SourceSpan = Merge(start, end)
+	return program
+}
+
+Decl parseDeclaration(Parser* p) { // translated Go receiver method
+	skipNewlines(p)
+	switch current(p).Kind { // TODO lower switch to if/else
+	case Kind.Hash:
+		return parse_compiler_directive_decl(p)
+	case Kind.Import:
+		return parseImport(p)
+	case Kind.Struct:
+		return parseStruct(p)
+	case Kind.Protocol:
+		return parseProtocol(p)
+	case Kind.Enum:
+		return parseEnum(p)
+	case Kind.Extern:
+		return parseExtern(p)
+	}
+	return parseTypedTopLevel(p)
+}
+
+struct MeccConfigFieldsResult { string property; bool value; Span span }
+
+MeccConfigFieldsResult parse_mecc_config_fields(Parser* p) {
+	auto start = expect(p, Kind.Hash, "expected '#' for compiler directive").Span
+	auto name = expect(p, Kind.Identifier, "expected compiler directive name after '#'")
+	if name.Lexeme != "MECC_config" {
+		errorAt(p, name, "unknown compiler directive '#"+name.Lexeme+"'")
+	}
+	expect(p, Kind.Dot, "expected '.' after #MECC_config")
+	auto property = expect(p, Kind.Identifier, "expected MECC configuration property")
+	expect(p, Kind.Assign, "expected '=' after MECC configuration property")
+	auto value = false
+	if match(p, Kind.True) {
+		value = true
+	} else if match(p, Kind.False) {
+		value = false
+	} else {
+		errorAt(p, current(p), "MECC configuration values must be compile-time bool literals")
+		if !at(p, Kind.Newline) && !at(p, Kind.Semicolon) && !at(p, Kind.EOF) && !at(p, Kind.RBrace) {
+			advance(p)
+		}
+	}
+	auto end = previous(p).Span
+	consumeStmtEnd(p)
+	MeccConfigFieldsResult result
+	result.property = property.Lexeme
+	result.value = value
+	result.span = Merge(start, end)
+	return result
+}
+
+Decl parse_compiler_directive_decl(Parser* p) { // translated Go receiver method
+	if peek(p, 1).Kind == Kind.Identifier && peek(p, 1).Lexeme == "ErrorType" {
+		auto start = expect(p, Kind.Hash, "expected '#' for compiler directive").Span
+		advance(p) // ErrorType
+		auto name = expect(p, Kind.Identifier, "expected error type name after #ErrorType")
+		auto end = name.Span
+		consumeStmtEnd(p)
+		return bootstrap_make_ErrorTypeDirectiveDecl_Name_SourceSpan(name.Lexeme, Merge(start, end))
+	}
+	return parse_mecc_config_decl(p)
+}
+
+Decl parse_mecc_config_decl(Parser* p) { // translated Go receiver method
+	MeccConfigFieldsResult config = parse_mecc_config_fields(p)
+	return bootstrap_make_MeccConfigDirectiveDecl_Property_Value_SourceSpan(config.property, config.value, config.span)
+}
+
+Stmt parse_mecc_config_stmt(Parser* p) { // translated Go receiver method
+	MeccConfigFieldsResult config = parse_mecc_config_fields(p)
+	return bootstrap_make_MeccConfigDirectiveStmt_Property_Value_SourceSpan(config.property, config.value, config.span)
+}
+
+Decl parseImport(Parser* p) { // translated Go receiver method
+	auto start = advance(p).Span
+	skipInlineNewlines(p)
+	if at(p, Kind.String) {
+		auto t = advance(p)
+		auto target = unquote(t.Lexeme)
+		auto alias = ""
+		if match(p, Kind.As) {
+			alias = expect(p, Kind.Identifier, "expected import alias").Lexeme
+		}
+		auto end = previous(p).Span
+		consumeStmtEnd(p)
+		return bootstrap_make_ImportDecl_Kind_Target_Alias_SourceSpan("file", target, alias, Merge(start, end))
+	}
+	if !at(p, Kind.Identifier) {
+		errorAt(p, current(p), "expected module name or quoted source path after import")
+		Decl empty
+		return empty
+	}
+	string b = ""
+	b = bootstrap_string_concat(b, advance(p).Lexeme)
+	while at(p, Kind.Minus)  {
+		b = bootstrap_string_concat(b, "-")
+		advance(p)
+		if !at(p, Kind.Identifier) {
+			errorAt(p, current(p), "expected module-name segment after '-'")
+			break
+		}
+		b = bootstrap_string_concat(b, advance(p).Lexeme)
+	}
+	string alias = ""
+	if match(p, Kind.As) {
+		alias = expect(p, Kind.Identifier, "expected import alias").Lexeme
+	}
+	Span end = previous(p).Span
+	consumeStmtEnd(p)
+	return bootstrap_make_ImportDecl_Kind_Target_Alias_SourceSpan("module", b, alias, Merge(start, end))
+}
+
+Decl parseEnum(Parser* p) { // translated Go receiver method
+	auto start = advance(p).Span
+	auto name = expect(p, Kind.Identifier, "expected enum name")
+	expect(p, Kind.LBrace, "expected '{' after enum name")
+	skipNewlines(p)
+	EnumMember*[] members
+	while !at(p, Kind.RBrace) && !at(p, Kind.EOF)  {
+		auto member_name = expect(p, Kind.Identifier, "expected enum member name")
+		Expr value
+		if match(p, Kind.Assign) {
+			value = parseExpression(p, precAssignment)
+		}
+		auto end = previous(p).Span
+		members = append_enum_member(members, bootstrap_make_EnumMember_Name_Value_SourceSpan(member_name.Lexeme, value, Merge(member_name.Span, end)))
+		if !match(p, Kind.Comma) {
+			consumeStmtEnd(p)
+		}
+		skipNewlines(p)
+	}
+	Span end = expect(p, Kind.RBrace, "expected '}' after enum").Span
+	consumeStmtEnd(p)
+	return bootstrap_make_EnumDecl_Name_Members_SourceSpan(name.Lexeme, members, Merge(start, end))
+}
+
+Decl parseExtern(Parser* p) { // translated Go receiver method
+	auto start = advance(p).Span
+	auto abi = ""
+	if at(p, Kind.Identifier) && current(p).Lexeme == "C" {
+		abi = advance(p).Lexeme
+	}
+	auto t = parseTypeRef(p)
+	if t == null {
+		errorAt(p, current(p), "expected extern return type")
+		synchronizeDecl(p)
+		Decl empty
+		return empty
+	}
+	auto name = expect(p, Kind.Identifier, "expected extern function name")
+	auto params = parseParameters(p)
+	auto end = previous(p).Span
+	consumeStmtEnd(p)
+	return bootstrap_make_FunctionDecl_Name_ReturnType_Parameters_Extern_ABI_SourceSpan(name.Lexeme, t, params, true, abi, Merge(start, end))
+}
+
+Decl parseStruct(Parser* p) { // translated Go receiver method
+	auto start = advance(p).Span
+	auto name = expect(p, Kind.Identifier, "expected struct name")
+	auto gens = parseGenericParameters(p)
+	TypeRef*[] bases
+	if match(p, Kind.Colon) {
+		while true {
+			TypeRef* t = parseTypeRef(p)
+			if t != null {
+				bases = append_type_ref(bases, t)
+			} else {
+				break
+			}
+			if !match(p, Kind.Comma) {
+				break
+			}
+		}
+	}
+	expect(p, Kind.LBrace, "expected '{' after struct declaration")
+	auto members = parseStructMembers(p)
+	auto end = expect(p, Kind.RBrace, "expected '}' after struct").Span
+	consumeStmtEnd(p)
+	return bootstrap_make_StructDecl_Name_GenericParameters_Bases_Members_SourceSpan(name.Lexeme, gens, bases, members, Merge(start, end))
+}
+
+Decl parseProtocol(Parser* p) { // translated Go receiver method
+	auto start = advance(p).Span
+	auto first = expect(p, Kind.Identifier, "expected protocol self type or name")
+	auto second = expect(p, Kind.Identifier, "expected protocol name")
+	auto gens = parseGenericParameters(p)
+	expect(p, Kind.LBrace, "expected '{' after protocol name")
+	ProtocolMember*[] members
+	skipNewlines(p)
+	while !at(p, Kind.RBrace) && !at(p, Kind.EOF)  {
+		auto mstart = current(p).Span
+		auto rt = parseTypeRef(p)
+		if rt == null {
+			errorAt(p, current(p), "expected protocol member return type")
+			synchronizeStmt(p)
+			continue
+		}
+		auto name = expect(p, Kind.Identifier, "expected protocol member name")
+		auto params = parseParameters(p)
+		auto end = previous(p).Span
+		consumeStmtEnd(p)
+		members = append_protocol_member(members, bootstrap_make_ProtocolMember_Name_ReturnType_Parameters_SourceSpan(name.Lexeme, rt, params, Merge(mstart, end)))
+		skipNewlines(p)
+	}
+	Span end = expect(p, Kind.RBrace, "expected '}' after protocol").Span
+	consumeStmtEnd(p)
+	return bootstrap_make_ProtocolDecl_SelfType_Name_GenericParameters_Members_SourceSpan(first.Lexeme, second.Lexeme, gens, members, Merge(start, end))
+}
+
+Decl parseTypedTopLevel(Parser* p) { // translated Go receiver method
+	auto startPos = p.pos
+	auto start = current(p).Span
+	auto t = parseTypeRef(p)
+	if t == null {
+		Decl empty
+		return empty
+	}
+	// Detached method block: Type { ... }
+	if at(p, Kind.LBrace) {
+		advance(p)
+		auto members = parseStructMembers(p)
+		auto end = expect(p, Kind.RBrace, "expected '}' after method block").Span
+		consumeStmtEnd(p)
+		return bootstrap_make_MethodBlockDecl_Receiver_Members_SourceSpan(t, members, Merge(start, end))
+	}
+	if !isNameKind(current(p).Kind) {
+		p.pos = startPos
+		Decl empty
+		return empty
+	}
+	auto first = advance(p)
+	auto receiver = ""
+	auto name = first.Lexeme
+	if match(p, Kind.Dot) {
+		receiver = first.Lexeme
+		name = expect(p, Kind.Identifier, "expected method name after '.'").Lexeme
+	}
+	if at(p, Kind.LParen) {
+		auto params = parseParameters(p)
+		BlockStmt* body = null
+		if at(p, Kind.LBrace) {
+			body = parseBlock(p)
+		} else {
+			consumeStmtEnd(p)
+		}
+		Span end = previous(p).Span
+		return bootstrap_make_FunctionDecl_Name_Receiver_ReturnType_Parameters_Body_SourceSpan(name, receiver, t, params, body, Merge(start, end))
+	}
+	if receiver != "" {
+		errorAt(p, current(p), "detached method declaration requires parameter list")
+		synchronizeDecl(p)
+		Decl empty
+		return empty
+	}
+	Expr init
+	if match(p, Kind.Assign) {
+		init = parseExpression(p, precAssignment)
+	}
+	Span end = previous(p).Span
+	consumeStmtEnd(p)
+	return bootstrap_make_GlobalVarDecl_Name_Type_Initializer_SourceSpan(name, t, init, Merge(start, end))
+}
+
+StructMember[] parseStructMembers(Parser* p) { // translated Go receiver method
+	StructMember[] out
+	skipNewlines(p)
+	while !at(p, Kind.RBrace) && !at(p, Kind.EOF)  {
+		auto vis = "default"
+		if match(p, Kind.Private) {
+			vis = "private"
+		} else if match(p, Kind.Public) {
+			vis = "public"
+		}
+		auto start = current(p).Span
+		if match(p, Kind.Constructor) {
+			auto params = parseParameters(p)
+			auto body = parseBlock(p)
+			out = append_struct_member(out, bootstrap_make_ConstructorMember_ConstructorDecl(bootstrap_make_ConstructorDecl_Parameters_Body_Visibility_SourceSpan(params, body, vis, Merge(start, body.SourceSpan))))
+			skipNewlines(p)
+			continue
+		}
+		if match(p, Kind.OnFree) {
+			if at(p, Kind.LParen) {
+				Parameter*[] ignored = parseParameters(p)
+			}
+			BlockStmt* body = parseBlock(p)
+			out = append_struct_member(out, bootstrap_make_DestructorMember_DestructorDecl(bootstrap_make_DestructorDecl_Body_Visibility_SourceSpan(body, vis, Merge(start, body.SourceSpan))))
+			skipNewlines(p)
+			continue
+		}
+		auto t = parseTypeRef(p)
+		if t == null {
+			errorAt(p, current(p), "expected field, method, constructor, or on_free declaration")
+			synchronizeStmt(p)
+			continue
+		}
+		auto name = expect(p, Kind.Identifier, "expected field or method name")
+		if at(p, Kind.LParen) {
+			Parameter*[] params = parseParameters(p)
+			BlockStmt* body = parseBlock(p)
+			auto f = bootstrap_make_FunctionDecl_Name_ReturnType_Parameters_Body_Visibility_SourceSpan(name.Lexeme, t, params, body, vis, Merge(start, body.SourceSpan))
+			out = append_struct_member(out, bootstrap_make_MethodDecl_FunctionDecl(f))
+		} else {
+			Expr init
+			if match(p, Kind.Assign) {
+				init = parseExpression(p, precAssignment)
+			}
+			auto end = previous(p).Span
+			if match(p, Kind.Comma) {
+				end = previous(p).Span
+			}
+			consumeStmtEnd(p)
+			out = append_struct_member(out, bootstrap_make_FieldDecl_Name_Type_Visibility_Initializer_SourceSpan(name.Lexeme, t, vis, init, Merge(start, end)))
+		}
+		skipNewlines(p)
+	}
+	return out
+}
+
+GenericParameter[] parseGenericParameters(Parser* p) { // translated Go receiver method
+	if !match(p, Kind.Less) {
+		GenericParameter[] empty
+		return empty
+	}
+	GenericParameter[] out
+	while !at(p, Kind.Greater) && !at(p, Kind.EOF)  {
+		auto t = expect(p, Kind.Identifier, "expected generic parameter name")
+		out = append_generic_parameter(out, bootstrap_make_GenericParameter_Name_SourceSpan(t.Lexeme, t.Span))
+		if !match(p, Kind.Comma) {
+			break
+		}
+	}
+	expect(p, Kind.Greater, "expected '>' after generic parameters")
+	return out
+}
+
+TypeRef* parseTypeRef(Parser* p) { // translated Go receiver method
+	auto startPos = p.pos
+	skipInlineNewlines(p)
+	auto start = current(p).Span
+	auto isConst = false
+	if match(p, Kind.Const) {
+		isConst = true
+	}
+	if !isNameKind(current(p).Kind) {
+		p.pos = startPos
+		return null
+	}
+	auto nameTok = advance(p)
+	auto t = bootstrap_make_TypeRef_Name_Const_SourceSpan(nameTok.Lexeme, isConst, Merge(start, nameTok.Span))
+	if match(p, Kind.Less) {
+		while !at(p, Kind.Greater) && !at(p, Kind.EOF)  {
+			auto arg = parseTypeRef(p)
+			if arg == null {
+				errorAt(p, current(p), "expected generic type argument")
+				break
+			}
+			t.GenericArgs = append_type_ref(t.GenericArgs, arg)
+			if !match(p, Kind.Comma) {
+				break
+			}
+		}
+		auto end = expect(p, Kind.Greater, "expected '>' after generic type arguments").Span
+		t.SourceSpan = Merge(start, end)
+	}
+	while match(p, Kind.Star)  {
+		t.PointerDepth++
+		t.SourceSpan = Merge(start, previous(p).Span)
+	}
+	// Callable syntax is legal only here, in a type context.
+	if at(p, Kind.LParen) {
+		auto callStart = p.pos
+		advance(p)
+		TypeRef*[] params
+		auto variadic = false
+		skipInlineNewlines(p)
+		auto valid = true
+		if !at(p, Kind.RParen) {
+			while true {
+				if match(p, Kind.Ellipsis) {
+					variadic = true
+					break
+				}
+				auto pt = parseTypeRef(p)
+				if pt == null {
+					valid = false
+					break
+				}
+				params = append_type_ref(params, pt)
+				skipInlineNewlines(p)
+				if match(p, Kind.Ellipsis) {
+					variadic = true
+					break
+				}
+				if !match(p, Kind.Comma) {
+					break
+				}
+				skipInlineNewlines(p)
+			}
+		}
+		if valid && at(p, Kind.RParen) {
+			Span end = advance(p).Span
+			TypeRef* retCopy = new TypeRef()
+			retCopy.Name = t.Name
+			retCopy.GenericArgs = t.GenericArgs
+			retCopy.Const = t.Const
+			retCopy.PointerDepth = t.PointerDepth
+			retCopy.Arrays = t.Arrays
+			retCopy.Callable = null
+			retCopy.SourceSpan = t.SourceSpan
+			t = bootstrap_make_TypeRef_Callable_SourceSpan(bootstrap_make_CallableType_Return_Parameters_Variadic(retCopy, params, variadic), Merge(start, end))
+		} else {
+			p.pos = callStart
+		}
+	}
+	while match(p, Kind.LBracket)  {
+		auto dimStart = previous(p).Span
+		auto d = bootstrap_make_ArrayDimension_Dynamic_SourceSpan(true, dimStart)
+		if !at(p, Kind.RBracket) {
+			d.Dynamic = false
+			d.Size = parseExpression(p, precAssignment)
+		}
+		Span end = expect(p, Kind.RBracket, "expected ']' in array type").Span
+		d.SourceSpan = Merge(dimStart, end)
+		t.Arrays = append_array_dimension(t.Arrays, d)
+		t.SourceSpan = Merge(start, end)
+	}
+	return t
+}
+
+Parameter*[] parseParameters(Parser* p) { // translated Go receiver method
+	expect(p, Kind.LParen, "expected '('")
+	skipInlineNewlines(p)
+	Parameter*[] out
+	auto seen_default = false
+	if match(p, Kind.RParen) {
+		return out
+	}
+	while !at(p, Kind.EOF) {
+		auto start = current(p).Span
+		if match(p, Kind.Ellipsis) {
+			out = append_parameter(out, bootstrap_make_Parameter_Variadic_SourceSpan(true, previous(p).Span))
+			skipInlineNewlines(p)
+			break
+		}
+		auto t = parseTypeRef(p)
+		if t == null {
+			errorAt(p, current(p), "expected parameter type")
+			synchronizeTo(p, Kind.Comma, Kind.RParen)
+			if match(p, Kind.Comma) {
+				continue
+			}
+			break
+		}
+		auto variadic = match(p, Kind.Ellipsis)
+		auto name = ""
+		if isNameKind(current(p).Kind) {
+			name = advance(p).Lexeme
+		}
+		Expr default_value
+		if match(p, Kind.Assign) {
+			if variadic {
+				errorAt(p, previous(p), "variadic parameters cannot have default values")
+			}
+			seen_default = true
+			default_value = parseExpression(p, precAssignment)
+		} else if seen_default && !variadic {
+			errorAt(p, current(p), "required parameters cannot follow defaulted parameters")
+		}
+		auto end = previous(p).Span
+		out = append_parameter(out, bootstrap_make_Parameter_Name_Type_DefaultValue_Variadic_SourceSpan(name, t, default_value, variadic, Merge(start, end)))
+		if variadic {
+			skipInlineNewlines(p)
+			break
+		}
+		skipInlineNewlines(p)
+		if !match(p, Kind.Comma) {
+			break
+		}
+		skipInlineNewlines(p)
+	}
+	expect(p, Kind.RParen, "expected ')' after parameters")
+	return out
+}
+
+BlockStmt* parseBlock(Parser* p) { // translated Go receiver method
+	auto start = expect(p, Kind.LBrace, "expected '{'").Span
+	skipNewlines(p)
+	Stmt[] stmts
+	while !at(p, Kind.RBrace) && !at(p, Kind.EOF)  {
+		auto before = p.pos
+		auto s = parseStatement(p)
+		if s.kind != 0 {
+			stmts = append_stmt(stmts, s)
+		}
+		if p.pos == before {
+			errorAt(p, current(p), "expected statement")
+			advance(p)
+		}
+		skipNewlines(p)
+	}
+	auto end = expect(p, Kind.RBrace, "expected '}'").Span
+	return bootstrap_make_BlockStmt_Statements_SourceSpan(stmts, Merge(start, end))
+}
+
+Stmt parseBreakStatement(Parser* p) {
+    Token token = advance(p)
+    consumeStmtEnd(p)
+    return bootstrap_make_BreakStmt_SourceSpan(token.Span)
+}
+
+Stmt parseContinueStatement(Parser* p) {
+    Token token = advance(p)
+    consumeStmtEnd(p)
+    return bootstrap_make_ContinueStmt_SourceSpan(token.Span)
+}
+
+
+bool starts_call_expression_statement(Parser* p) {
+    if p == null || p.pos < 0 || p.pos >= p.tokens.length { return false }
+    Kind first = p.tokens[p.pos].Kind
+    if first != Kind.Identifier && first != Kind.This { return false }
+    int64 open = p.pos + 1
+    if open >= p.tokens.length || p.tokens[open].Kind != Kind.LParen { return false }
+    int64 depth = 0
+    int64 index = open
+    while index < p.tokens.length {
+        Kind kind = p.tokens[index].Kind
+        if kind == Kind.LParen { depth += 1 }
+        else if kind == Kind.RParen {
+            depth -= 1
+            if depth == 0 {
+                int64 after = index + 1
+                while after < p.tokens.length && p.tokens[after].Kind == Kind.Newline { after += 1 }
+                if after < p.tokens.length && isNameKind(p.tokens[after].Kind) { return false }
+                return true
+            }
+        }
+        index += 1
+    }
+    return true
+}
+
+Stmt parseVarOrExprStatement(Parser* p) {
+    int64 save = p.pos
+    Span start = current(p).Span
+    if starts_call_expression_statement(p) {
+        Expr direct_expression = parseExpression(p, precAssignment)
+        if direct_expression.kind == 0 { synchronizeStmt(p); Stmt empty; return empty }
+        Span direct_end = expr_span(direct_expression)
+        consumeStmtEnd(p)
+        ExprStmt* direct_stmt = new ExprStmt()
+        direct_stmt.Expression = direct_expression
+        direct_stmt.SourceSpan = Merge(start, direct_end)
+        Stmt wrapped_direct
+        wrapped_direct.kind = STMT_EXPR
+        wrapped_direct.expr_stmt = direct_stmt
+        return wrapped_direct
+    }
+    TypeRef* type_ref = parseTypeRef(p)
+    if type_ref != null && isNameKind(current(p).Kind) {
+        Token name = advance(p)
+        Expr initializer
+        if match(p, Kind.Assign) { initializer = parseExpression(p, precAssignment) }
+        Span end = previous(p).Span
+        consumeStmtEnd(p)
+        return bootstrap_make_VarDeclStmt_Name_Type_Initializer_SourceSpan(name.Lexeme, type_ref, initializer, Merge(start, end))
+    }
+    p.pos = save
+    Expr expression = parseExpression(p, precAssignment)
+    if expression.kind == 0 {
+        synchronizeStmt(p)
+        Stmt empty
+        return empty
+    }
+    Span end = expr_span(expression)
+    consumeStmtEnd(p)
+    return bootstrap_make_ExprStmt_Expression_SourceSpan(expression, Merge(start, end))
+}
+
+Stmt parseStatement(Parser* p) { // translated Go receiver method
+    skipNewlines(p)
+    Kind kind = current(p).Kind
+    if kind == Kind.Hash { return parse_mecc_config_stmt(p) }
+    if kind == Kind.LBrace { return wrap_block_stmt(parseBlock(p)) }
+    if kind == Kind.Return { return parseReturn(p) }
+    if kind == Kind.If { return parseIf(p) }
+    if kind == Kind.While { return parseWhile(p) }
+    if kind == Kind.For { return parseFor(p) }
+    if kind == Kind.Switch { return parseSwitch(p) }
+    if kind == Kind.Break { return parseBreakStatement(p) }
+    if kind == Kind.Continue { return parseContinueStatement(p) }
+    return parseVarOrExprStatement(p)
+}
+
+Stmt parseReturn(Parser* p) { // translated Go receiver method
+	auto start = advance(p).Span
+	if at(p, Kind.Newline) || at(p, Kind.Semicolon) || at(p, Kind.RBrace) {
+		consumeStmtEnd(p)
+		return bootstrap_make_ReturnStmt_SourceSpan(start)
+	}
+	auto v = parseExpression(p, precAssignment)
+	auto end = expr_span(v)
+	consumeStmtEnd(p)
+	return bootstrap_make_ReturnStmt_Value_SourceSpan(v, Merge(start, end))
+}
+Stmt parseIf(Parser* p) { // translated Go receiver method
+	auto start = advance(p).Span
+	Expr c
+	if match(p, Kind.LParen) {
+		skipInlineNewlines(p)
+		c = parseExpression(p, precAssignment)
+		skipInlineNewlines(p)
+		expect(p, Kind.RParen, "expected ')' after if condition")
+	} else {
+		c = parseExpression(p, precAssignment)
+	}
+	skipNewlines(p)
+	auto then = parseStatement(p)
+	skipNewlines(p)
+	Stmt other
+	if match(p, Kind.Else) {
+		skipNewlines(p)
+		other = parseStatement(p)
+	}
+	auto end = stmt_span(then)
+	if other.kind != 0 {
+		end = stmt_span(other)
+	}
+	return bootstrap_make_IfStmt_Condition_Then_Else_SourceSpan(c, then, other, Merge(start, end))
+}
+Stmt parseWhile(Parser* p) { // translated Go receiver method
+	auto start = advance(p).Span
+	Expr c
+	if match(p, Kind.LParen) {
+		c = parseExpression(p, precAssignment)
+		expect(p, Kind.RParen, "expected ')' after while condition")
+	} else {
+		c = parseExpression(p, precAssignment)
+	}
+	skipNewlines(p)
+	auto body = parseStatement(p)
+	return bootstrap_make_WhileStmt_Condition_Body_SourceSpan(c, body, Merge(start, stmt_span(body)))
+}
+Stmt parseFor(Parser* p) { // translated Go receiver method
+	auto start = advance(p).Span
+	skipInlineNewlines(p)
+	auto paren = match(p, Kind.LParen)
+	skipInlineNewlines(p)
+	Stmt init
+	Expr cond
+	Expr post
+	if !at(p, Kind.Semicolon) {
+		auto save = p.pos
+		auto s = current(p).Span
+		TypeRef* t = parseTypeRef(p)
+	if t != null && isNameKind(current(p).Kind) {
+			auto n = advance(p)
+			Expr v
+			if match(p, Kind.Assign) {
+				v = parseExpression(p, precAssignment)
+			}
+			init = bootstrap_make_VarDeclStmt_Name_Type_Initializer_SourceSpan(n.Lexeme, t, v, Merge(s, previous(p).Span))
+		} else {
+			p.pos = save
+			auto e = parseExpression(p, precAssignment)
+			init = bootstrap_make_ExprStmt_Expression_SourceSpan(e, expr_span(e))
+		}
+	}
+	expect(p, Kind.Semicolon, "expected ';' after for initializer")
+	skipInlineNewlines(p)
+	if !at(p, Kind.Semicolon) {
+		cond = parseExpression(p, precAssignment)
+	}
+	expect(p, Kind.Semicolon, "expected ';' after for condition")
+	skipInlineNewlines(p)
+	if !(paren && at(p, Kind.RParen)) && !at(p, Kind.LBrace) {
+		post = parseExpression(p, precAssignment)
+	}
+	if paren {
+		expect(p, Kind.RParen, "expected ')' after for clauses")
+	}
+	skipNewlines(p)
+	auto body = parseStatement(p)
+	return bootstrap_make_ForStmt_Init_Condition_Post_Body_SourceSpan(init, cond, post, body, Merge(start, stmt_span(body)))
+}
+
+Stmt parseSwitch(Parser* p) { // translated Go receiver method
+	auto start = advance(p).Span
+	Expr value
+	if match(p, Kind.LParen) {
+		value = parseExpression(p, precAssignment)
+		expect(p, Kind.RParen, "expected ')' after switch expression")
+	} else {
+		value = parseExpression(p, precAssignment)
+	}
+	skipNewlines(p)
+	expect(p, Kind.LBrace, "expected '{' after switch expression")
+	skipNewlines(p)
+	SwitchCase*[] cases
+	while !at(p, Kind.RBrace) && !at(p, Kind.EOF)  {
+		auto case_start = current(p).Span
+		auto item = bootstrap_make_SwitchCase()
+		if match(p, Kind.Case) {
+			item.Value = parseExpression(p, precAssignment)
+			expect(p, Kind.Colon, "expected ':' after case value")
+		} else if match(p, Kind.Default) {
+			item.Default = true
+			expect(p, Kind.Colon, "expected ':' after default")
+		} else {
+			errorAt(p, current(p), "expected case or default in switch")
+			advance(p)
+			continue
+		}
+		skipNewlines(p)
+		while !at(p, Kind.Case) && !at(p, Kind.Default) && !at(p, Kind.RBrace) && !at(p, Kind.EOF)  {
+			auto before = p.pos
+			auto statement = parseStatement(p)
+			if statement.kind != 0 {
+				item.Statements = append_stmt(item.Statements, statement)
+			}
+			if p.pos == before {
+				advance(p)
+			}
+			skipNewlines(p)
+		}
+		auto end = previous(p).Span
+		item.SourceSpan = Merge(case_start, end)
+		cases = append_switch_case(cases, item)
+	}
+	Span end = expect(p, Kind.RBrace, "expected '}' after switch").Span
+	return bootstrap_make_SwitchStmt_Value_Cases_SourceSpan(value, cases, Merge(start, end))
+}
+
+// Go constants (manual nominal lowering follows):
+int64 precAssignment = 1
+int64 precOr = 2
+int64 precAnd = 3
+int64 precEquality = 4
+int64 precCompare = 5
+int64 precAdd = 6
+int64 precMul = 7
+int64 precPrefix = 8
+int64 precPostfix = 9
+
+struct PrecedenceResult { int64 precedence; bool rightAssociative }
+
+PrecedenceResult precedenceResult(int64 p, bool r) {
+    PrecedenceResult result
+    result.precedence = p
+    result.rightAssociative = r
+    return result
+}
+
+PrecedenceResult infixPrecedence(Kind k) {
+    if k == Kind.Assign || k == Kind.PlusAssign || k == Kind.MinusAssign || k == Kind.StarAssign || k == Kind.SlashAssign || k == Kind.PercentAssign {
+        return precedenceResult(precAssignment, true)
+    }
+    if k == Kind.OrOr { return precedenceResult(precOr, false) }
+    if k == Kind.AndAnd { return precedenceResult(precAnd, false) }
+    if k == Kind.Equal || k == Kind.NotEqual { return precedenceResult(precEquality, false) }
+    if k == Kind.Less || k == Kind.LessEqual || k == Kind.Greater || k == Kind.GreaterEqual { return precedenceResult(precCompare, false) }
+    if k == Kind.Plus || k == Kind.Minus { return precedenceResult(precAdd, false) }
+    if k == Kind.Star || k == Kind.Slash || k == Kind.Percent { return precedenceResult(precMul, false) }
+    return precedenceResult(0, false)
+}
+
+bool isAssignment(Kind k) {
+    return k == Kind.Assign || k == Kind.PlusAssign || k == Kind.MinusAssign || k == Kind.StarAssign || k == Kind.SlashAssign || k == Kind.PercentAssign
+}
+
+Expr parseExpression(Parser* p, int64 minPrec) { // translated Go receiver method
+	auto left = parsePrefix(p)
+	if left.kind == 0 {
+		Expr empty
+		return empty
+	}
+	left = parsePostfix(p, left)
+	while true {
+		if at(p, Kind.Newline) || at(p, Kind.Semicolon) || at(p, Kind.Comma) || at(p, Kind.RParen) || at(p, Kind.RBracket) || at(p, Kind.RBrace) || at(p, Kind.FatArrow) {
+			break
+		}
+        PrecedenceResult precedence = infixPrecedence(current(p).Kind)
+        int64 prec = precedence.precedence
+        bool rightAssoc = precedence.rightAssociative
+        if prec < minPrec || prec == 0 {
+			break
+		}
+		auto op = advance(p)
+		auto next = prec + 1
+		if rightAssoc {
+			next = prec
+		}
+		auto right = parseExpression(p, next)
+		if right.kind == 0 {
+			errorAt(p, current(p), "expected expression after operator")
+			break
+		}
+		auto sp = Merge(expr_span(left), expr_span(right))
+		if isAssignment(op.Kind) {
+			left = bootstrap_make_AssignExpr_Operator_Target_Value_SourceSpan(op.Lexeme, left, right, sp)
+		} else {
+			left = bootstrap_make_BinaryExpr_Operator_Left_Right_SourceSpan(op.Lexeme, left, right, sp)
+		}
+	}
+	return left
+}
+
+Expr parseUnaryPrefix(Parser* p) {
+    Token op = advance(p)
+    Expr value = parseExpression(p, precPrefix)
+    if value.kind == 0 { Expr empty; return empty }
+    return bootstrap_make_UnaryExpr_Operator_Operand_Prefix_SourceSpan(op.Lexeme, value, true, Merge(op.Span, expr_span(value)))
+}
+
+Expr parseNewPrefix(Parser* p) {
+    Span start = advance(p).Span
+    Expr value = parseExpression(p, precPrefix)
+    if value.kind == 0 { Expr empty; return empty }
+    return bootstrap_make_NewExpr_Value_SourceSpan(value, Merge(start, expr_span(value)))
+}
+
+Expr parseGroupedPrefix(Parser* p) {
+    Expr lambda = tryParseLambda(p)
+    if lambda.kind != 0 { return lambda }
+    advance(p)
+    skipInlineNewlines(p)
+    Expr expression = parseExpression(p, precAssignment)
+    skipInlineNewlines(p)
+    expect(p, Kind.RParen, "expected ')' after expression")
+    return expression
+}
+
+Expr parsePrefix(Parser* p) { // translated Go receiver method
+    Token token = current(p)
+    Kind kind = token.Kind
+    if kind == Kind.Identifier || kind == Kind.This {
+        if kind == Kind.Identifier && looks_like_explicit_lambda(p) {
+            Expr lambda = try_parse_explicit_lambda(p)
+            if lambda.kind != 0 { return lambda }
+        }
+        advance(p)
+        return bootstrap_make_IdentifierExpr_Name_SourceSpan(token.Lexeme, token.Span)
+    }
+    if kind == Kind.Integer { advance(p); return bootstrap_make_LiteralExpr_Kind_Raw_SourceSpan("integer", token.Lexeme, token.Span) }
+    if kind == Kind.Float { advance(p); return bootstrap_make_LiteralExpr_Kind_Raw_SourceSpan("float", token.Lexeme, token.Span) }
+    if kind == Kind.String { advance(p); return bootstrap_make_LiteralExpr_Kind_Raw_SourceSpan("string", token.Lexeme, token.Span) }
+    if kind == Kind.InterpolatedString { advance(p); return bootstrap_make_LiteralExpr_Kind_Raw_SourceSpan("interpolated_string", token.Lexeme, token.Span) }
+    if kind == Kind.Character { advance(p); return bootstrap_make_LiteralExpr_Kind_Raw_SourceSpan("character", token.Lexeme, token.Span) }
+    if kind == Kind.True || kind == Kind.False { advance(p); return bootstrap_make_LiteralExpr_Kind_Raw_SourceSpan("bool", token.Lexeme, token.Span) }
+    if kind == Kind.Null { advance(p); return bootstrap_make_LiteralExpr_Kind_Raw_SourceSpan("null", token.Lexeme, token.Span) }
+    if kind == Kind.Bang || kind == Kind.Minus || kind == Kind.Plus || kind == Kind.Ampersand || kind == Kind.Star || kind == Kind.Tilde { return parseUnaryPrefix(p) }
+    if kind == Kind.New { return parseNewPrefix(p) }
+    if kind == Kind.Cast { return parseCast(p) }
+    if kind == Kind.LBracket { return parseArray(p) }
+    if kind == Kind.LParen { return parseGroupedPrefix(p) }
+    errorAt(p, token, "expected expression")
+    Expr empty
+    return empty
+}
+
+Expr parsePostfix(Parser* p, Expr left) { // translated Go receiver method
+	while true {
+		auto kind = current(p).Kind
+		if kind == Kind.LParen {
+			advance(p)
+			skipInlineNewlines(p)
+			Expr[] args
+			if !at(p, Kind.RParen) {
+				while true {
+					auto e = parseExpression(p, precAssignment)
+					if e.kind != 0 { args = append_expr(args, e) }
+					skipInlineNewlines(p)
+					if !match(p, Kind.Comma) { break }
+					skipInlineNewlines(p)
+				}
+			}
+			auto end = expect(p, Kind.RParen, "expected ')' after arguments").Span
+			left = bootstrap_make_CallExpr_Callee_Arguments_SourceSpan(left, args, Merge(expr_span(left), end))
+		} else if kind == Kind.LBracket {
+			advance(p)
+			skipInlineNewlines(p)
+			auto idx = parseExpression(p, precAssignment)
+			skipInlineNewlines(p)
+			Span index_end = expect(p, Kind.RBracket, "expected ']' after index").Span
+			left = bootstrap_make_IndexExpr_Object_Index_SourceSpan(left, idx, Merge(expr_span(left), index_end))
+		} else if kind == Kind.Dot {
+			advance(p)
+			auto name = expect(p, Kind.Identifier, "expected member name after '.'")
+			left = bootstrap_make_MemberExpr_Object_Name_SourceSpan(left, name.Lexeme, Merge(expr_span(left), name.Span))
+		} else if kind == Kind.Less {
+			auto save = p.pos
+			advance(p)
+			TypeRef*[] args
+			auto ok = true
+			while true {
+				auto a = parseTypeRef(p)
+				if a == null { ok = false; break }
+				args = append_type_ref(args, a)
+				if !match(p, Kind.Comma) { break }
+			}
+			if !ok || !match(p, Kind.Greater) || (current(p).Kind != Kind.LParen && current(p).Kind != Kind.Dot) {
+				p.pos = save
+				return left
+			}
+			left = bootstrap_make_GenericSpecializationExpr_Target_TypeArguments_SourceSpan(left, args, Merge(expr_span(left), previous(p).Span))
+		} else if kind == Kind.Increment {
+			auto op = advance(p)
+			left = bootstrap_make_UnaryExpr_Operator_Operand_Prefix_SourceSpan(op.Lexeme, left, false, Merge(expr_span(left), op.Span))
+		} else if kind == Kind.Decrement {
+			Token dec_op = advance(p)
+			left = bootstrap_make_UnaryExpr_Operator_Operand_Prefix_SourceSpan(dec_op.Lexeme, left, false, Merge(expr_span(left), dec_op.Span))
+		} else {
+			return left
+		}
+	}
+}
+
+Expr parseArray(Parser* p) { // translated Go receiver method
+	auto start = advance(p).Span
+	skipInlineNewlines(p)
+	Expr[] elems
+	if !at(p, Kind.RBracket) {
+		while true {
+			auto e = parseExpression(p, precAssignment)
+			if e.kind != 0 && match(p, Kind.Colon) {
+				skipInlineNewlines(p)
+				auto v = parseExpression(p, precAssignment)
+				if v.kind != 0 {
+					e = bootstrap_make_KeyValueExpr_Key_Value_SourceSpan(e, v, Merge(expr_span(e), expr_span(v)))
+				}
+			}
+			if e.kind != 0 {
+				elems = append_expr(elems, e)
+			}
+			skipInlineNewlines(p)
+			if !match(p, Kind.Comma) {
+				break
+			}
+			skipInlineNewlines(p)
+			if at(p, Kind.RBracket) {
+				break
+			}
+		}
+	}
+	auto end = expect(p, Kind.RBracket, "expected ']' after array literal").Span
+	return bootstrap_make_ArrayExpr_Elements_SourceSpan(elems, Merge(start, end))
+}
+Expr parseCast(Parser* p) { // translated Go receiver method
+	auto start = advance(p).Span
+	expect(p, Kind.Less, "expected '<' after cast")
+	auto t = parseTypeRef(p)
+	expect(p, Kind.Greater, "expected '>' after cast type")
+	expect(p, Kind.LParen, "expected '(' after cast type")
+	auto v = parseExpression(p, precAssignment)
+	auto end = expect(p, Kind.RParen, "expected ')' after cast expression").Span
+	return bootstrap_make_CastExpr_Type_Value_SourceSpan(t, v, Merge(start, end))
+}
+
+// try_parse_lambda parses a contextually typed lambda such as `(value) => {}`
+// or the explicit-parameter form `(int32 value) => {}`. Parameter types may be
+// omitted only when semantic analysis receives a callable type from the context.
+Expr tryParseLambda(Parser* p) { // translated Go receiver method
+	auto save = p.pos
+	auto start = current(p).Span
+	advance(p)
+	skipInlineNewlines(p)
+    LambdaParametersResult parsedParameters = parse_lambda_parameters(p, true)
+    Parameter*[] params = parsedParameters.parameters
+    bool ok = parsedParameters.ok
+    if !ok || !match(p, Kind.RParen) || !match(p, Kind.FatArrow) {
+		p.pos = save
+		Expr empty
+		return empty
+	}
+	skipNewlines(p)
+	if !at(p, Kind.LBrace) {
+		p.pos = save
+		Expr empty
+		return empty
+	}
+	auto body = parseBlock(p)
+	return bootstrap_make_LambdaExpr_Parameters_Body_SourceSpan(params, body, Merge(start, body.SourceSpan))
+}
+
+// looks_like_explicit_lambda performs a diagnostic-free token lookahead before the
+// parser enters type grammar. This prevents ordinary generic calls and relational
+// expressions from producing speculative type errors while still recognizing a
+// signature that is immediately followed by the lambda arrow.
+bool looks_like_explicit_lambda(Parser* p) { // translated Go receiver method
+	auto index = p.pos
+	if index >= p.tokens.length || p.tokens[index].Kind != Kind.Identifier {
+		return false
+	}
+	index += 1
+	if index < p.tokens.length && p.tokens[index].Kind == Kind.Less {
+		auto depth = 0
+		while index < p.tokens.length  {
+			auto kind = p.tokens[index].Kind
+			if kind == Kind.Less {
+				depth += 1
+			} else if kind == Kind.Greater {
+				depth -= 1
+				if depth == 0 { index += 1; break }
+			} else if kind == Kind.EOF {
+				return false
+			}
+			index += 1
+		}
+		return false
+	}
+	while index < p.tokens.length && p.tokens[index].Kind == Kind.Star  {
+		index += 1
+	}
+	if index >= p.tokens.length || p.tokens[index].Kind != Kind.LParen {
+		return false
+	}
+	auto paren_depth = 0
+	while index < p.tokens.length  {
+		auto kind = p.tokens[index].Kind
+		if kind == Kind.LParen {
+			paren_depth += 1
+		} else if kind == Kind.RParen {
+			paren_depth -= 1
+			if paren_depth == 0 {
+				index += 1
+				while index < p.tokens.length && p.tokens[index].Kind == Kind.Newline { index += 1 }
+				return index < p.tokens.length && p.tokens[index].Kind == Kind.FatArrow
+			}
+		} else if kind == Kind.EOF {
+			return false
+		}
+		index += 1
+	}
+	return false
+}
+
+// try_parse_explicit_lambda parses the canonical standalone/auto lambda form:
+// `ReturnType(TypedParameters...) => { ... }`. The explicit signature makes the
+// lambda self-typed and therefore legal without a receiving callable context.
+Expr try_parse_explicit_lambda(Parser* p) { // translated Go receiver method
+	auto save = p.pos
+	auto start = current(p).Span
+	auto return_type = parseTypeRef(p)
+	if return_type == null || return_type.Callable != null || !at(p, Kind.LParen) {
+		p.pos = save
+		Expr empty
+		return empty
+	}
+	advance(p)
+	skipInlineNewlines(p)
+    LambdaParametersResult parsedParameters = parse_lambda_parameters(p, false)
+    Parameter*[] parameters = parsedParameters.parameters
+    bool ok = parsedParameters.ok
+    if !ok || !match(p, Kind.RParen) || !match(p, Kind.FatArrow) {
+		p.pos = save
+		Expr empty
+		return empty
+	}
+	skipNewlines(p)
+	if !at(p, Kind.LBrace) {
+		p.pos = save
+		Expr empty
+		return empty
+	}
+	auto body = parseBlock(p)
+	return bootstrap_make_LambdaExpr_ReturnType_Parameters_Body_SourceSpan(return_type, parameters, body, Merge(start, body.SourceSpan))
+}
+
+// parse_lambda_parameters parses named lambda parameters. When allow_inferred is
+// true, a bare identifier is retained with a null Type so semantic analysis can
+// obtain its type from the receiving callable signature.
+struct LambdaParametersResult { Parameter*[] parameters; bool ok }
+
+LambdaParametersResult parse_lambda_parameters(Parser* p, bool allow_inferred) {
+	Parameter*[] parameters
+	if at(p, Kind.RParen) {
+		LambdaParametersResult result
+	result.parameters = parameters
+	result.ok = true
+	return result
+	}
+	while true {
+		auto parameter_start = current(p).Span
+		if allow_inferred && at(p, Kind.Identifier) && (peek_kind(p, 1) == Kind.Comma || peek_kind(p, 1) == Kind.RParen) {
+			auto name = advance(p)
+			parameters = append_parameter(parameters, bootstrap_make_Parameter_Name_SourceSpan(name.Lexeme, name.Span))
+		} else {
+			auto parameter_type = parseTypeRef(p)
+			if parameter_type == null || !at(p, Kind.Identifier) {
+				LambdaParametersResult failed
+	failed.ok = false
+	return failed
+			}
+			Token typed_name = advance(p)
+			parameters = append_parameter(parameters, bootstrap_make_Parameter_Name_Type_SourceSpan(typed_name.Lexeme, parameter_type, Merge(parameter_start, typed_name.Span)))
+		}
+		skipInlineNewlines(p)
+		if !match(p, Kind.Comma) {
+			break
+		}
+		skipInlineNewlines(p)
+	}
+	LambdaParametersResult result
+	result.parameters = parameters
+	result.ok = true
+	return result
+}
+
+// peek_kind returns the token kind at a small positive lookahead without moving the parser.
+Kind peek_kind(Parser* p, int64 offset) { // translated Go receiver method
+	auto index = p.pos + offset
+	if index < 0 || index >= p.tokens.length {
+		return Kind.EOF
+	}
+	return p.tokens[index].Kind
+}
+
+void synchronizeStmt(Parser* p) { // translated Go receiver method
+	while !at(p, Kind.EOF) && !at(p, Kind.Newline) && !at(p, Kind.Semicolon) && !at(p, Kind.RBrace)  {
+		advance(p)
+	}
+	consumeStmtEnd(p)
+}
+void synchronizeDecl(Parser* p) { // translated Go receiver method
+	while !at(p, Kind.EOF) && !at(p, Kind.Newline) && !at(p, Kind.Semicolon) && !at(p, Kind.RBrace)  {
+		advance(p)
+	}
+	consumeStmtEnd(p)
+}
+void synchronizeTo(Parser* p, Kind first, Kind second = Kind.Illegal) {
+    while at(p, Kind.EOF) == false {
+        if at(p, first) { return }
+        if second != Kind.Illegal && at(p, second) { return }
+        advance(p)
+    }
+}
+string unquote(string s) {
+	if bootstrap_string_length(s) >= 2 {
+		return bootstrap_string_slice(s, 1, bootstrap_string_length(s)-2)
+	}
+	return s
+}

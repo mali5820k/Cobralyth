@@ -1,0 +1,11 @@
+struct Counter {
+    int32 value
+
+    constructor() {
+        value = 0
+    }
+
+    constructor(int32 initial_value) {
+        value = initial_value
+    }
+}

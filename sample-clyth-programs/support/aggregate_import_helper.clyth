@@ -1,0 +1,12 @@
+struct ImportedAggregate {
+    int32 value
+}
+
+ImportedAggregate imported_aggregate() {
+    ImportedAggregate first
+    ImportedAggregate second
+    first.value = 7
+    second.value = 42
+    ImportedAggregate[2] values = [first, second]
+    return values[1]
+}

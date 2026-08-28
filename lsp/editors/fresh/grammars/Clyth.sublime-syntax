@@ -1,0 +1,69 @@
+%YAML 1.2
+---
+name: Clyth
+file_extensions: [clyth]
+scope: source.clyth
+contexts:
+  main:
+    - match: '//.*$'
+      scope: comment.line.double-slash.clyth
+    - match: '/\*'
+      scope: comment.block.clyth
+      push:
+        - meta_scope: comment.block.clyth
+        - match: '\*/'
+          pop: true
+    - match: '^\s*(import)\s+("[^"\n]+")'
+      captures:
+        1: keyword.declaration.import.clyth
+        2: string.quoted.double.path.clyth
+    - match: '^\s*(import)\s+([A-Za-z_][A-Za-z0-9_-]*(?:/[A-Za-z0-9_.-]+)*)'
+      captures:
+        1: keyword.declaration.import.clyth
+        2: entity.name.namespace.clyth
+    - match: '\b([A-Za-z_][A-Za-z0-9_]*(?:\s*<[^>\n]+>)?(?:\s*\*)?)\s*(\()([^()\n]*)(\))\s*(=>)'
+      scope: meta.function.lambda.clyth
+      captures:
+        1: storage.type.function.return.clyth
+        2: punctuation.definition.parameters.begin.clyth
+        3: meta.parameters.lambda.clyth
+        4: punctuation.definition.parameters.end.clyth
+        5: keyword.operator.lambda.clyth
+    - match: '\b([A-Za-z_][A-Za-z0-9_]*(?:\s*<[^>\n]+>)?)\s*(\()([^()\n]*)(\))(\s*\[\])?\s+([A-Za-z_][A-Za-z0-9_]*)'
+      scope: meta.type.callable.clyth
+      captures:
+        1: storage.type.function.return.clyth
+        2: punctuation.definition.parameters.begin.clyth
+        3: storage.type.function.parameters.clyth
+        4: punctuation.definition.parameters.end.clyth
+        5: storage.modifier.array.clyth
+        6: variable.other.callable.clyth
+    - match: '\b(struct|protocol|enum)\s+([A-Za-z_][A-Za-z0-9_]*)'
+      captures:
+        1: keyword.declaration.clyth
+        2: entity.name.type.clyth
+    - match: '=>'
+      scope: keyword.operator.lambda.clyth
+    - match: '\b[A-Z][A-Za-z0-9_]*\b'
+      scope: entity.name.type.clyth
+    - match: '\b(if|else|for|while|switch|case|default|break|continue|return|as)\b'
+      scope: keyword.control.clyth
+    - match: '\b(auto|enum|struct|protocol|module|import|extern|new|const|cast|private|public)\b'
+      scope: keyword.declaration.clyth
+    - match: '\b(C|this)\b'
+      scope: storage.modifier.clyth
+    - match: '\b(void|bool|char|string|int8|int16|int32|int64|uint8|uint16|uint32|uint64|float32|float64)\b'
+      scope: storage.type.clyth
+    - match: '\b(true|false)\b'
+      scope: constant.language.clyth
+    - match: '\b(0[xX][0-9A-Fa-f]+|0[bB][01]+|[0-9]+(\.[0-9]+)?)\b'
+      scope: constant.numeric.clyth
+    - match: '"'
+      scope: punctuation.definition.string.begin.clyth
+      push:
+        - meta_scope: string.quoted.double.clyth
+        - match: '\\.'
+          scope: constant.character.escape.clyth
+        - match: '"'
+          scope: punctuation.definition.string.end.clyth
+          pop: true

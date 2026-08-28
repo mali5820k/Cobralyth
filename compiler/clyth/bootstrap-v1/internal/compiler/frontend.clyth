@@ -1,0 +1,58 @@
+// Source-level Clyth translation of compiler/go/internal/compiler/frontend.go.
+
+struct FrontendError {
+    string Path
+    int64 Line
+    int64 Column
+    string Message
+
+    constructor(string path, int64 line, int64 column, string message) {
+        Path = path
+        Line = line
+        Column = column
+        Message = message
+    }
+}
+
+string FrontendErrorString(FrontendError e) {
+    if e.Path == "" { return fmt.Sprintf("%d:%d: %s", e.Line, e.Column, e.Message) }
+    return fmt.Sprintf("%s:%d:%d: %s", e.Path, e.Line, e.Column, e.Message)
+}
+
+struct ParseFileResult {
+    Program* program
+    FrontendError[] errors
+    string ioError
+}
+
+ParseFileResult ParseFile(string path) {
+    ParseFileResult result
+    string data = os.ReadFile(path)
+    if data == null {
+        result.ioError = os.LastError()
+        return result
+    }
+
+    ParseResult parsed = parser.Parse(data)
+    FrontendError[] frontErrs = []
+    int64 i = 0
+    while i < parsed.lexErrors.length {
+        lexer.Error e = parsed.lexErrors[i]
+        frontErrs = bootstrap_append(frontErrs, FrontendError(path, e.Span.Start.Line, e.Span.Start.Column, e.Message))
+        i += 1
+    }
+    i = 0
+    while i < parsed.parseErrors.length {
+        parser.Error e = parsed.parseErrors[i]
+        frontErrs = bootstrap_append(frontErrs, FrontendError(path, e.Span.Start.Line, e.Span.Start.Column, e.Message))
+        i += 1
+    }
+    result.program = parsed.program
+    result.errors = frontErrs
+    result.ioError = ""
+    return result
+}
+
+string ASTJSON(Program* program) {
+    return json.MarshalIndent(program, "", "  ")
+}

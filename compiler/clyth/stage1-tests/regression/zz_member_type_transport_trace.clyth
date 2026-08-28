@@ -1,0 +1,17 @@
+// Diagnostic regression: intentionally emits TRACE_MEMBER semantic diagnostics.
+// It is not a canonical language-corpus case and should remain under stage1-tests.
+struct TracePoint {
+    int32 x
+    int32 y
+}
+
+int32 trace_sum(TracePoint point) {
+    return point.x + point.y
+}
+
+int32 main() {
+    TracePoint point
+    point.x = 20
+    point.y = 22
+    return trace_sum(point) - 42
+}

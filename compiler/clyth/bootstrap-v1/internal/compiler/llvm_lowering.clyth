@@ -1,0 +1,1671 @@
+// AUTO-TRANSLATED BOOTSTRAP SEED FROM FROZEN GO V1.0.0 IMPLEMENTATION.
+// Source: compiler/go/internal/compiler/llvm_lowering.go
+// This file preserves implementation logic for the Go -> Clyth bootstrap port.
+
+// package compiler
+
+// Go imports:
+// "fmt"
+// "strconv"
+// "strings"
+// "github.com/mali5820k/clyth-bootstrap/internal/frontend/ast"
+// "github.com/mali5820k/clyth-bootstrap/internal/frontend/parser"
+
+import "semantic_analyzer.clyth"
+import "semantic_types.clyth"
+import "lifetime.clyth"
+import "../frontend/ast/ast.clyth"
+import collections
+import string
+
+// IRValue is the SSA value returned by the textual LLVM lowering layer.
+// Aggregate Clyth values are deliberately represented by opaque LLVM pointers in
+// the bootstrap backend. This keeps native ABI details isolated while the frontend
+// and self-hosted compiler stabilize.
+struct IRValue {
+	string llvm_type
+	string value
+	SemanticType* type_info
+	fresh     bool // unique aggregate temporary; value-copy destinations may consume it directly
+}
+
+struct ir_local {
+	string address
+	SemanticType* type_info
+}
+
+struct value_cleanup {
+	string address
+	SemanticType* type_info
+}
+
+struct catch_context {
+	string error_value
+	string end_label
+	int64 block_depth
+}
+
+struct llvm_lowerer {
+	AnalysisResult* result
+	Program* program
+	string target
+	string[] strings
+	Map<string, string> declarations
+	Map<string, bool> defined
+	Map<string, StructInfo*> struct_info
+	Map<string, Map<string, int64>> enum_values
+	int64 register
+	int64 label
+	int64 lambda
+	string[] function_defs
+	string[] global_defs
+	Map<string, ir_local> globals
+	string[] current_lines
+	string current_block
+	Map<string, ir_local> locals
+	string[] break_labels
+	string[] continue_labels
+	int64[] break_cleanup_depths
+	int64[] continue_cleanup_depths
+	SemanticType* return_type
+	StructInfo* receiver
+	Map<string, SemanticType*> substitutions
+	GenericSpecialization[] external_specializations
+	string main_args_name
+	string main_argc_value
+	Map<Node, LifetimeAction[]> lifetime_actions
+	Map<int64, string> cleanup_slots
+	catch_context[] catch_stack
+	BlockStmt*[] block_stack
+	string[][] mecc_root_scopes
+	value_cleanup[][] value_cleanup_scopes
+	value_cleanup[] pending_parameter_cleanups
+}
+
+struct BootstrapVariadicPackResult { IRValue value IRValue[] temporaries bool ok }
+struct BootstrapInterpolationArgumentResult { string llvm_type IRValue value bool ok }
+struct BootstrapActiveCatchResult { catch_context context bool ok }
+struct BootstrapAssignmentAddressResult { string address SemanticType* type_info bool ok }
+struct BootstrapAssignmentAddressOwnerResult { string address SemanticType* type_info string owner bool ok }
+struct BootstrapLLVMResult { string ir string error_message bool ok }
+
+// lower_llvm_ir converts a semantically-resolved Clyth translation unit into
+// textual LLVM IR. The bootstrap backend favors a small, deterministic ABI:
+// primitive scalars retain their natural LLVM widths and Clyth aggregate values
+// are passed as opaque pointers.
+BootstrapLLVMResult lower_llvm_ir(Program* program, AnalysisResult* result, string target) {
+    GenericSpecialization[] none
+    return lower_llvm_ir_with_specializations(program, result, target, none)
+}
+
+// lower_llvm_ir_with_specializations lowers a translation unit while honoring
+// concrete generic instantiations requested by another unit.
+BootstrapLLVMResult lower_llvm_ir_with_specializations(Program* program, AnalysisResult* result, string target, GenericSpecialization[] external_specializations) {
+    BootstrapLLVMResult lowered; lowered.ok = true
+    if target == "" { target = "x86_64-unknown-linux-musl" }
+    llvm_lowerer* lowerer = new llvm_lowerer(); lowerer.result=result; lowerer.program=program; lowerer.target=target
+    lowerer.declarations=Map<string,string>(); lowerer.defined=Map<string,bool>(); lowerer.struct_info=Map<string,StructInfo*>(); lowerer.enum_values=Map<string,Map<string,int64>>(); lowerer.globals=Map<string,ir_local>(); lowerer.external_specializations=external_specializations; lowerer.substitutions=Map<string,SemanticType*>(); lowerer.lifetime_actions=Map<Node,LifetimeAction[]>(); lowerer.cleanup_slots=Map<int64,string>()
+    int64 i=0
+    while i<result.lifetime_actions.length { LifetimeAction action=result.lifetime_actions[i]; LifetimeAction[] actions=lowerer.lifetime_actions[action.node]; int64 n=actions.length; actions = array<LifetimeAction>(actions, n+1); actions[n]=action; lowerer.lifetime_actions[action.node]=actions; i+=1 }
+    collect_types_and_defined_symbols(lowerer); install_builtin_error_struct(lowerer); emit_top_level(lowerer)
+    if !lowerer.defined["malloc"] {lowerer.declarations["malloc"]="declare ptr @malloc(i64)"}
+    if !lowerer.defined["calloc"] {lowerer.declarations["calloc"]="declare ptr @calloc(i64, i64)"}
+    if !lowerer.defined["strlen"] {lowerer.declarations["strlen"]="declare i64 @strlen(ptr)"}
+    if !lowerer.defined["strcmp"] {lowerer.declarations["strcmp"]="declare i32 @strcmp(ptr, ptr)"}
+    if !lowerer.defined["memcpy"] {lowerer.declarations["memcpy"]="declare ptr @memcpy(ptr, ptr, i64)"}
+    if !lowerer.defined["memset"] {lowerer.declarations["memset"]="declare ptr @memset(ptr, i32, i64)"}
+    if !lowerer.defined["snprintf"] {lowerer.declarations["snprintf"]="declare i32 @snprintf(ptr, i64, ptr, ...)"}
+    if !lowerer.defined["free"] {lowerer.declarations["free"]="declare void @free(ptr)"}
+    if !lowerer.defined["abort"] {lowerer.declarations["abort"]="declare void @abort() noreturn"}
+    if result.mecc_enabled {lowerer.declarations["clyth_mecc_adopt"]="declare ptr @clyth_mecc_adopt(ptr, i1, ptr)";lowerer.declarations["clyth_mecc_store"]="declare void @clyth_mecc_store(ptr, ptr, ptr)";lowerer.declarations["clyth_mecc_owner_release"]="declare void @clyth_mecc_owner_release(ptr)";lowerer.declarations["clyth_mecc_collapse"]="declare void @clyth_mecc_collapse()";lowerer.declarations["clyth_mecc_release"]="declare void @clyth_mecc_release(ptr)"}
+    string output="; Clyth V1.0.0 bootstrap LLVM IR\n"+"target triple = \""+target+"\"\n\n"
+    i=0
+    while i<lowerer.strings.length {string text=lowerer.strings[i];uint8[] bytes;int64 length=bootstrap_string_length(text);bytes = array<uint8>(bytes, length+1);int64 j=0;while j<length{bytes[j]=text[j];j+=1};bytes[length]=0;output = output + "@.clyth.str."+`${i}`+" = private unnamed_addr constant ["+`${bytes.length}`+" x i8] c\""+llvm_escape_bytes(bytes)+"\"\n";i+=1}
+    if lowerer.strings.length>0 {output = output + "\n"}
+    i=0;while i<lowerer.global_defs.length{output = output + lowerer.global_defs[i]+"\n";i+=1};if lowerer.global_defs.length>0{output = output + "\n"}
+    string[] declaration_names=lowerer.declarations.keys(); string[] filtered; i=0;while i<declaration_names.length{string name=declaration_names[i];if !lowerer.defined[name]{int64 n=filtered.length;filtered = array<string>(filtered, n+1);filtered[n]=name};i+=1};sort_strings(filtered);i=0;while i<filtered.length{output = output + lowerer.declarations[filtered[i]]+"\n";i+=1};if filtered.length>0{output = output + "\n"}
+    i=0;while i<lowerer.function_defs.length{output = output + lowerer.function_defs[i];if bootstrap_string_length(lowerer.function_defs[i])==0||bootstrap_string_slice(lowerer.function_defs[i],bootstrap_string_length(lowerer.function_defs[i])-1,1)!="\n"{output = output + "\n"};output = output + "\n";i+=1}
+    lowered.ir=output; return lowered
+}
+
+void sort_strings(string[] values) {
+    int64 i = 1
+    while i < values.length {
+        string value = values[i]
+        int64 j = i
+        while j > 0 && values[j - 1] > value { values[j] = values[j - 1]; j -= 1 }
+        values[j] = value
+        i += 1
+    }
+}
+
+string llvm_escape_bytes(uint8[] bytes) {
+    string digits = "0123456789ABCDEF"
+    string output = ""
+    int64 i = 0
+    while i < bytes.length {
+        int64 value = bytes[i]
+        if value >= 32 && value <= 126 && value != 34 && value != 92 {
+            output = output + `${bytes[i]}`
+        } else {
+            int64 high = value / 16
+            int64 low = value % 16
+            output = output + "\\" + bootstrap_string_slice(digits, high, 1) + bootstrap_string_slice(digits, low, 1)
+        }
+        i += 1
+    }
+    return output
+}
+
+GenericSpecialization[] requested_specializations(llvm_lowerer* lowerer, string base_name) {
+    GenericSpecialization[] output
+    Map<string, bool> seen = Map<string, bool>()
+    int64 i = 0
+    while i < lowerer.result.specializations.length {
+        GenericSpecialization item = lowerer.result.specializations[i]
+        if item.base_name == base_name && specialization_is_concrete(item) { string key=specialization_name(base_name,item.type_arguments); if !seen[key] { seen[key]=true; auto n=output.length; output = array<GenericSpecialization>(output, n+1); output[n]=item } }
+        i += 1
+    }
+    i = 0
+    while i < lowerer.external_specializations.length {
+        GenericSpecialization item = lowerer.external_specializations[i]
+        if item.base_name == base_name && specialization_is_concrete(item) { string key=specialization_name(base_name,item.type_arguments); if !seen[key] { seen[key]=true; auto n=output.length; output = array<GenericSpecialization>(output, n+1); output[n]=item } }
+        i += 1
+    }
+    return output
+}
+
+void collect_concrete_generic_types(SemanticType* type_info, Map<string, GenericSpecialization> found) {
+    if type_info == null { return }
+    if type_info.generic_args.length > 0 { GenericSpecialization specialization; specialization.base_name=type_info.name; specialization.concrete_name=specialization_name(type_info.name,type_info.generic_args); specialization.type_arguments=type_info.generic_args; if specialization_is_concrete(specialization) { found[specialization.concrete_name]=specialization } }
+    int64 i=0; while i<type_info.generic_args.length { collect_concrete_generic_types(type_info.generic_args[i],found); i+=1 }
+    if type_info.callable != null { collect_concrete_generic_types(type_info.callable.return_type,found); i=0; while i<type_info.callable.parameters.length {collect_concrete_generic_types(type_info.callable.parameters[i],found); i+=1} }
+}
+
+void expand_nested_specializations(llvm_lowerer* lowerer) {
+    Map<string, GenericSpecialization> found = Map<string, GenericSpecialization>()
+    int64 i = 0
+    while i < lowerer.result.specializations.length {
+        GenericSpecialization specialization = lowerer.result.specializations[i]
+        if specialization_is_concrete(specialization) { found[specialization.concrete_name] = specialization }
+        i += 1
+    }
+    i = 0
+    while i < lowerer.external_specializations.length {
+        GenericSpecialization specialization = lowerer.external_specializations[i]
+        if specialization_is_concrete(specialization) { found[specialization.concrete_name] = specialization }
+        i += 1
+    }
+    bool changed = true
+    while changed {
+        changed = false
+        string[] names = found.keys()
+        i = 0
+        while i < names.length {
+            GenericSpecialization specialization = found[names[i]]
+            StructInfo* template = lowerer.struct_info[specialization.base_name]
+            if template != null {
+                StructInfo* concrete = specialized_struct_info(template, specialization.type_arguments)
+                if concrete != null {
+                    string[] field_names = concrete.fields.keys()
+                    int64 j = 0
+                    while j < field_names.length {
+                        Symbol* field = concrete.fields[field_names[j]]
+                        int64 before = found.length
+                        if field != null { collect_concrete_generic_types(field.type_info, found) }
+                        if found.length > before { changed = true }
+                        j += 1
+                    }
+                    string[] method_names = concrete.methods.keys()
+                    j = 0
+                    while j < method_names.length {
+                        Symbol* method = concrete.methods[method_names[j]]
+                        int64 before = found.length
+                        if method != null { collect_concrete_generic_types(method.type_info, found) }
+                        if found.length > before { changed = true }
+                        j += 1
+                    }
+                }
+            }
+            i += 1
+        }
+    }
+    string[] names = found.keys()
+    i = 0
+    while i < names.length {
+        GenericSpecialization specialization = found[names[i]]
+        bool present = false
+        int64 j = 0
+        while j < lowerer.external_specializations.length {
+            if lowerer.external_specializations[j].concrete_name == specialization.concrete_name { present = true; break }
+            j += 1
+        }
+        if !present {
+            int64 n = lowerer.external_specializations.length
+            lowerer.external_specializations = array<GenericSpecialization>(lowerer.external_specializations, n + 1)
+            lowerer.external_specializations[n] = specialization
+        }
+        i += 1
+    }
+}
+
+void collect_types_and_defined_symbols(llvm_lowerer* lowerer) {
+    Namespace*[] namespace_values = lowerer.result.namespaces.values()
+    int64 namespace_index = 0
+    while namespace_index < namespace_values.length {
+        Namespace* namespace = namespace_values[namespace_index]
+        string[] struct_names = namespace.structs.keys()
+        int64 struct_index = 0
+        while struct_index < struct_names.length {
+            string name = struct_names[struct_index]
+            StructInfo* info = namespace.structs[name]
+            if lowerer.struct_info[name] == null { lowerer.struct_info[name] = info }
+            GenericSpecialization[] specs = requested_specializations(lowerer, name)
+            int64 spec_index = 0
+            while spec_index < specs.length {
+                StructInfo* concrete = specialized_struct_info(info, specs[spec_index].type_arguments)
+                if concrete != null { lowerer.struct_info[concrete.name] = concrete }
+                spec_index += 1
+            }
+            struct_index += 1
+        }
+        namespace_index += 1
+    }
+
+    expand_nested_specializations(lowerer)
+
+    string[] known_struct_names = lowerer.struct_info.keys()
+    int64 known_index = 0
+    while known_index < known_struct_names.length {
+        string name = known_struct_names[known_index]
+        StructInfo* info = lowerer.struct_info[name]
+        if info != null && info.generic_parameters.length > 0 {
+            GenericSpecialization[] specs = requested_specializations(lowerer, name)
+            int64 spec_index = 0
+            while spec_index < specs.length {
+                StructInfo* concrete = specialized_struct_info(info, specs[spec_index].type_arguments)
+                if concrete != null { lowerer.struct_info[concrete.name] = concrete }
+                spec_index += 1
+            }
+        }
+        known_index += 1
+    }
+
+    int64 declaration_index = 0
+    while declaration_index < lowerer.program.Declarations.length {
+        Decl declaration = lowerer.program.Declarations[declaration_index]
+        if declaration.kind == DECL_STRUCT {
+            StructDecl* item = bootstrap_as_struct_decl(declaration)
+            StructInfo* info = lowerer.result.root_namespace.structs[item.Name]
+            if info != null { lowerer.struct_info[item.Name] = info }
+            if item.GenericParameters.length == 0 {
+                int64 member_index = 0
+                while member_index < item.Members.length {
+                    StructMember member = item.Members[member_index]
+                    if member.kind == MEMBER_METHOD {
+                        MethodDecl* method = bootstrap_as_method_decl(member)
+                        lowerer.defined[llvm_method_name(item.Name, method.Name)] = true
+                    } else if member.kind == MEMBER_CONSTRUCTOR {
+                        lowerer.defined[llvm_constructor_name(item.Name)] = true
+                    } else if member.kind == MEMBER_DESTRUCTOR {
+                        lowerer.defined[llvm_destructor_name(item.Name)] = true
+                    }
+                    member_index += 1
+                }
+            } else if info != null {
+                GenericSpecialization[] specs = requested_specializations(lowerer, item.Name)
+                int64 spec_index = 0
+                while spec_index < specs.length {
+                    StructInfo* concrete = specialized_struct_info(info, specs[spec_index].type_arguments)
+                    if concrete != null {
+                        lowerer.struct_info[concrete.name] = concrete
+                        int64 member_index = 0
+                        while member_index < item.Members.length {
+                            StructMember member = item.Members[member_index]
+                            if member.kind == MEMBER_METHOD {
+                                MethodDecl* method = bootstrap_as_method_decl(member)
+                                lowerer.defined[llvm_method_name(concrete.name, method.Name)] = true
+                            } else if member.kind == MEMBER_CONSTRUCTOR {
+                                lowerer.defined[llvm_constructor_name(concrete.name)] = true
+                            }
+                            member_index += 1
+                        }
+                    }
+                    spec_index += 1
+                }
+            }
+        } else if declaration.kind == DECL_METHOD_BLOCK {
+            MethodBlockDecl* item = bootstrap_as_method_block_decl(declaration)
+            string receiver = item.Receiver.Name
+            StructInfo* info = lowerer.result.root_namespace.structs[receiver]
+            if info != null { lowerer.struct_info[receiver] = info }
+            int64 member_index = 0
+            while member_index < item.Members.length {
+                StructMember member = item.Members[member_index]
+                if member.kind == MEMBER_METHOD {
+                    MethodDecl* method = bootstrap_as_method_decl(member)
+                    lowerer.defined[llvm_method_name(receiver, method.Name)] = true
+                }
+                member_index += 1
+            }
+        } else if declaration.kind == DECL_FUNCTION {
+            FunctionDecl* item = bootstrap_as_function_decl(declaration)
+            lowerer.defined[llvm_function_name(item)] = item.Body != null && !item.Extern
+            if item.Extern { lowerer.declarations[item.Name] = function_declaration(lowerer, item) }
+        } else if declaration.kind == DECL_GLOBAL_VAR {
+            GlobalVarDecl* item = bootstrap_as_global_var_decl(declaration)
+            SemanticType* sem = resolve_ref(lowerer, item.Type)
+            string name = sanitize_llvm_name(item.Name)
+            ir_local local; local.address = "@" + name; local.type_info = sem
+            lowerer.globals[item.Name] = local
+            string initial = constant_initializer(lowerer, item.Initializer, sem)
+            int64 n = lowerer.global_defs.length
+            lowerer.global_defs = array<string>(lowerer.global_defs, n + 1)
+            lowerer.global_defs[n] = "@" + name + " = global " + llvm_type(lowerer, sem) + " " + initial
+        } else if declaration.kind == DECL_ENUM {
+            EnumDecl* item = bootstrap_as_enum_decl(declaration)
+            Map<string, int64> values = Map<string, int64>()
+            int64 next = 0
+            int64 member_index = 0
+            while member_index < item.Members.length {
+                EnumMember* member = item.Members[member_index]
+                if member.Value.kind == EXPR_LITERAL && member.Value.literal != null && member.Value.literal.Kind == "integer" {
+                    BootstrapIntegerResult parsed = parse_integer_literal(member.Value.literal.Raw)
+                    if parsed.ok { next = parsed.value }
+                }
+                values[member.Name] = next
+                next += 1
+                member_index += 1
+            }
+            lowerer.enum_values[item.Name] = values
+        }
+        declaration_index += 1
+    }
+}
+
+void install_builtin_error_struct(llvm_lowerer* lowerer) {
+    if lowerer.struct_info["Error"] != null { return }
+    StructInfo* info = new StructInfo(); info.name="Error"; info.fields=Map<string, Symbol*>(); info.methods=Map<string, Symbol*>(); info.field_order = array<string>(info.field_order, 3); info.field_order[0]="error"; info.field_order[1]="error_type"; info.field_order[2]="error_message"
+    Symbol* error_field=new Symbol(); error_field.name="error"; error_field.kind="field"; error_field.type_info=new SemanticType(); error_field.type_info.kind="bool"; error_field.type_info.name="bool"; info.fields["error"]=error_field
+    Symbol* type_field=new Symbol(); type_field.name="error_type"; type_field.kind="field"; type_field.type_info=new SemanticType(); type_field.type_info.kind="error_type"; type_field.type_info.name="ErrorType"; info.fields["error_type"]=type_field
+    Symbol* message_field=new Symbol(); message_field.name="error_message"; message_field.kind="field"; message_field.type_info=new SemanticType(); message_field.type_info.kind="string"; message_field.type_info.name="string"; info.fields["error_message"]=message_field
+    SemanticCallable* ctor=new SemanticCallable(); ctor.return_type=new SemanticType(); ctor.return_type.kind="struct"; ctor.return_type.name="Error"; ctor.parameters = array<SemanticType*>(ctor.parameters, 1); ctor.parameters[0]=new SemanticType(); ctor.parameters[0].kind="bool"; ctor.parameters[0].name="bool"; info.constructors = array<SemanticCallable*>(info.constructors, 1); info.constructors[0]=ctor
+    lowerer.struct_info["Error"]=info
+}
+
+void emit_top_level(llvm_lowerer* lowerer) {
+    int64 i=0
+    while i<lowerer.program.Declarations.length {
+        Decl declaration=lowerer.program.Declarations[i]
+        if declaration.kind==DECL_FUNCTION { FunctionDecl* item=bootstrap_as_function_decl(declaration); if item!=null && item.Body!=null && !item.Extern {emit_function(lowerer,item,null)} }
+        else if declaration.kind==DECL_STRUCT {
+            StructDecl* item=bootstrap_as_struct_decl(declaration); StructInfo* struct_template=lowerer.struct_info[item.Name]
+            if item.GenericParameters.length==0 { emit_struct_declaration(lowerer,item,struct_template,Map<string, SemanticType*>()) }
+            else { GenericSpecialization[] specs=requested_specializations(lowerer,item.Name); int64 j=0; while j<specs.length { string concrete_name=specialization_name(item.Name,specs[j].type_arguments); StructInfo* concrete=lowerer.struct_info[concrete_name]; if concrete==null {concrete=specialized_struct_info(struct_template,specs[j].type_arguments); if concrete!=null {lowerer.struct_info[concrete.name]=concrete}}; if concrete!=null {emit_struct_declaration(lowerer,item,concrete,build_substitutions(struct_template.generic_parameters,specs[j].type_arguments))}; j+=1 } }
+        } else if declaration.kind==DECL_METHOD_BLOCK { MethodBlockDecl* item=bootstrap_as_method_block_decl(declaration); StructInfo* info=lowerer.struct_info[item.Receiver.Name]; int64 j=0; while j<item.Members.length { if item.Members[j].kind==MEMBER_METHOD {MethodDecl* method=bootstrap_as_method_decl(item.Members[j]); emit_function(lowerer,&method.Function,info)}; j+=1 } }
+        i+=1
+    }
+}
+
+void emit_struct_declaration(llvm_lowerer* lowerer, StructDecl* item, StructInfo* info, Map<string, SemanticType*> substitutions) {
+    if info==null {return}; Map<string, SemanticType*> saved=lowerer.substitutions; lowerer.substitutions=substitutions; bool has_constructor=false; int64 i=0
+    while i<item.Members.length { StructMember member=item.Members[i]; if member.kind==MEMBER_METHOD {MethodDecl* method=bootstrap_as_method_decl(member); emit_function(lowerer,&method.Function,info)} else if member.kind==MEMBER_CONSTRUCTOR {ConstructorMember* ctor=bootstrap_as_constructor_member(member); has_constructor=true; emit_constructor(lowerer,info.name,&ctor.Constructor,info)} else if member.kind==MEMBER_DESTRUCTOR {DestructorMember* dtor=bootstrap_as_destructor_member(member); emit_destructor(lowerer,info.name,&dtor.Destructor,info)}; i+=1 }
+    if !has_constructor {emit_default_constructor(lowerer,info.name)}; lowerer.substitutions=saved
+}
+
+string llvm_function_name(FunctionDecl* function) {
+    if function == null { return "anonymous" }
+    if function.Receiver != "" { return llvm_method_name(function.Receiver, function.Name) }
+    return sanitize_llvm_name(function.Name)
+}
+
+string llvm_method_name(string receiver, string method) { return sanitize_llvm_name(receiver + "__" + method) }
+
+string llvm_constructor_name(string name) { return sanitize_llvm_name(name + "__ctor") }
+string llvm_destructor_name(string name) { return sanitize_llvm_name(name + "__dtor") }
+
+string sanitize_llvm_name(string name) {
+    string output = ""
+    int64 i = 0
+    while i < bootstrap_string_length(name) {
+        string ch = bootstrap_string_slice(name, i, 1)
+        bool valid = (ch >= "a" && ch <= "z") || (ch >= "A" && ch <= "Z") || (ch >= "0" && ch <= "9") || ch == "_" || ch == "."
+        if valid { output = output + ch } else { output = output + "_" }
+        i += 1
+    }
+    if output == "" { return "anonymous" }
+    return output
+}
+
+SemanticType* variadic_parameter_type(llvm_lowerer* lowerer, Parameter* parameter) {
+    if parameter == null || parameter.Type == null { SemanticType* unknown = new SemanticType(); unknown.kind = "unknown"; return unknown }
+    if parameter.Type.Name == "auto" {
+        SemanticType* result = new SemanticType(); result.kind = "array"; result.name = "auto_variadic"
+        result.array_dimensions = array<SemanticArrayDimension>(result.array_dimensions, 1); result.array_dimensions[0].dynamic = true
+        return result
+    }
+    SemanticType* element = resolve_ref(lowerer, parameter.Type)
+    SemanticType* array = clone_type(element); array.kind = "array"
+    array.array_dimensions = array<SemanticArrayDimension>(array.array_dimensions, 1); array.array_dimensions[0].dynamic = true
+    return array
+}
+
+int64 bootstrap_decimal_int(string text) { int64 value=0; int64 i=0; while i<bootstrap_string_length(text) { string ch=bootstrap_string_slice(text,i,1); if ch>="0" && ch<="9" { value=value*10; if ch=="1" {value+=1} else if ch=="2" {value+=2} else if ch=="3" {value+=3} else if ch=="4" {value+=4} else if ch=="5" {value+=5} else if ch=="6" {value+=6} else if ch=="7" {value+=7} else if ch=="8" {value+=8} else if ch=="9" {value+=9} }; i+=1 }; return value }
+
+string join_llvm_strings(string[] values, string separator) { string result=""; int64 i=0; while i<values.length {if i>0 {result=result+separator}; result=result+values[i]; i+=1}; return result }
+string function_declaration(llvm_lowerer* lowerer, FunctionDecl* function) {
+    string[] parameters
+    if function.Receiver!="" {parameters = array<string>(parameters, 1); parameters[0]="ptr"}
+    bool native_variadic=false; int64 i=0
+    while i<function.Parameters.length { Parameter* parameter=function.Parameters[i]; if parameter.Variadic {if parameter.Type!=null {auto n=parameters.length; parameters = array<string>(parameters, n+1); parameters[n]="ptr"} else {native_variadic=true}} else {auto n=parameters.length; parameters = array<string>(parameters, n+1); parameters[n]=llvm_type_from_ref(lowerer,parameter.Type)}; i+=1 }
+    if native_variadic {auto n=parameters.length; parameters = array<string>(parameters, n+1); parameters[n]="..."}
+    return "declare "+llvm_type_from_ref(lowerer,function.ReturnType)+" @"+llvm_function_name(function)+"("+join_llvm_strings(parameters,", ")+")"
+}
+
+string llvm_type_from_ref(llvm_lowerer* lowerer, TypeRef* ref) { return llvm_type(lowerer, resolve_ref(lowerer, ref)) }
+
+string llvm_type(llvm_lowerer* lowerer, SemanticType* type_info) {
+    if type_info == null { return "ptr" }
+    if type_info.pointer_depth > 0 || type_info.array_dimensions.length > 0 || type_info.callable != null { return "ptr" }
+    if type_info.kind == "void" { return "void" }
+    if type_info.kind == "bool" { return "i1" }
+    if type_info.kind == "string" || type_info.kind == "struct" || type_info.kind == "protocol" || type_info.kind == "namespace" || type_info.kind == "pointer" || type_info.kind == "array" || type_info.kind == "callable" || type_info.kind == "null" { return "ptr" }
+    if type_info.kind == "char" { return "i8" }
+    if type_info.kind == "float" { if type_info.name == "float32" { return "float" }; return "double" }
+    if type_info.kind == "enum" || type_info.kind == "error_type" { return "i32" }
+    if type_info.kind == "integer" {
+        if type_info.name == "int8" || type_info.name == "uint8" { return "i8" }
+        if type_info.name == "int16" || type_info.name == "uint16" { return "i16" }
+        if type_info.name == "int32" || type_info.name == "uint32" { return "i32" }
+        return "i64"
+    }
+    if type_info.name == "void" { return "void" }; if type_info.name == "bool" { return "i1" }; if type_info.name == "char" { return "i8" }
+    if type_info.name == "int8" || type_info.name == "uint8" { return "i8" }; if type_info.name == "int16" || type_info.name == "uint16" { return "i16" }; if type_info.name == "int32" || type_info.name == "uint32" { return "i32" }
+    if type_info.name == "int64" || type_info.name == "uint64" || type_info.name == "uintptr" { return "i64" }; if type_info.name == "float32" { return "float" }; if type_info.name == "float64" { return "double" }
+    return "ptr"
+}
+
+string next_register(llvm_lowerer* lowerer) { lowerer.register += 1; return "%v" + `${lowerer.register}` }
+string next_label(llvm_lowerer* lowerer, string prefix) { lowerer.label += 1; return prefix + "." + `${lowerer.label}` }
+void line(llvm_lowerer* lowerer, string format, string[] args) {
+    string text = format
+    int64 arg_index = 0
+    while arg_index < args.length {
+        int64 at = -1
+        int64 i = 0
+        int64 n = bootstrap_string_length(text)
+        while i + 1 < n {
+            if bootstrap_string_slice(text, i, 2) == "{}" { at = i; break }
+            i += 1
+        }
+        if at < 0 { break }
+        text = bootstrap_string_slice(text, 0, at) + args[arg_index] + bootstrap_string_slice(text, at + 2, n - at - 2)
+        arg_index += 1
+    }
+    raw_line(lowerer, "  " + text)
+}
+void raw_line(llvm_lowerer* lowerer, string text) {
+    int64 n = lowerer.current_lines.length
+    lowerer.current_lines = array<string>(lowerer.current_lines, n + 1)
+    lowerer.current_lines[n] = text
+    if bootstrap_string_length(text) > 0 && bootstrap_string_slice(text, bootstrap_string_length(text) - 1, 1) == ":" {
+        lowerer.current_block = bootstrap_string_slice(text, 0, bootstrap_string_length(text) - 1)
+    }
+}
+
+void emit_function(llvm_lowerer* lowerer, FunctionDecl* function, StructInfo* receiver) {
+    lowerer.register=0; lowerer.label=0; lowerer.current_lines = array<string>(lowerer.current_lines, 0); lowerer.locals=Map<string, ir_local>()
+    lowerer.break_labels = array<string>(lowerer.break_labels, 0); lowerer.continue_labels = array<string>(lowerer.continue_labels, 0); lowerer.break_cleanup_depths = array<int64>(lowerer.break_cleanup_depths, 0); lowerer.continue_cleanup_depths = array<int64>(lowerer.continue_cleanup_depths, 0); lowerer.receiver=receiver
+    SemanticType* return_sem=resolve_ref(lowerer,function.ReturnType); lowerer.return_type=return_sem; string[] parameters; lowerer.main_args_name=""; lowerer.main_argc_value=""
+    bool main_argv=function.Name=="main"&&function.Receiver==""&&function.Parameters.length==1&&function.Parameters[0].Type!=null&&function.Parameters[0].Type.Name=="string"&&function.Parameters[0].Type.Arrays.length>0
+    if receiver!=null||function.Receiver!="" {parameters = array<string>(parameters, 1); parameters[0]="ptr %arg.this"}
+    if main_argv {int64 n=parameters.length; parameters = array<string>(parameters, n+2); parameters[n]="i32 %clyth.argc"; parameters[n+1]="ptr %clyth.argv"; lowerer.main_args_name=function.Parameters[0].Name; lowerer.main_argc_value="%clyth.argc"}
+    else {int64 i=0; while i<function.Parameters.length {Parameter* parameter=function.Parameters[i]; if parameter.Variadic {if parameter.Type!=null {int64 n=parameters.length; parameters = array<string>(parameters, n+1); parameters[n]=`ptr %arg.${i}`}; i+=1; continue}; int64 n=parameters.length; parameters = array<string>(parameters, n+1); parameters[n]=llvm_type_from_ref(lowerer,parameter.Type)+` %arg.${i}`; i+=1}}
+    string function_name=llvm_function_name(function); if receiver!=null {function_name=llvm_method_name(receiver.name,function.Name)}
+    raw_line(lowerer,"define "+llvm_type_from_ref(lowerer,function.ReturnType)+" @"+function_name+"("+join_llvm_strings(parameters,", ")+") {"); raw_line(lowerer,"entry:")
+    lowerer.cleanup_slots=Map<int64, string>(); lowerer.mecc_root_scopes = array<string[]>(lowerer.mecc_root_scopes, 0); lowerer.value_cleanup_scopes = array<value_cleanup[]>(lowerer.value_cleanup_scopes, 0); lowerer.pending_parameter_cleanups = array<value_cleanup>(lowerer.pending_parameter_cleanups, 0); prepare_cleanup_slots(lowerer,function.Body.node)
+    if receiver!=null||function.Receiver!="" {ir_local local; local.address="%arg.this"; local.type_info=new SemanticType(); local.type_info.kind="struct"; local.type_info.name=receiver_name(receiver,function); lowerer.locals["this"]=local}
+    int64 i=0
+    while i<function.Parameters.length {Parameter* parameter=function.Parameters[i]; if parameter.Variadic&&parameter.Type==null {i+=1; continue}; SemanticType* sem=resolve_ref(lowerer,parameter.Type); if parameter.Variadic {sem=variadic_parameter_type(lowerer,parameter)}; string ty=llvm_type(lowerer,sem); string address=next_register(lowerer); raw_line(lowerer,`  ${address} = alloca ${ty}`)
+        if main_argv {
+            // Native argv is char**. Clyth string[] must contain pointers to
+            // Core string descriptors, never the raw C char* values. Build a
+            // stack-resident descriptor for every process argument and point
+            // the Clyth array at those descriptors for main's entire lifetime.
+            string argc64=next_register(lowerer); raw_line(lowerer,`  ${argc64} = sext i32 %clyth.argc to i64`)
+            string data=next_register(lowerer); raw_line(lowerer,`  ${data} = alloca ptr, i64 ${argc64}`)
+            string descriptor_bytes=next_register(lowerer); raw_line(lowerer,`  ${descriptor_bytes} = mul i64 ${argc64}, 32`)
+            string descriptors=next_register(lowerer); raw_line(lowerer,`  ${descriptors} = alloca i8, i64 ${descriptor_bytes}`)
+            string index_slot=next_register(lowerer); raw_line(lowerer,`  ${index_slot} = alloca i64`); raw_line(lowerer,`  store i64 0, ptr ${index_slot}`)
+            string cond=next_label(lowerer,"main.argv.cond"); string body=next_label(lowerer,"main.argv.body"); string done=next_label(lowerer,"main.argv.done")
+            raw_line(lowerer,`  br label %${cond}`); raw_line(lowerer,cond+":")
+            string index=next_register(lowerer); raw_line(lowerer,`  ${index} = load i64, ptr ${index_slot}`)
+            string more=next_register(lowerer); raw_line(lowerer,`  ${more} = icmp ult i64 ${index}, ${argc64}`); raw_line(lowerer,`  br i1 ${more}, label %${body}, label %${done}`); raw_line(lowerer,body+":")
+            string raw_slot=next_register(lowerer); raw_line(lowerer,`  ${raw_slot} = getelementptr ptr, ptr %clyth.argv, i64 ${index}`)
+            string raw=next_register(lowerer); raw_line(lowerer,`  ${raw} = load ptr, ptr ${raw_slot}`)
+            string descriptor_offset=next_register(lowerer); raw_line(lowerer,`  ${descriptor_offset} = mul i64 ${index}, 32`)
+            string descriptor=next_register(lowerer); raw_line(lowerer,`  ${descriptor} = getelementptr i8, ptr ${descriptors}, i64 ${descriptor_offset}`)
+            // Core string ABI: array_ptr @ +0, local_stack_cache @ +8 (zeroed
+            // here), local_stack_cache_size @ +16, length @ +24.
+            string heap_slot=next_register(lowerer); raw_line(lowerer,`  ${heap_slot} = getelementptr i8, ptr ${descriptor}, i64 0`); raw_line(lowerer,`  store ptr ${raw}, ptr ${heap_slot}`)
+            string cache_slot=next_register(lowerer); raw_line(lowerer,`  ${cache_slot} = getelementptr i8, ptr ${descriptor}, i64 8`); raw_line(lowerer,`  store i64 0, ptr ${cache_slot}`)
+            string cache_size_slot=next_register(lowerer); raw_line(lowerer,`  ${cache_size_slot} = getelementptr i8, ptr ${descriptor}, i64 16`); raw_line(lowerer,`  store i64 0, ptr ${cache_size_slot}`)
+            string raw_length=next_register(lowerer); raw_line(lowerer,`  ${raw_length} = call i64 @strlen(ptr ${raw})`)
+            string string_length_slot=next_register(lowerer); raw_line(lowerer,`  ${string_length_slot} = getelementptr i8, ptr ${descriptor}, i64 24`); raw_line(lowerer,`  store i64 ${raw_length}, ptr ${string_length_slot}`)
+            string data_element=next_register(lowerer); raw_line(lowerer,`  ${data_element} = getelementptr ptr, ptr ${data}, i64 ${index}`); raw_line(lowerer,`  store ptr ${descriptor}, ptr ${data_element}`)
+            string next=next_register(lowerer); raw_line(lowerer,`  ${next} = add i64 ${index}, 1`); raw_line(lowerer,`  store i64 ${next}, ptr ${index_slot}`); raw_line(lowerer,`  br label %${cond}`); raw_line(lowerer,done+":")
+            string header=emit_stack_array_header(lowerer,data,0)
+            string length_slot=next_register(lowerer); raw_line(lowerer,`  ${length_slot} = getelementptr i8, ptr ${header}, i64 8`); raw_line(lowerer,`  store i64 ${argc64}, ptr ${length_slot}`); raw_line(lowerer,`  store ptr ${header}, ptr ${address}`)
+        }
+        else if is_value_aggregate(sem) {
+            IRValue incoming; incoming.llvm_type=ty; incoming.value=`%arg.${i}`; incoming.type_info=sem
+            IRValue owned
+            if sem.kind=="struct" && sem.pointer_depth==0 { owned=clone_struct_value(lowerer,incoming,sem) }
+            else { owned=clone_array_value(lowerer,incoming,sem) }
+            raw_line(lowerer,`  store ${ty} ${owned.value}, ptr ${address}`)
+            int64 cleanup_n=lowerer.pending_parameter_cleanups.length; lowerer.pending_parameter_cleanups=array<value_cleanup>(lowerer.pending_parameter_cleanups,cleanup_n+1); value_cleanup cleanup; cleanup.address=address; cleanup.type_info=sem; lowerer.pending_parameter_cleanups[cleanup_n]=cleanup
+        }
+        else {raw_line(lowerer,`  store ${ty} %arg.${i}, ptr ${address}`)}
+        ir_local local; local.address=address; local.type_info=sem; lowerer.locals[parameter.Name]=local; i+=1
+    }
+    bool terminated=emit_block(lowerer,function.Body); if !terminated {emit_default_return(lowerer,return_sem)}; raw_line(lowerer,"}")
+    int64 n=lowerer.function_defs.length; lowerer.function_defs = array<string>(lowerer.function_defs, n+1); lowerer.function_defs[n]=join_llvm_strings(lowerer.current_lines,"\n")
+}
+
+string receiver_name(StructInfo* receiver, FunctionDecl* function) { if receiver != null { return receiver.name }; if function != null { return function.Receiver }; return "" }
+
+void emit_constructor(llvm_lowerer* lowerer, string name, ConstructorDecl* ctor, StructInfo* info) {
+    lowerer.register = 0; lowerer.label = 0; lowerer.current_lines = array<string>(lowerer.current_lines, 0); lowerer.locals = Map<string, ir_local>()
+    lowerer.break_labels = array<string>(lowerer.break_labels, 0); lowerer.continue_labels = array<string>(lowerer.continue_labels, 0); lowerer.break_cleanup_depths = array<int64>(lowerer.break_cleanup_depths, 0); lowerer.continue_cleanup_depths = array<int64>(lowerer.continue_cleanup_depths, 0)
+    lowerer.receiver = info
+    lowerer.return_type = new SemanticType(); lowerer.return_type.kind = "struct"; lowerer.return_type.name = name; lowerer.return_type.pointer_depth = 1
+    string[] parameters
+    int64 i = 0
+    while i < ctor.Parameters.length {
+        string entry = llvm_type_from_ref(lowerer, ctor.Parameters[i].Type) + " %arg." + `${i}`
+        int64 n = parameters.length; parameters = array<string>(parameters, n + 1); parameters[n] = entry
+        i += 1
+    }
+    raw_line(lowerer, "define ptr @" + llvm_constructor_name(name) + "(" + join_llvm_strings(parameters, ", ") + ") {")
+    raw_line(lowerer, "entry:")
+    lowerer.cleanup_slots = Map<int64, string>(); lowerer.mecc_root_scopes = array<string[]>(lowerer.mecc_root_scopes, 0); lowerer.value_cleanup_scopes = array<value_cleanup[]>(lowerer.value_cleanup_scopes, 0)
+    prepare_cleanup_slots(lowerer, ctor.Body.node)
+    string object = next_register(lowerer)
+    raw_line(lowerer, `  ${object} = call ptr @calloc(i64 1, i64 ${struct_storage_size(lowerer, info)})`)
+    initialize_struct_fields(lowerer, object, info)
+    ir_local this_local; this_local.address = object; this_local.type_info = new SemanticType(); this_local.type_info.kind = "struct"; this_local.type_info.name = name; lowerer.locals["this"] = this_local
+    i = 0
+    while i < ctor.Parameters.length {
+        SemanticType* sem = resolve_ref(lowerer, ctor.Parameters[i].Type); string ty = llvm_type(lowerer, sem); string address = next_register(lowerer)
+        raw_line(lowerer, `  ${address} = alloca ${ty}`); raw_line(lowerer, `  store ${ty} %arg.${i}, ptr ${address}`)
+        ir_local local; local.address = address; local.type_info = sem; lowerer.locals[ctor.Parameters[i].Name] = local
+        i += 1
+    }
+    emit_block(lowerer, ctor.Body)
+    emit_mecc_clear_all_roots(lowerer)
+    raw_line(lowerer, `  ret ptr ${object}`); raw_line(lowerer, "}")
+    int64 n = lowerer.function_defs.length; lowerer.function_defs = array<string>(lowerer.function_defs, n + 1); lowerer.function_defs[n] = join_llvm_strings(lowerer.current_lines, "\n")
+}
+
+void emit_destructor(llvm_lowerer* lowerer, string name, DestructorDecl* destructor, StructInfo* info) {
+    lowerer.register = 0; lowerer.label = 0; lowerer.current_lines = array<string>(lowerer.current_lines, 0); lowerer.locals = Map<string, ir_local>(); lowerer.cleanup_slots = Map<int64, string>()
+    lowerer.mecc_root_scopes = array<string[]>(lowerer.mecc_root_scopes, 0); lowerer.value_cleanup_scopes = array<value_cleanup[]>(lowerer.value_cleanup_scopes, 0); lowerer.receiver = info
+    lowerer.return_type = new SemanticType(); lowerer.return_type.kind = "void"; lowerer.return_type.name = "void"
+    raw_line(lowerer, "define void @" + llvm_destructor_name(name) + "(ptr %arg.this) {"); raw_line(lowerer, "entry:")
+    prepare_cleanup_slots(lowerer, destructor.Body.node)
+    ir_local this_local; this_local.address = "%arg.this"; this_local.type_info = new SemanticType(); this_local.type_info.kind = "struct"; this_local.type_info.name = name; lowerer.locals["this"] = this_local
+    bool terminated = emit_block(lowerer, destructor.Body)
+    if !terminated { emit_mecc_function_frontier(lowerer); raw_line(lowerer, "  ret void") }
+    raw_line(lowerer, "}")
+    int64 n = lowerer.function_defs.length; lowerer.function_defs = array<string>(lowerer.function_defs, n + 1); lowerer.function_defs[n] = join_llvm_strings(lowerer.current_lines, "\n")
+}
+
+void emit_default_constructor(llvm_lowerer* lowerer, string name) {
+    string fn = llvm_constructor_name(name)
+    if lowerer.defined[fn] { return }
+    lowerer.defined[fn] = true
+    StructInfo* info = lowerer.struct_info[name]
+    lowerer.register = 0; lowerer.label = 0; lowerer.current_lines = array<string>(lowerer.current_lines, 0)
+    raw_line(lowerer, "define ptr @" + fn + "() {"); raw_line(lowerer, "entry:")
+    string object = next_register(lowerer)
+    raw_line(lowerer, `  ${object} = call ptr @calloc(i64 1, i64 ${struct_storage_size(lowerer, info)})`)
+    initialize_struct_fields(lowerer, object, info); raw_line(lowerer, `  ret ptr ${object}`); raw_line(lowerer, "}")
+    int64 n = lowerer.function_defs.length; lowerer.function_defs = array<string>(lowerer.function_defs, n + 1); lowerer.function_defs[n] = join_llvm_strings(lowerer.current_lines, "\n")
+}
+
+Symbol* lookup_type_symbol(llvm_lowerer* lowerer, Namespace* namespace, string name, Map<Namespace*, bool> seen) {
+    if namespace == null || seen[namespace] { return null }
+    seen[namespace] = true
+    Symbol* symbol = namespace.symbols[name]
+    if symbol != null { return symbol }
+    int64 i = 0
+    while i < namespace.open_imports.length {
+        Symbol* found = lookup_type_symbol(lowerer, namespace.open_imports[i], name, seen)
+        if found != null { return found }
+        i += 1
+    }
+    return null
+}
+
+bool enum_member_value(Symbol* symbol, string member_name, int64* value) {
+    if symbol == null || symbol.type_info == null || symbol.type_info.kind != "enum" { return false }
+    if symbol.declaration.category != NODE_DECL || symbol.declaration.declaration.kind != DECL_ENUM { return false }
+    EnumDecl* declaration = symbol.declaration.declaration.enum_decl
+    if declaration == null { return false }
+    int64 next = 0
+    int64 i = 0
+    while i < declaration.Members.length {
+        EnumMember* member = declaration.Members[i]
+        if member != null && member.Value.kind == EXPR_LITERAL && member.Value.literal != null && member.Value.literal.Kind == "integer" {
+            BootstrapIntegerResult parsed = parse_integer_literal(member.Value.literal.Raw)
+            if parsed.ok { next = parsed.value }
+        }
+        if member != null && member.Name == member_name { value[0] = next; return true }
+        next += 1
+        i += 1
+    }
+    return false
+}
+
+SemanticType* resolve_ref(llvm_lowerer* lowerer, TypeRef* ref) {
+    if ref == null { SemanticType* unknown = new SemanticType(); unknown.kind = "unknown"; return unknown }
+    SemanticType* replacement = lowerer.substitutions[ref.Name]
+    if replacement != null {
+        SemanticType* result = clone_type(replacement); result.pointer_depth += ref.PointerDepth; result.is_const = result.is_const || ref.Const
+        int64 i = 0; while i < ref.Arrays.length { SemanticArrayDimension dim; dim.dynamic = ref.Arrays[i].Dynamic; dim.size = array_dimension_size(ref.Arrays[i]); auto n=result.array_dimensions.length; result.array_dimensions = array<SemanticArrayDimension>(result.array_dimensions, n+1); result.array_dimensions[n]=dim; i += 1 }
+        if result.array_dimensions.length > 0 { result.kind = "array" } else if result.pointer_depth > 0 { result.kind = "pointer" }; return result
+    }
+    SemanticType* result = new SemanticType(); result.name = ref.Name; result.pointer_depth = ref.PointerDepth; result.is_const = ref.Const
+    int64 i = 0; while i < ref.GenericArgs.length { auto n=result.generic_args.length; result.generic_args = array<SemanticType*>(result.generic_args, n+1); result.generic_args[n]=resolve_ref(lowerer,ref.GenericArgs[i]); i+=1 }
+    if ref.Name == "void" { result.kind="void" } else if ref.Name == "bool" { result.kind="bool" } else if ref.Name == "char" { result.kind="char" } else if ref.Name == "string" { result.kind="string" } else if ref.Name == "float32" || ref.Name == "float64" { result.kind="float" } else if ref.Name == "int8" || ref.Name == "int16" || ref.Name == "int32" || ref.Name == "int64" || ref.Name == "uint8" || ref.Name == "uint16" || ref.Name == "uint32" || ref.Name == "uint64" || ref.Name == "uintptr" { result.kind="integer" } else if lowerer.enum_values[ref.Name].length > 0 { result.kind="enum" } else {
+        Symbol* imported = lookup_type_symbol(lowerer, lowerer.result.root_namespace, ref.Name, Map<Namespace*, bool>())
+        if imported != null && imported.type_info != null && imported.type_info.kind == "enum" { result.kind="enum" } else { result.kind="struct" }
+    }
+    i=0; while i<ref.Arrays.length { SemanticArrayDimension dim; dim.dynamic=ref.Arrays[i].Dynamic; dim.size=array_dimension_size(ref.Arrays[i]); auto n=result.array_dimensions.length; result.array_dimensions = array<SemanticArrayDimension>(result.array_dimensions, n+1); result.array_dimensions[n]=dim; i+=1 }
+    if ref.PointerDepth>0 { result.kind="pointer" }; if ref.Arrays.length>0 { result.kind="array" }
+    if ref.Callable != null { result.kind="callable"; SemanticCallable* callable=new SemanticCallable(); callable.return_type=resolve_ref(lowerer,ref.Callable.Return); i=0; while i<ref.Callable.Parameters.length { auto n=callable.parameters.length; callable.parameters = array<SemanticType*>(callable.parameters, n+1); callable.parameters[n]=resolve_ref(lowerer,ref.Callable.Parameters[i]); i+=1 }; callable.variadic=ref.Callable.Variadic; result.callable=callable }
+    return result
+}
+
+string array_dimension_size(ArrayDimension dimension) { if dimension.Dynamic || dimension.Size.kind == 0 { return "" }; if dimension.Size.kind == EXPR_LITERAL && dimension.Size.literal != null { return dimension.Size.literal.Raw }; return "" }
+
+SemanticType* specialize_type(llvm_lowerer* lowerer, SemanticType* type_info) {
+    if type_info == null { return null }; SemanticType* result=clone_type(type_info); SemanticType* replacement=lowerer.substitutions[result.name]
+    if replacement != null { SemanticType* base=clone_type(replacement); base.pointer_depth += result.pointer_depth; int64 old=base.array_dimensions.length; base.array_dimensions = array<SemanticArrayDimension>(base.array_dimensions, old+result.array_dimensions.length); int64 i=0; while i<result.array_dimensions.length { base.array_dimensions[old+i]=result.array_dimensions[i]; i+=1 }; base.is_const=base.is_const||result.is_const; if base.array_dimensions.length>0 {base.kind="array"} else if base.pointer_depth>0 {base.kind="pointer"}; return base }
+    int64 i=0; while i<result.generic_args.length { result.generic_args[i]=specialize_type(lowerer,result.generic_args[i]); i+=1 }; if result.callable!=null { result.callable.return_type=specialize_type(lowerer,result.callable.return_type); i=0; while i<result.callable.parameters.length {result.callable.parameters[i]=specialize_type(lowerer,result.callable.parameters[i]); i+=1} }; return result
+}
+
+StructInfo* specialized_struct_info(StructInfo* template, SemanticType*[] arguments) {
+    if template==null {return null}; Map<string, SemanticType*> substitutions=build_substitutions(template.generic_parameters,arguments); StructInfo* info=new StructInfo(); info.name=specialization_name(template.name,arguments); info.declaration=template.declaration; info.fields=Map<string, Symbol*>(); info.methods=Map<string, Symbol*>(); info.constructors=template.constructors; info.destructor=template.destructor
+    info.field_order = array<string>(info.field_order, template.field_order.length); int64 i=0; while i<template.field_order.length {info.field_order[i]=template.field_order[i]; i+=1}
+    string[] names=template.fields.keys(); i=0; while i<names.length {Symbol* source=template.fields[names[i]]; if source!=null {Symbol* copy=new Symbol(); copy.name=source.name; copy.kind=source.kind; copy.type_info=substitute_type(source.type_info,substitutions); copy.declaration=source.declaration; copy.namespace_name=source.namespace_name; copy.scope_id=source.scope_id; copy.generic_parameters=source.generic_parameters; copy.receiver_name=source.receiver_name; copy.error_type_id=source.error_type_id; info.fields[names[i]]=copy}; i+=1}
+    names=template.methods.keys(); i=0; while i<names.length {Symbol* source=template.methods[names[i]]; if source!=null {Symbol* copy=new Symbol(); copy.name=source.name; copy.kind=source.kind; copy.type_info=substitute_type(source.type_info,substitutions); copy.declaration=source.declaration; copy.namespace_name=source.namespace_name; copy.scope_id=source.scope_id; copy.generic_parameters=source.generic_parameters; copy.receiver_name=source.receiver_name; copy.error_type_id=source.error_type_id; info.methods[names[i]]=copy}; i+=1}; return info
+}
+
+IRValue default_array_value(llvm_lowerer* lowerer, SemanticType* type_info) {
+    int64 count = 0
+    if type_info != null && type_info.array_dimensions.length > 0 && !type_info.array_dimensions[0].dynamic { count = bootstrap_decimal_int(type_info.array_dimensions[0].size) }
+    SemanticType* element = array_element_type(lowerer, type_info)
+    int64 element_size = semantic_storage_size(lowerer, element)
+    string header = next_register(lowerer)
+    raw_line(lowerer, `  ${header} = call ptr @calloc(i64 1, i64 16)`)
+    if count > 0 {
+        string data = next_register(lowerer)
+        raw_line(lowerer, `  ${data} = call ptr @calloc(i64 ${count}, i64 ${element_size})`)
+        string data_slot = next_register(lowerer)
+        raw_line(lowerer, `  ${data_slot} = getelementptr i8, ptr ${header}, i64 0`)
+        raw_line(lowerer, `  store ptr ${data}, ptr ${data_slot}`)
+    }
+    string length_slot = next_register(lowerer)
+    raw_line(lowerer, `  ${length_slot} = getelementptr i8, ptr ${header}, i64 8`)
+    raw_line(lowerer, `  store i64 ${count}, ptr ${length_slot}`)
+    IRValue result; result.llvm_type="ptr"; result.value=header; result.type_info=type_info; result.fresh=true; return result
+}
+
+bool constructor_accepts_no_explicit_arguments(SemanticCallable* ctor) {
+    if ctor == null { return true }
+    int64 fixed = ctor.parameters.length
+    if ctor.variadic && !ctor.native_variadic && fixed > 0 { fixed -= 1 }
+    int64 i = 0
+    while i < fixed {
+        if i >= ctor.default_values.length || ctor.default_values[i].kind == 0 { return false }
+        i += 1
+    }
+    return true
+}
+
+IRValue default_struct_value(llvm_lowerer* lowerer, SemanticType* type_info) {
+    string name = base_type_name(type_info); StructInfo* info = lowerer.struct_info[name]
+    if info == null { return zero_value(lowerer, type_info) }
+    bool can_call_default = info.constructors.length == 0; int64 i=0
+    while i < info.constructors.length { SemanticCallable* ctor=info.constructors[i]; if ctor!=null && ctor.parameters.length==0 && !ctor.variadic {can_call_default=true; break}; i+=1 }
+    if can_call_default {
+        string fn=llvm_constructor_name(name); if !lowerer.defined[fn] && lowerer.declarations[fn]=="" {lowerer.declarations[fn]=`declare ptr @${fn}()`}
+        string value=next_register(lowerer); raw_line(lowerer, `  ${value} = call ptr @${fn}()`); IRValue result; result.llvm_type="ptr"; result.value=value; result.type_info=type_info; result.fresh=true; return result
+    }
+    string value=next_register(lowerer); int64 size=struct_storage_size(lowerer,info); raw_line(lowerer, `  ${value} = call ptr @calloc(i64 1, i64 ${size})`); initialize_struct_fields(lowerer,value,info)
+    IRValue result; result.llvm_type="ptr"; result.value=value; result.type_info=type_info; result.fresh=true; return result
+}
+
+bool emit_block(llvm_lowerer* lowerer, BlockStmt* block) {
+    if block == null { return false }
+    Map<string, ir_local> saved_locals = Map<string, ir_local>()
+    string[] local_names = lowerer.locals.keys(); int64 i = 0
+    while i < local_names.length { saved_locals[local_names[i]] = lowerer.locals[local_names[i]]; i += 1 }
+    int64 old_block_depth = lowerer.block_stack.length
+    int64 old_mecc_depth = lowerer.mecc_root_scopes.length
+    int64 old_value_depth = lowerer.value_cleanup_scopes.length
+    lowerer.block_stack = array<BlockStmt*>(lowerer.block_stack, old_block_depth + 1); lowerer.block_stack[old_block_depth] = block
+    lowerer.mecc_root_scopes = array<string[]>(lowerer.mecc_root_scopes, old_mecc_depth + 1); lowerer.mecc_root_scopes[old_mecc_depth] = array<string>(lowerer.mecc_root_scopes[old_mecc_depth], 0)
+    lowerer.value_cleanup_scopes = array<value_cleanup[]>(lowerer.value_cleanup_scopes, old_value_depth + 1)
+    if old_value_depth==0 && lowerer.pending_parameter_cleanups.length>0 { lowerer.value_cleanup_scopes[old_value_depth]=lowerer.pending_parameter_cleanups; lowerer.pending_parameter_cleanups=array<value_cleanup>(lowerer.pending_parameter_cleanups,0) }
+    else { lowerer.value_cleanup_scopes[old_value_depth] = array<value_cleanup>(lowerer.value_cleanup_scopes[old_value_depth], 0) }
+    bool terminated = false; i = 0
+    while i < block.Statements.length {
+        if emit_stmt(lowerer, block.Statements[i]) { terminated = true; break }
+        i += 1
+    }
+    if !terminated {
+        emit_value_cleanup_scope(lowerer, lowerer.value_cleanup_scopes.length - 1)
+        emit_lifetime_cleanups(lowerer, block.node)
+        emit_mecc_clear_root_scope(lowerer, lowerer.mecc_root_scopes.length - 1)
+    }
+    lowerer.locals = saved_locals
+    lowerer.block_stack = array<BlockStmt*>(lowerer.block_stack, old_block_depth)
+    lowerer.mecc_root_scopes = array<string[]>(lowerer.mecc_root_scopes, old_mecc_depth)
+    lowerer.value_cleanup_scopes = array<value_cleanup[]>(lowerer.value_cleanup_scopes, old_value_depth)
+    return terminated
+}
+
+bool emit_stmt(llvm_lowerer* lowerer, Stmt statement) {
+    if statement.kind == STMT_VAR {
+        VarDeclStmt* item = bootstrap_as_var_decl_stmt(statement)
+        SemanticType* sem = resolve_ref(lowerer, item.Type)
+        if item.Type != null && item.Type.Name == "auto" && item.Initializer.kind != 0 { sem = clone_type(lowerer.result.expression_types[item.Initializer]) }
+        string ty = llvm_type(lowerer, sem); string address = next_register(lowerer)
+        raw_line(lowerer, `  ${address} = alloca ${ty}`)
+        ir_local local; local.address = address; local.type_info = sem; lowerer.locals[item.Name] = local
+        IRValue value = zero_value(lowerer, sem)
+        if item.Initializer.kind != 0 {
+            if item.Initializer.kind == EXPR_ARRAY && sem != null && (sem.kind == "array" || sem.array_dimensions.length > 0) { value = emit_array_expr(lowerer, bootstrap_as_array_expr(item.Initializer), sem, array_element_type(lowerer, sem)) }
+            else { value = emit_expr(lowerer, item.Initializer) }
+            value = coerce(lowerer, value, sem)
+        } else if sem != null && sem.kind == "struct" && sem.pointer_depth == 0 { value = default_struct_value(lowerer, sem) }
+        else if sem != null && (sem.kind == "array" || sem.array_dimensions.length > 0) { value = default_array_value(lowerer, sem) }
+        raw_line(lowerer, `  store ${ty} ${value.value}, ptr ${address}`)
+        if is_value_aggregate(sem) && lowerer.value_cleanup_scopes.length > 0 { int64 index = lowerer.value_cleanup_scopes.length - 1; int64 n = lowerer.value_cleanup_scopes[index].length; lowerer.value_cleanup_scopes[index] = array<value_cleanup>(lowerer.value_cleanup_scopes[index], n + 1); value_cleanup cleanup; cleanup.address = address; cleanup.type_info = sem; lowerer.value_cleanup_scopes[index][n] = cleanup }
+        if lowerer.result.mecc_enabled && semantic_is_pointer(sem) { raw_line(lowerer, `  call void @clyth_mecc_store(ptr null, ptr ${address}, ptr ${value.value})`); register_mecc_root(lowerer, address) }
+        return false
+    }
+    if statement.kind == STMT_EXPR {
+        ExprStmt* item = bootstrap_as_expr_stmt(statement); emit_expr(lowerer, item.Expression)
+        if item.Expression.kind == EXPR_CALL { CallExpr* call = bootstrap_as_call_expr(item.Expression); if call.Callee.kind == EXPR_IDENTIFIER && bootstrap_as_identifier_expr(call.Callee).Name == "raise" && lowerer.catch_stack.length > 0 { return true } }
+        return false
+    }
+    if statement.kind == STMT_RETURN {
+        ReturnStmt* item = bootstrap_as_return_stmt(statement)
+        if lowerer.catch_stack.length > 0 {
+            if item.Value.kind != 0 { emit_expr(lowerer, item.Value) }
+            catch_context context = lowerer.catch_stack[lowerer.catch_stack.length - 1]
+            emit_value_cleanups_from(lowerer, context.block_depth); emit_lifetime_cleanups(lowerer, node_from_stmt(statement)); raw_line(lowerer, `  br label %${context.end_label}`); return true
+        }
+        IRValue value = zero_value(lowerer, lowerer.return_type)
+        if item.Value.kind != 0 { value = coerce(lowerer, emit_expr(lowerer, item.Value), lowerer.return_type) }
+        emit_value_cleanups_from(lowerer, 0); emit_lifetime_cleanups(lowerer, node_from_stmt(statement)); emit_mecc_function_frontier(lowerer)
+        if llvm_type(lowerer, lowerer.return_type) == "void" { raw_line(lowerer, "  ret void") } else { raw_line(lowerer, `  ret ${llvm_type(lowerer, lowerer.return_type)} ${value.value}`) }
+        return true
+    }
+    if statement.kind == STMT_BLOCK { return emit_block(lowerer, bootstrap_as_block_stmt(statement)) }
+    if statement.kind == STMT_IF {
+        IfStmt* item = bootstrap_as_if_stmt(statement); IRValue condition = to_bool(lowerer, emit_expr(lowerer, item.Condition)); string then_label = next_label(lowerer, "if.then"); string else_label = next_label(lowerer, "if.else"); string end_label = next_label(lowerer, "if.end")
+        raw_line(lowerer, `  br i1 ${condition.value}, label %${then_label}, label %${else_label}`); raw_line(lowerer, then_label + ":")
+        bool then_term = emit_stmt(lowerer, item.Then); if !then_term { raw_line(lowerer, `  br label %${end_label}`) }
+        raw_line(lowerer, else_label + ":"); bool else_term = false; if item.Else.kind != 0 { else_term = emit_stmt(lowerer, item.Else) }; if !else_term { raw_line(lowerer, `  br label %${end_label}`) }; if then_term && else_term { return true }; raw_line(lowerer, end_label + ":"); return false
+    }
+    if statement.kind == STMT_WHILE {
+        WhileStmt* item = bootstrap_as_while_stmt(statement); string cond_label = next_label(lowerer, "while.cond"); string body_label = next_label(lowerer, "while.body"); string end_label = next_label(lowerer, "while.end")
+        raw_line(lowerer, `  br label %${cond_label}`); raw_line(lowerer, cond_label + ":"); IRValue condition = to_bool(lowerer, emit_expr(lowerer, item.Condition)); raw_line(lowerer, `  br i1 ${condition.value}, label %${body_label}, label %${end_label}`); raw_line(lowerer, body_label + ":")
+        int64 n = lowerer.break_labels.length; lowerer.break_labels = array<string>(lowerer.break_labels, n+1); lowerer.break_labels[n]=end_label; n=lowerer.continue_labels.length; lowerer.continue_labels = array<string>(lowerer.continue_labels, n+1); lowerer.continue_labels[n]=cond_label; n=lowerer.break_cleanup_depths.length; lowerer.break_cleanup_depths = array<int64>(lowerer.break_cleanup_depths, n+1); lowerer.break_cleanup_depths[n]=lowerer.block_stack.length; n=lowerer.continue_cleanup_depths.length; lowerer.continue_cleanup_depths = array<int64>(lowerer.continue_cleanup_depths, n+1); lowerer.continue_cleanup_depths[n]=lowerer.block_stack.length
+        bool term = emit_stmt(lowerer, item.Body); lowerer.break_labels = array<string>(lowerer.break_labels, lowerer.break_labels.length-1); lowerer.continue_labels = array<string>(lowerer.continue_labels, lowerer.continue_labels.length-1); lowerer.break_cleanup_depths = array<int64>(lowerer.break_cleanup_depths, lowerer.break_cleanup_depths.length-1); lowerer.continue_cleanup_depths = array<int64>(lowerer.continue_cleanup_depths, lowerer.continue_cleanup_depths.length-1)
+        if !term { raw_line(lowerer, `  br label %${cond_label}`) }; raw_line(lowerer, end_label + ":"); return false
+    }
+    if statement.kind == STMT_FOR {
+        ForStmt* item = bootstrap_as_for_stmt(statement); if item.Init.kind != 0 { emit_stmt(lowerer, item.Init) }
+        string cond_label=next_label(lowerer,"for.cond"); string body_label=next_label(lowerer,"for.body"); string post_label=next_label(lowerer,"for.post"); string end_label=next_label(lowerer,"for.end")
+        raw_line(lowerer, `  br label %${cond_label}`); raw_line(lowerer, cond_label + ":")
+        if item.Condition.kind != 0 { IRValue c=to_bool(lowerer,emit_expr(lowerer,item.Condition)); raw_line(lowerer, `  br i1 ${c.value}, label %${body_label}, label %${end_label}`) } else { raw_line(lowerer, `  br label %${body_label}`) }
+        raw_line(lowerer, body_label + ":")
+        int64 n=lowerer.break_labels.length; lowerer.break_labels = array<string>(lowerer.break_labels, n+1); lowerer.break_labels[n]=end_label; n=lowerer.continue_labels.length; lowerer.continue_labels = array<string>(lowerer.continue_labels, n+1); lowerer.continue_labels[n]=post_label; n=lowerer.break_cleanup_depths.length; lowerer.break_cleanup_depths = array<int64>(lowerer.break_cleanup_depths, n+1); lowerer.break_cleanup_depths[n]=lowerer.block_stack.length; n=lowerer.continue_cleanup_depths.length; lowerer.continue_cleanup_depths = array<int64>(lowerer.continue_cleanup_depths, n+1); lowerer.continue_cleanup_depths[n]=lowerer.block_stack.length
+        bool term=emit_stmt(lowerer,item.Body); lowerer.break_labels = array<string>(lowerer.break_labels, lowerer.break_labels.length-1); lowerer.continue_labels = array<string>(lowerer.continue_labels, lowerer.continue_labels.length-1); lowerer.break_cleanup_depths = array<int64>(lowerer.break_cleanup_depths, lowerer.break_cleanup_depths.length-1); lowerer.continue_cleanup_depths = array<int64>(lowerer.continue_cleanup_depths, lowerer.continue_cleanup_depths.length-1)
+        if !term { raw_line(lowerer, `  br label %${post_label}`) }; raw_line(lowerer, post_label + ":"); if item.Post.kind != 0 { emit_expr(lowerer,item.Post) }; raw_line(lowerer, `  br label %${cond_label}`); raw_line(lowerer,end_label+":"); return false
+    }
+    if statement.kind == STMT_SWITCH {
+        SwitchStmt* item=bootstrap_as_switch_stmt(statement); IRValue switch_value=emit_expr(lowerer,item.Value); string end_label=next_label(lowerer,"switch.end"); string[] case_labels; case_labels = array<string>(case_labels, item.Cases.length); string default_label=end_label; int64 i=0
+        while i<item.Cases.length {case_labels[i]=next_label(lowerer,"switch.case"); if item.Cases[i].Default {default_label=case_labels[i]}; i+=1}
+        string current_test=next_label(lowerer,"switch.test"); raw_line(lowerer,`  br label %${current_test}`); int64[] nondefault; i=0; while i<item.Cases.length {if !item.Cases[i].Default {int64 n=nondefault.length; nondefault = array<int64>(nondefault, n+1); nondefault[n]=i}; i+=1}
+        int64 pos=0; while pos<nondefault.length {int64 index=nondefault[pos]; raw_line(lowerer,current_test+":"); IRValue case_value=coerce(lowerer,emit_expr(lowerer,item.Cases[index].Value),switch_value.type_info); string cmp=next_register(lowerer); raw_line(lowerer,`  ${cmp} = icmp eq ${switch_value.llvm_type} ${switch_value.value}, ${case_value.value}`); string next=default_label; if pos+1<nondefault.length {next=next_label(lowerer,"switch.test")}; raw_line(lowerer,`  br i1 ${cmp}, label %${case_labels[index]}, label %${next}`); current_test=next; pos+=1}
+        if nondefault.length==0 {raw_line(lowerer,current_test+":"); raw_line(lowerer,`  br label %${default_label}`)}
+        int64 n=lowerer.break_labels.length; lowerer.break_labels = array<string>(lowerer.break_labels, n+1); lowerer.break_labels[n]=end_label; n=lowerer.break_cleanup_depths.length; lowerer.break_cleanup_depths = array<int64>(lowerer.break_cleanup_depths, n+1); lowerer.break_cleanup_depths[n]=lowerer.block_stack.length
+        i=0; while i<item.Cases.length {raw_line(lowerer,case_labels[i]+":"); bool terminated=false; int64 j=0; while j<item.Cases[i].Statements.length {if emit_stmt(lowerer,item.Cases[i].Statements[j]) {terminated=true; break}; j+=1}; if !terminated {string next=end_label; if i+1<item.Cases.length {next=case_labels[i+1]}; raw_line(lowerer,`  br label %${next}`)}; i+=1}
+        lowerer.break_labels = array<string>(lowerer.break_labels, lowerer.break_labels.length-1); lowerer.break_cleanup_depths = array<int64>(lowerer.break_cleanup_depths, lowerer.break_cleanup_depths.length-1); raw_line(lowerer,end_label+":"); return false
+    }
+    if statement.kind == STMT_BREAK { if lowerer.break_labels.length>0 {if lowerer.break_cleanup_depths.length>0 {emit_control_scope_cleanups(lowerer,lowerer.break_cleanup_depths[lowerer.break_cleanup_depths.length-1])}; raw_line(lowerer,`  br label %${lowerer.break_labels[lowerer.break_labels.length-1]}`); return true}; return false }
+    if statement.kind == STMT_CONTINUE { if lowerer.continue_labels.length>0 {if lowerer.continue_cleanup_depths.length>0 {emit_control_scope_cleanups(lowerer,lowerer.continue_cleanup_depths[lowerer.continue_cleanup_depths.length-1])}; raw_line(lowerer,`  br label %${lowerer.continue_labels[lowerer.continue_labels.length-1]}`); return true}; return false }
+    return false
+}
+
+string bootstrap_strip_numeric_underscores(string value) { string output=""; int64 i=0; while i<bootstrap_string_length(value) { string ch=bootstrap_string_slice(value,i,1); if ch!="_" {output = output + ch}; i+=1 }; if output=="" {return "0"}; return output }
+string bootstrap_unquote_literal(string value) { int64 n=bootstrap_string_length(value); if n>=2 { string first=bootstrap_string_slice(value,0,1); string last=bootstrap_string_slice(value,n-1,1); if first==last { return bootstrap_string_slice(value,1,n-2) } }; return value }
+int64 bootstrap_char_literal_value(string raw) { string text=bootstrap_unquote_literal(raw); if bootstrap_string_length(text)==0 {return 0}; if bootstrap_string_slice(text,0,1)!="\\" {return text[0]}; if bootstrap_string_length(text)<2 {return 0}; string esc=bootstrap_string_slice(text,1,1); if esc=="n" {return 10}; if esc=="r" {return 13}; if esc=="t" {return 9}; if esc=="0" {return 0}; if esc=="\\" {return 92}; if esc=="'" {return 39}; if esc=="\"" {return 34}; return esc[0] }
+string bootstrap_cmp_predicate(string op, bool unsigned_value) { if op=="==" {return "eq"}; if op=="!=" {return "ne"}; if op=="<" {if unsigned_value{return "ult"};return "slt"}; if op=="<=" {if unsigned_value{return "ule"};return "sle"}; if op==">" {if unsigned_value{return "ugt"};return "sgt"}; if op==">=" {if unsigned_value{return "uge"};return "sge"}; return "eq" }
+string bootstrap_fp_predicate(string pred) { if pred=="eq" {return "oeq"}; if pred=="ne" {return "one"}; if pred=="slt"||pred=="ult" {return "olt"}; if pred=="sle"||pred=="ule" {return "ole"}; if pred=="sgt"||pred=="ugt" {return "ogt"}; if pred=="sge"||pred=="uge" {return "oge"}; return "oeq" }
+string bootstrap_arithmetic_op(string op, bool floating, bool unsigned_value) { if floating {if op=="+"||op=="+=" {return "fadd"};if op=="-"||op=="-=" {return "fsub"};if op=="*"||op=="*=" {return "fmul"};if op=="/"||op=="/=" {return "fdiv"};if op=="%"||op=="%=" {return "frem"};return ""}; if op=="+"||op=="+=" {return "add"};if op=="-"||op=="-=" {return "sub"};if op=="*"||op=="*=" {return "mul"};if op=="/"||op=="/=" {if unsigned_value{return "udiv"};return "sdiv"};if op=="%"||op=="%=" {if unsigned_value{return "urem"};return "srem"};return "" }
+
+IRValue emit_expr(llvm_lowerer* lowerer, Expr expression) {
+    SemanticType* sem = specialize_type(lowerer, lowerer.result.expression_types[expression])
+    if sem == null || sem.kind == "unknown" { sem = specialize_type(lowerer, infer_expression_type(lowerer, expression)) }
+    if sem == null { sem = new SemanticType(); sem.kind = "unknown" }
+    if expression.kind == EXPR_LITERAL {
+        LiteralExpr* item=bootstrap_as_literal_expr(expression); SemanticType* natural=literal_type(lowerer,item); IRValue out; out.type_info=natural
+        if item.Kind=="integer" {out.llvm_type=llvm_type(lowerer,natural); out.value=bootstrap_strip_numeric_underscores(item.Raw); return out}
+        if item.Kind=="float" {out.llvm_type=llvm_type(lowerer,natural); out.value=item.Raw; return out}
+        if item.Kind=="bool" {out.llvm_type="i1"; if item.Raw=="true" {out.value="1"} else {out.value="0"}; return out}
+        if item.Kind=="null" {out.llvm_type="ptr"; out.value="null"; return out}
+        if item.Kind=="character" {out.llvm_type="i8"; out.value=`${bootstrap_char_literal_value(item.Raw)}`; return out}
+        if item.Kind=="string" {return static_string_value(lowerer,bootstrap_unquote_literal(item.Raw),natural)}
+        if item.Kind=="interpolated_string" {return emit_interpolated_string(lowerer,item,natural)}
+        return zero_value(lowerer,sem)
+    }
+    if expression.kind == EXPR_IDENTIFIER {
+        IdentifierExpr* item=bootstrap_as_identifier_expr(expression); ir_local local=lowerer.locals[item.Name]
+        if local.address!="" {if item.Name=="this" {IRValue out;out.llvm_type="ptr";out.value=local.address;out.type_info=local.type_info;return out}; string ty=llvm_type(lowerer,local.type_info); string reg=next_register(lowerer);raw_line(lowerer,`  ${reg} = load ${ty}, ptr ${local.address}`);IRValue out;out.llvm_type=ty;out.value=reg;out.type_info=local.type_info;return out}
+        ir_local global=lowerer.globals[item.Name]; if global.address!="" {string ty=llvm_type(lowerer,global.type_info);string reg=next_register(lowerer);raw_line(lowerer,`  ${reg} = load ${ty}, ptr ${global.address}`);IRValue out;out.llvm_type=ty;out.value=reg;out.type_info=global.type_info;return out}
+        if lowerer.receiver!=null {Symbol* field=lowerer.receiver.fields[item.Name]; if field!=null {return load_receiver_field(lowerer,item.Name,field.type_info)}}
+        Symbol* error_symbol=lookup_error_type_symbol(lowerer,lowerer.result.root_namespace,item.Name,Map<Namespace*, bool>()); if error_symbol!=null {IRValue out;out.llvm_type="i32";out.value=`${error_symbol.error_type_id}`;out.type_info=new SemanticType();out.type_info.kind="error_type";out.type_info.name="ErrorType";return out}
+        int64 builtin_id=lowerer.result.error_type_ids["builtin::"+item.Name]; if builtin_id!=0 {IRValue out;out.llvm_type="i32";out.value=`${builtin_id}`;out.type_info=new SemanticType();out.type_info.kind="error_type";out.type_info.name="ErrorType";return out}
+        Symbol* symbol=lowerer.result.root_namespace.symbols[item.Name]; if symbol!=null&&symbol.kind=="function" {IRValue out;out.llvm_type="ptr";out.value="@"+sanitize_llvm_name(item.Name);out.type_info=symbol.type_info;return out}
+        return zero_value(lowerer,sem)
+    }
+    if expression.kind == EXPR_UNARY {
+        UnaryExpr* item=bootstrap_as_unary_expr(expression)
+        if item.Operator=="++"||item.Operator=="--" {BootstrapAssignmentAddressOwnerResult address_info=assignment_address_with_owner(lowerer,item.Operand); if !address_info.ok||address_info.address=="" {return zero_value(lowerer,sem)}; string ty=llvm_type(lowerer,address_info.type_info);string old=next_register(lowerer);raw_line(lowerer,`  ${old} = load ${ty}, ptr ${address_info.address}`);string updated=next_register(lowerer);bool floating=ty=="float"||ty=="double";string unary_op="+"; if item.Operator=="--" {unary_op="-"}; string op=bootstrap_arithmetic_op(unary_op,floating,false);string one="1";if floating{one="1.0"};raw_line(lowerer,`  ${updated} = ${op} ${ty} ${old}, ${one}`);raw_line(lowerer,`  store ${ty} ${updated}, ptr ${address_info.address}`);IRValue out;out.llvm_type=ty;out.value=updated;if !item.Prefix{out.value=old};out.type_info=address_info.type_info;return out}
+        IRValue operand=emit_expr(lowerer,item.Operand)
+        if item.Operator=="!" {IRValue b=to_bool(lowerer,operand);string reg=next_register(lowerer);raw_line(lowerer,`  ${reg} = xor i1 ${b.value}, true`);IRValue out;out.llvm_type="i1";out.value=reg;out.type_info=sem;return out}
+        if item.Operator=="-" {string reg=next_register(lowerer);if operand.llvm_type=="float"||operand.llvm_type=="double" {raw_line(lowerer,`  ${reg} = fsub ${operand.llvm_type} 0.0, ${operand.value}`)} else {raw_line(lowerer,`  ${reg} = sub ${operand.llvm_type} 0, ${operand.value}`)};IRValue out;out.llvm_type=operand.llvm_type;out.value=reg;out.type_info=sem;return out}
+        if item.Operator=="&" {IRValue out;out.llvm_type="ptr";out.value=address_of(lowerer,item.Operand);out.type_info=sem;return out}
+        if item.Operator=="*"&&operand.llvm_type=="ptr" {string non_null=next_register(lowerer);raw_line(lowerer,`  ${non_null} = icmp ne ptr ${operand.value}, null`);emit_checked_failure(lowerer,non_null,"null_reference","null pointer dereference","nullref");string ty=llvm_type(lowerer,sem);string reg=next_register(lowerer);raw_line(lowerer,`  ${reg} = load ${ty}, ptr ${operand.value}`);IRValue out;out.llvm_type=ty;out.value=reg;out.type_info=sem;return out}
+        return operand
+    }
+    if expression.kind == EXPR_BINARY {
+        BinaryExpr* item=bootstrap_as_binary_expr(expression);IRValue left=emit_expr(lowerer,item.Left)
+        if item.Operator=="&&"||item.Operator=="||" {IRValue l=to_bool(lowerer,left);string rhs_label=next_label(lowerer,"logic.rhs");string short_label=next_label(lowerer,"logic.short");string end_label=next_label(lowerer,"logic.end");if item.Operator=="&&"{raw_line(lowerer,`  br i1 ${l.value}, label %${rhs_label}, label %${short_label}`)}else{raw_line(lowerer,`  br i1 ${l.value}, label %${short_label}, label %${rhs_label}`)};raw_line(lowerer,rhs_label+":");IRValue right=to_bool(lowerer,emit_expr(lowerer,item.Right));string rhs_value=right.value;string rhs_predecessor=lowerer.current_block;raw_line(lowerer,`  br label %${end_label}`);raw_line(lowerer,short_label+":");string short_value="0";if item.Operator=="||"{short_value="1"};raw_line(lowerer,`  br label %${end_label}`);raw_line(lowerer,end_label+":");string reg=next_register(lowerer);raw_line(lowerer,`  ${reg} = phi i1 [ ${rhs_value}, %${rhs_predecessor} ], [ ${short_value}, %${short_label} ]`);IRValue out;out.llvm_type="i1";out.value=reg;out.type_info=sem;return out}
+        IRValue right=coerce(lowerer,emit_expr(lowerer,item.Right),left.type_info)
+        if item.Operator=="+"&&left.type_info!=null&&left.type_info.name=="string" {return emit_string_concat(lowerer,left,right)}
+        if item.Operator=="=="||item.Operator=="!="||item.Operator=="<"||item.Operator=="<="||item.Operator==">"||item.Operator==">=" {if left.llvm_type=="ptr"&&right.value=="0"{right.llvm_type="ptr";right.value="null"};if right.llvm_type=="ptr"&&left.value=="0"{left.llvm_type="ptr";left.value="null"};string reg=next_register(lowerer);if left.type_info!=null&&left.type_info.name=="string"&&(item.Operator=="=="||item.Operator=="!=") {string cmp=next_register(lowerer);raw_line(lowerer,`  ${cmp} = call i32 @strcmp(ptr ${left.value}, ptr ${right.value})`);string pred="eq";if item.Operator=="!="{pred="ne"};raw_line(lowerer,`  ${reg} = icmp ${pred} i32 ${cmp}, 0`)} else {string pred=bootstrap_cmp_predicate(item.Operator,is_unsigned_type(left.type_info));if left.llvm_type=="float"||left.llvm_type=="double"{raw_line(lowerer,`  ${reg} = fcmp ${bootstrap_fp_predicate(pred)} ${left.llvm_type} ${left.value}, ${right.value}`)}else{raw_line(lowerer,`  ${reg} = icmp ${pred} ${left.llvm_type} ${left.value}, ${right.value}`)}};IRValue out;out.llvm_type="i1";out.value=reg;out.type_info=sem;return out}
+        string op=bootstrap_arithmetic_op(item.Operator,left.llvm_type=="float"||left.llvm_type=="double",is_unsigned_type(left.type_info));if op==""{return left};string reg=next_register(lowerer);raw_line(lowerer,`  ${reg} = ${op} ${left.llvm_type} ${left.value}, ${right.value}`);IRValue out;out.llvm_type=left.llvm_type;out.value=reg;out.type_info=sem;return out
+    }
+    if expression.kind == EXPR_ASSIGN {
+        AssignExpr* item=bootstrap_as_assign_expr(expression);IRValue value=emit_expr(lowerer,item.Value)
+        if item.Target.kind==EXPR_INDEX {IndexExpr* indexed=bootstrap_as_index_expr(item.Target);SemanticType* object_sem=specialize_type(lowerer,lowerer.result.expression_types[indexed.Object]);if object_sem==null||object_sem.kind=="unknown"{object_sem=specialize_type(lowerer,infer_expression_type(lowerer,indexed.Object))};if object_sem!=null&&object_sem.array_dimensions.length==0&&object_sem.pointer_depth==0&&object_sem.kind!="pointer"&&object_sem.name=="Map"&&object_sem.generic_args.length==2&&item.Operator=="=" {IRValue object=emit_expr(lowerer,indexed.Object);IRValue key=coerce(lowerer,emit_expr(lowerer,indexed.Index),object_sem.generic_args[0]);value=coerce(lowerer,value,object_sem.generic_args[1]);string fn=llvm_method_name(base_type_name(object_sem),"put");if !lowerer.defined[fn]&&lowerer.declarations[fn]==""{lowerer.declarations[fn]="declare void @"+fn+"(ptr, "+llvm_type(lowerer,object_sem.generic_args[0])+", "+llvm_type(lowerer,object_sem.generic_args[1])+")"};raw_line(lowerer,`  call void @${fn}(ptr ${object.value}, ${key.llvm_type} ${key.value}, ${value.llvm_type} ${value.value})`);return value}}
+        emit_lifetime_cleanups(lowerer,node_from_expr(expression));BootstrapAssignmentAddressOwnerResult address_info=assignment_address_with_owner(lowerer,item.Target)
+        if address_info.ok&&address_info.address!="" {value=coerce(lowerer,value,address_info.type_info);if item.Operator=="="&&is_value_aggregate(address_info.type_info){string old=next_register(lowerer);raw_line(lowerer,`  ${old} = load ptr, ptr ${address_info.address}`);emit_destroy_value(lowerer,old,address_info.type_info)};if item.Operator!="="{string old=next_register(lowerer);string ty=llvm_type(lowerer,address_info.type_info);raw_line(lowerer,`  ${old} = load ${ty}, ptr ${address_info.address}`);if item.Operator=="+="&&address_info.type_info!=null&&address_info.type_info.name=="string"{IRValue old_value;old_value.llvm_type=ty;old_value.value=old;old_value.type_info=address_info.type_info;value=emit_string_concat(lowerer,old_value,value)}else{string op=bootstrap_arithmetic_op(item.Operator,ty=="float"||ty=="double",is_unsigned_type(address_info.type_info));string combined=next_register(lowerer);raw_line(lowerer,`  ${combined} = ${op} ${ty} ${old}, ${value.value}`);value.llvm_type=ty;value.value=combined;value.type_info=address_info.type_info}};raw_line(lowerer,`  store ${value.llvm_type} ${value.value}, ptr ${address_info.address}`);if lowerer.result.mecc_enabled&&semantic_is_pointer(address_info.type_info)&&value.llvm_type=="ptr"{raw_line(lowerer,`  call void @clyth_mecc_store(ptr ${address_info.owner}, ptr ${address_info.address}, ptr ${value.value})`)}}
+        return value
+    }
+    if expression.kind == EXPR_CALL {return emit_call(lowerer,bootstrap_as_call_expr(expression),sem)}
+    if expression.kind == EXPR_MEMBER {
+        MemberExpr* item=bootstrap_as_member_expr(expression)
+        if item.Object.kind == EXPR_IDENTIFIER {
+            IdentifierExpr* identifier = bootstrap_as_identifier_expr(item.Object)
+            Symbol* enum_symbol = lookup_type_symbol(lowerer, lowerer.result.root_namespace, identifier.Name, Map<Namespace*, bool>())
+            int64 imported_enum_value = 0
+            if enum_member_value(enum_symbol, item.Name, &imported_enum_value) { IRValue out; out.llvm_type="i32"; out.value=`${imported_enum_value}`; out.type_info=clone_type(enum_symbol.type_info); return out }
+        }
+        SemanticType* object_sem=specialize_type(lowerer,lowerer.result.expression_types[item.Object]);if object_sem==null||object_sem.kind=="unknown"{object_sem=specialize_type(lowerer,infer_expression_type(lowerer,item.Object))}
+        if object_sem!=null&&object_sem.kind=="namespace" {Map<string,int64> enum_map=lowerer.enum_values[object_sem.namespace_name];int64 enum_value=enum_map[item.Name];if enum_value!=0||item.Name!="" {IRValue out;out.llvm_type="i32";out.value=`${enum_value}`;out.type_info=sem;return out};return zero_value(lowerer,sem)}
+        if item.Object.kind==EXPR_IDENTIFIER&&bootstrap_as_identifier_expr(item.Object).Name==lowerer.main_args_name&&item.Name=="length"&&lowerer.main_argc_value!="" {string reg=next_register(lowerer);raw_line(lowerer,`  ${reg} = sext i32 ${lowerer.main_argc_value} to i64`);IRValue out;out.llvm_type="i64";out.value=reg;out.type_info=new SemanticType();out.type_info.kind="integer";out.type_info.name="int64";return out}
+        if object_sem!=null&&object_sem.name=="string"&&object_sem.array_dimensions.length==0&&(item.Name=="length"||item.Name=="capacity") {IRValue object=emit_expr(lowerer,item.Object);string length=next_register(lowerer);raw_line(lowerer,`  ${length} = call i64 @strlen(ptr ${object.value})`);IRValue out;out.llvm_type="i64";out.value=length;out.type_info=new SemanticType();out.type_info.kind="integer";out.type_info.name="int64";return out}
+        if object_sem!=null&&(object_sem.kind=="array"||object_sem.array_dimensions.length>0)&&item.Name=="length" {IRValue object=emit_expr(lowerer,item.Object);string length_slot=next_register(lowerer);raw_line(lowerer,`  ${length_slot} = getelementptr i8, ptr ${object.value}, i64 8`);string length=next_register(lowerer);raw_line(lowerer,`  ${length} = load i64, ptr ${length_slot}`);IRValue out;out.llvm_type="i64";out.value=length;out.type_info=new SemanticType();out.type_info.kind="integer";out.type_info.name="int64";return out}
+        IRValue object=emit_expr(lowerer,item.Object);if object_sem!=null&&(object_sem.pointer_depth>0||object_sem.kind=="pointer"){string non_null=next_register(lowerer);raw_line(lowerer,`  ${non_null} = icmp ne ptr ${object.value}, null`);emit_checked_failure(lowerer,non_null,"null_reference","null pointer member access","nullref")};StructInfo* info=lowerer.struct_info[base_type_name(object_sem)];if info!=null{Symbol* field=info.fields[item.Name];if field!=null{string address=field_address(lowerer,object.value,info,item.Name);string ty=llvm_type(lowerer,field.type_info);string reg=next_register(lowerer);raw_line(lowerer,`  ${reg} = load ${ty}, ptr ${address}`);IRValue out;out.llvm_type=ty;out.value=reg;out.type_info=field.type_info;return out}};return zero_value(lowerer,sem)
+    }
+    if expression.kind == EXPR_INDEX {IndexExpr* item=bootstrap_as_index_expr(expression);SemanticType* object_sem=specialize_type(lowerer,lowerer.result.expression_types[item.Object]);if object_sem==null||object_sem.kind=="unknown"{object_sem=specialize_type(lowerer,infer_expression_type(lowerer,item.Object))};if object_sem!=null&&object_sem.array_dimensions.length==0&&object_sem.pointer_depth==0&&object_sem.kind!="pointer"&&object_sem.name=="Map"&&object_sem.generic_args.length==2{IRValue object=emit_expr(lowerer,item.Object);IRValue key=coerce(lowerer,emit_expr(lowerer,item.Index),object_sem.generic_args[0]);SemanticType* ret=object_sem.generic_args[1];string fn=llvm_method_name(base_type_name(object_sem),"get");if !lowerer.defined[fn]&&lowerer.declarations[fn]==""{lowerer.declarations[fn]="declare "+llvm_type(lowerer,ret)+" @"+fn+"(ptr, "+llvm_type(lowerer,object_sem.generic_args[0])+")"};string loaded=next_register(lowerer);raw_line(lowerer,`  ${loaded} = call ${llvm_type(lowerer,ret)} @${fn}(ptr ${object.value}, ${key.llvm_type} ${key.value})`);IRValue out;out.llvm_type=llvm_type(lowerer,ret);out.value=loaded;out.type_info=ret;return out};IRValue object=emit_expr(lowerer,item.Object);SemanticType* i64type=new SemanticType();i64type.kind="integer";i64type.name="int64";IRValue index=coerce(lowerer,emit_expr(lowerer,item.Index),i64type);string elem_ty=llvm_type(lowerer,sem);if object_sem!=null&&object_sem.name=="string"&&object_sem.array_dimensions.length==0{sem=new SemanticType();sem.kind="char";sem.name="char";elem_ty="i8"};string data=object.value;if object_sem==null||object_sem.kind!="string"||object_sem.array_dimensions.length!=0{data=array_data_pointer(lowerer,object.value)};emit_index_bounds_check(lowerer,item,object,index,object_sem);string address=next_register(lowerer);raw_line(lowerer,`  ${address} = getelementptr ${elem_ty}, ptr ${data}, i64 ${index.value}`);string loaded=next_register(lowerer);raw_line(lowerer,`  ${loaded} = load ${elem_ty}, ptr ${address}`);IRValue out;out.llvm_type=elem_ty;out.value=loaded;out.type_info=sem;return out}
+    if expression.kind == EXPR_ARRAY {return emit_array_expr(lowerer,bootstrap_as_array_expr(expression),sem,null)}
+    if expression.kind == EXPR_KEY_VALUE {return emit_expr(lowerer,bootstrap_as_key_value_expr(expression).Value)}
+    if expression.kind == EXPR_GENERIC_SPECIALIZATION {return emit_expr(lowerer,bootstrap_as_generic_specialization_expr(expression).Target)}
+    if expression.kind == EXPR_LAMBDA {return emit_lambda(lowerer,bootstrap_as_lambda_expr(expression),sem)}
+    if expression.kind == EXPR_NEW {
+        NewExpr* item=bootstrap_as_new_expr(expression);IRValue created
+        if item.Value.kind==EXPR_CALL {CallExpr* call=bootstrap_as_call_expr(item.Value);if call.Callee.kind==EXPR_IDENTIFIER {IdentifierExpr* ident=bootstrap_as_identifier_expr(call.Callee);if lowerer.struct_info[ident.Name]!=null{created=emit_expr(lowerer,item.Value)}}}
+        if created.value=="" {IRValue value=emit_expr(lowerer,item.Value);int64 size=semantic_storage_size(lowerer,value.type_info);if size<1{size=1};string allocation=next_register(lowerer);raw_line(lowerer,`  ${allocation} = call ptr @calloc(i64 1, i64 ${size})`);if value.llvm_type!="void"&&value.llvm_type!="ptr"{raw_line(lowerer,`  store ${value.llvm_type} ${value.value}, ptr ${allocation}`)};created.llvm_type="ptr";created.value=allocation;created.type_info=clone_type(sem)}
+        int64 id=lowerer.result.allocation_by_new[item];AllocationInfo* info=lowerer.result.allocations[id];if info!=null&&info.mecc{string managed=next_register(lowerer);int64 flag=0;if info.policy.compacting{flag=1};string destructor="null";if info.type_info!=null{SemanticType* owned_type=clone_type(info.type_info);if owned_type.pointer_depth>0{owned_type.pointer_depth-=1};StructInfo* struct_info=lowerer.struct_info[base_type_name(owned_type)];if struct_info!=null&&struct_info.destructor{destructor="@"+llvm_destructor_name(struct_info.name)}};raw_line(lowerer,`  ${managed} = call ptr @clyth_mecc_adopt(ptr ${created.value}, i1 ${flag}, ptr ${destructor})`);created.value=managed};string slot=lowerer.cleanup_slots[id];if slot!=""{raw_line(lowerer,`  store ptr ${created.value}, ptr ${slot}`)};return created
+    }
+    if expression.kind == EXPR_CAST {CastExpr* item=bootstrap_as_cast_expr(expression);return coerce(lowerer,emit_expr(lowerer,item.Value),resolve_ref(lowerer,item.Type))}
+    return zero_value(lowerer,sem)
+}
+
+
+IRValue emit_string_concat(llvm_lowerer* lowerer, IRValue left, IRValue right) {
+    SemanticType* string_type=new SemanticType(); string_type.kind="string"; string_type.name="string"
+    string left_len=next_register(lowerer); raw_line(lowerer,`  ${left_len} = call i64 @strlen(ptr ${left.value})`)
+    string right_len=next_register(lowerer); raw_line(lowerer,`  ${right_len} = call i64 @strlen(ptr ${right.value})`)
+    string total=next_register(lowerer); raw_line(lowerer,`  ${total} = add i64 ${left_len}, ${right_len}`)
+    string capacity=next_register(lowerer); raw_line(lowerer,`  ${capacity} = add i64 ${total}, 1`)
+    string buffer=next_register(lowerer); raw_line(lowerer,`  ${buffer} = call ptr @malloc(i64 ${capacity})`)
+    raw_line(lowerer,`  call ptr @memcpy(ptr ${buffer}, ptr ${left.value}, i64 ${left_len})`)
+    string right_dest=next_register(lowerer); raw_line(lowerer,`  ${right_dest} = getelementptr i8, ptr ${buffer}, i64 ${left_len}`)
+    raw_line(lowerer,`  call ptr @memcpy(ptr ${right_dest}, ptr ${right.value}, i64 ${right_len})`)
+    string nul=next_register(lowerer); raw_line(lowerer,`  ${nul} = getelementptr i8, ptr ${buffer}, i64 ${total}`)
+    raw_line(lowerer,`  store i8 0, ptr ${nul}`)
+    IRValue out; out.llvm_type="ptr"; out.value=buffer; out.type_info=string_type; out.fresh=true; return out
+}
+
+SemanticType* array_element_type(llvm_lowerer* lowerer, SemanticType* array_type) {
+    if array_type==null {SemanticType* unknown=new SemanticType(); unknown.kind="unknown"; return unknown}; SemanticType* result=clone_type(array_type)
+    if result.array_dimensions.length>0 {int64 n=result.array_dimensions.length; int64 i=0; while i+1<n {result.array_dimensions[i]=result.array_dimensions[i+1]; i+=1}; result.array_dimensions = array<SemanticArrayDimension>(result.array_dimensions, n-1)}
+    if result.array_dimensions.length>0 {result.kind="array"; return result}; if result.pointer_depth>0 {result.kind="pointer"; return result}
+    if result.name=="bool" {result.kind="bool"} else if result.name=="char" {result.kind="char"} else if result.name=="string" {result.kind="string"} else if result.name=="float32"||result.name=="float64" {result.kind="float"} else if result.name=="int8"||result.name=="int16"||result.name=="int32"||result.name=="int64"||result.name=="uint8"||result.name=="uint16"||result.name=="uint32"||result.name=="uint64"||result.name=="uintptr" {result.kind="integer"} else {result.kind="struct"}; return result
+}
+
+IRValue emit_array_expr(llvm_lowerer* lowerer, ArrayExpr* item, SemanticType* array_sem, SemanticType* element_override) {
+    SemanticType* elem_sem=element_override
+    if elem_sem==null {elem_sem=new SemanticType(); elem_sem.kind="integer"; elem_sem.name="int64"; if item.Elements.length>0 {SemanticType* inferred=specialize_type(lowerer,lowerer.result.expression_types[item.Elements[0]]); if inferred!=null {elem_sem=inferred} else if item.Elements[0].kind==EXPR_LITERAL {elem_sem=literal_type(lowerer,bootstrap_as_literal_expr(item.Elements[0]))}}}
+    string elem_ty=llvm_type(lowerer,elem_sem); int64 count=item.Elements.length; int64 bytes=count*llvm_storage_size(lowerer, elem_ty); if bytes==0 {bytes=1}
+    string data=next_register(lowerer); raw_line(lowerer, `  ${data} = call ptr @malloc(i64 ${bytes})`)
+    int64 i=0
+    while i<item.Elements.length {
+        Expr expression=item.Elements[i]; IRValue value
+        if expression.kind==EXPR_KEY_VALUE && elem_sem.kind=="struct" && elem_sem.name=="MapEntry" && elem_sem.generic_args.length==2 {
+            KeyValueExpr* pair=bootstrap_as_key_value_expr(expression); IRValue key=coerce(lowerer,emit_expr(lowerer,pair.Key),elem_sem.generic_args[0]); IRValue mapped=coerce(lowerer,emit_expr(lowerer,pair.Value),elem_sem.generic_args[1]); string constructor_name=llvm_constructor_name(base_type_name(elem_sem))
+            if !lowerer.defined[constructor_name] && lowerer.declarations[constructor_name]=="" {lowerer.declarations[constructor_name]="declare ptr @"+constructor_name+"("+llvm_type(lowerer,elem_sem.generic_args[0])+", "+llvm_type(lowerer,elem_sem.generic_args[1])+")"}
+            string reg=next_register(lowerer); raw_line(lowerer, `  ${reg} = call ptr @${constructor_name}(${key.llvm_type} ${key.value}, ${mapped.llvm_type} ${mapped.value})`); value.llvm_type="ptr"; value.value=reg; value.type_info=elem_sem
+        } else {value=coerce(lowerer,emit_expr(lowerer,expression),elem_sem)}
+        string address=next_register(lowerer); raw_line(lowerer, `  ${address} = getelementptr ${elem_ty}, ptr ${data}, i64 ${i}`); raw_line(lowerer, `  store ${elem_ty} ${value.value}, ptr ${address}`); i+=1
+    }
+    string header=next_register(lowerer); raw_line(lowerer, `  ${header} = call ptr @malloc(i64 16)`); string data_slot=next_register(lowerer); raw_line(lowerer, `  ${data_slot} = getelementptr i8, ptr ${header}, i64 0`); raw_line(lowerer, `  store ptr ${data}, ptr ${data_slot}`); string length_slot=next_register(lowerer); raw_line(lowerer, `  ${length_slot} = getelementptr i8, ptr ${header}, i64 8`); raw_line(lowerer, `  store i64 ${count}, ptr ${length_slot}`)
+    IRValue result; result.llvm_type="ptr"; result.value=header; result.type_info=array_sem; result.fresh=true; return result
+}
+
+BootstrapVariadicPackResult emit_variadic_pack(llvm_lowerer* lowerer, Expr[] expressions, SemanticType* element_type, bool heterogeneous) {
+    BootstrapVariadicPackResult result; result.ok=true; int64 count=expressions.length; int64 storage_count=count; if storage_count==0 {storage_count=1}
+    if heterogeneous {
+        string data=next_register(lowerer); raw_line(lowerer, `  ${data} = alloca [${storage_count*2} x i64]`); int64 i=0
+        while i<expressions.length {IRValue value=emit_expr(lowerer,expressions[i]); if value.fresh&&(is_value_aggregate(value.type_info)||(value.type_info!=null&&value.type_info.kind=="string")) {int64 n=result.temporaries.length; result.temporaries = array<IRValue>(result.temporaries, n+1); result.temporaries[n]=value}; string type_slot=next_register(lowerer); raw_line(lowerer, `  ${type_slot} = getelementptr [${storage_count*2} x i64], ptr ${data}, i64 0, i64 ${i*2}`); raw_line(lowerer, `  store i64 ${stable_variadic_type_id(type_name(value.type_info))}, ptr ${type_slot}`); string payload_slot=next_register(lowerer); raw_line(lowerer, `  ${payload_slot} = getelementptr [${storage_count*2} x i64], ptr ${data}, i64 0, i64 ${i*2+1}`); string payload=variadic_payload_i64(lowerer,value); raw_line(lowerer, `  store i64 ${payload}, ptr ${payload_slot}`); i+=1}
+        string header=emit_stack_array_header(lowerer,data,count); SemanticType* array_type=new SemanticType(); array_type.kind="array"; array_type.name="auto_variadic"; array_type.array_dimensions = array<SemanticArrayDimension>(array_type.array_dimensions, 1); array_type.array_dimensions[0].dynamic=true; result.value.llvm_type="ptr"; result.value.value=header; result.value.type_info=array_type; return result
+    }
+    SemanticType* target=specialize_type(lowerer,element_type); string elem_ty=llvm_type(lowerer,target); string data=next_register(lowerer); raw_line(lowerer, `  ${data} = alloca [${storage_count} x ${elem_ty}]`); int64 i=0
+    while i<expressions.length {IRValue value=emit_expr(lowerer,expressions[i]); if target!=null&&target.kind=="string"&&(value.type_info==null||value.type_info.kind!="string") {value=emit_to_string(lowerer,value)} else {value=coerce(lowerer,value,target)}; if is_value_aggregate(target)||(target!=null&&target.kind=="string"&&value.fresh) {int64 n=result.temporaries.length; result.temporaries = array<IRValue>(result.temporaries, n+1); result.temporaries[n]=value}; string slot=next_register(lowerer); raw_line(lowerer, `  ${slot} = getelementptr [${storage_count} x ${elem_ty}], ptr ${data}, i64 0, i64 ${i}`); raw_line(lowerer, `  store ${elem_ty} ${value.value}, ptr ${slot}`); i+=1}
+    string header=emit_stack_array_header(lowerer,data,count); SemanticType* array_type=clone_type(target); if array_type==null {array_type=new SemanticType(); array_type.kind="unknown"}; array_type.kind="array"; array_type.array_dimensions = array<SemanticArrayDimension>(array_type.array_dimensions, 1); array_type.array_dimensions[0].dynamic=true; result.value.llvm_type="ptr"; result.value.value=header; result.value.type_info=array_type; return result
+}
+
+string emit_stack_array_header(llvm_lowerer* lowerer, string data, int64 count) {
+    string header = next_register(lowerer)
+    raw_line(lowerer, `  ${header} = alloca [16 x i8]`)
+    string data_slot = next_register(lowerer)
+    raw_line(lowerer, `  ${data_slot} = getelementptr i8, ptr ${header}, i64 0`)
+    raw_line(lowerer, `  store ptr ${data}, ptr ${data_slot}`)
+    string length_slot = next_register(lowerer)
+    raw_line(lowerer, `  ${length_slot} = getelementptr i8, ptr ${header}, i64 8`)
+    raw_line(lowerer, `  store i64 ${count}, ptr ${length_slot}`)
+    return header
+}
+
+uint64 stable_variadic_type_id(string name) { uint64 hash=1469598103934665603; int64 i=0; while i<bootstrap_string_length(name) { string ch=bootstrap_string_slice(name,i,1); hash = hash * 1099511628211 + ch[0]; i+=1 }; return hash }
+
+string variadic_payload_i64(llvm_lowerer* lowerer, IRValue value) {
+    if value.value == "" { return "0" }
+    if value.llvm_type == "ptr" { string converted=next_register(lowerer); raw_line(lowerer, `  ${converted} = ptrtoint ptr ${value.value} to i64`); return converted }
+    if value.llvm_type == "double" { string converted=next_register(lowerer); raw_line(lowerer, `  ${converted} = bitcast double ${value.value} to i64`); return converted }
+    if value.llvm_type == "float" { string bits=next_register(lowerer); raw_line(lowerer, `  ${bits} = bitcast float ${value.value} to i32`); string converted=next_register(lowerer); raw_line(lowerer, `  ${converted} = zext i32 ${bits} to i64`); return converted }
+    if bootstrap_string_starts_with(value.llvm_type, "i") != 0 {
+        int64 bits=bootstrap_decimal_int(bootstrap_string_slice(value.llvm_type,1,bootstrap_string_length(value.llvm_type)-1)); if bits==64 {return value.value}
+        string converted=next_register(lowerer); string op="sext"; if is_unsigned_type(value.type_info)||bits==1 {op="zext"}; raw_line(lowerer, `  ${converted} = ${op} ${value.llvm_type} ${value.value} to i64`); return converted
+    }
+    return "0"
+}
+
+IRValue emit_to_string(llvm_lowerer* lowerer, IRValue value) {
+    SemanticType* string_type=new SemanticType(); string_type.kind="string"; string_type.name="string"
+    if value.type_info!=null && value.type_info.kind=="string" {value.type_info=string_type; return value}
+    if value.type_info!=null && value.type_info.kind=="bool" && value.llvm_type=="i1" {
+        IRValue true_value=static_string_value(lowerer,"true",string_type); IRValue false_value=static_string_value(lowerer,"false",string_type); string selected=next_register(lowerer)
+        raw_line(lowerer, `  ${selected} = select i1 ${value.value}, ptr ${true_value.value}, ptr ${false_value.value}`)
+        IRValue result; result.llvm_type="ptr"; result.value=selected; result.type_info=string_type; return result
+    }
+    if value.type_info!=null && value.type_info.kind=="struct" {
+        StructInfo* info=lowerer.struct_info[base_type_name(value.type_info)]
+        if info!=null {Symbol* method=info.methods["to_string"]; if method!=null&&method.type_info!=null&&method.type_info.callable!=null&&method.type_info.callable.parameters.length==0 {string reg=next_register(lowerer); raw_line(lowerer, `  ${reg} = call ptr @${llvm_method_name(info.name,"to_string")}(ptr ${value.value})`); IRValue result; result.llvm_type="ptr"; result.value=reg; result.type_info=string_type; return result}}
+    }
+    string format="%lld"; IRValue argument=value
+    if value.type_info!=null&&is_unsigned_type(value.type_info) {format="%llu"}
+    if value.llvm_type=="float"||value.llvm_type=="double" {format="%g"; if value.llvm_type=="float" {string promoted=next_register(lowerer); raw_line(lowerer, `  ${promoted} = fpext float ${value.value} to double`); argument.llvm_type="double"; argument.value=promoted; argument.type_info=new SemanticType(); argument.type_info.kind="float"; argument.type_info.name="float64"}}
+    else if value.llvm_type=="ptr" {format="%p"} else if value.type_info!=null&&value.type_info.kind=="char" {format="%c"}
+    IRValue format_value=static_string_value(lowerer,format,string_type); string required32=next_register(lowerer); raw_line(lowerer, `  ${required32} = call i32 (ptr, i64, ptr, ...) @snprintf(ptr null, i64 0, ptr ${format_value.value}, ${argument.llvm_type} ${argument.value})`)
+    string required64=next_register(lowerer); raw_line(lowerer, `  ${required64} = sext i32 ${required32} to i64`); string capacity=next_register(lowerer); raw_line(lowerer, `  ${capacity} = add i64 ${required64}, 1`); string buffer=next_register(lowerer); raw_line(lowerer, `  ${buffer} = call ptr @malloc(i64 ${capacity})`); raw_line(lowerer, `  call i32 (ptr, i64, ptr, ...) @snprintf(ptr ${buffer}, i64 ${capacity}, ptr ${format_value.value}, ${argument.llvm_type} ${argument.value})`)
+    IRValue result; result.llvm_type="ptr"; result.value=buffer; result.type_info=string_type; result.fresh=true; return result
+}
+
+string constant_initializer(llvm_lowerer* lowerer, Expr expression, SemanticType* target) {
+    if expression.kind==EXPR_LITERAL && expression.literal!=null {
+        LiteralExpr* literal=expression.literal
+        if literal.Kind=="integer" { string out=""; int64 i=0; while i<bootstrap_string_length(literal.Raw) {string ch=bootstrap_string_slice(literal.Raw,i,1); if ch!="_" {out=out+ch}; i+=1}; return out }
+        if literal.Kind=="bool" {if literal.Raw=="true" {return "1"}; return "0"}
+        if literal.Kind=="float" {return literal.Raw}
+        if literal.Kind=="null" {return "null"}
+        if literal.Kind=="string" {
+            string text=bootstrap_unquote_literal(literal.Raw)
+            int64 index=lowerer.strings.length
+            int64 old=lowerer.strings.length
+            lowerer.strings=array<string>(lowerer.strings,old+1)
+            lowerer.strings[old]=text
+            int64 n=bootstrap_string_length(text)+1
+            return `getelementptr inbounds ([${n} x i8], ptr @.clyth.str.${index}, i64 0, i64 0)`
+        }
+    }
+    return zero_value(lowerer,target).value
+}
+
+IRValue static_string_value(llvm_lowerer* lowerer, string text, SemanticType* type_info) {
+    int64 index = lowerer.strings.length
+    int64 old = lowerer.strings.length
+    lowerer.strings = array<string>(lowerer.strings, old + 1)
+    lowerer.strings[old] = text
+    int64 n = bootstrap_string_length(text) + 1
+    IRValue result
+    result.llvm_type = "ptr"
+    result.value = `getelementptr inbounds ([${n} x i8], ptr @.clyth.str.${index}, i64 0, i64 0)`
+    result.type_info = type_info
+    return result
+}
+
+struct interpolation_piece {
+	string literal
+	string expression
+}
+
+interpolation_piece[] split_interpolated_string(string raw) {
+    string text = raw
+    int64 raw_length = bootstrap_string_length(text)
+    if raw_length >= 2 && bootstrap_string_slice(text,0,1)=="`" && bootstrap_string_slice(text,raw_length-1,1)=="`" { text=bootstrap_string_slice(text,1,raw_length-2) }
+    interpolation_piece[] pieces
+    int64 start=0; int64 i=0; int64 n=bootstrap_string_length(text)
+    while i+1<n {
+        if bootstrap_string_slice(text,i,2)!="${" { i+=1; continue }
+        if i>start { interpolation_piece literal_piece; literal_piece.literal=bootstrap_string_slice(text,start,i-start); int64 count=pieces.length; pieces = array<interpolation_piece>(pieces, count+1); pieces[count]=literal_piece }
+        int64 depth=1; int64 j=i+2; string quote=""
+        while j<n {
+            string c=bootstrap_string_slice(text,j,1)
+            if quote!="" {
+                if c=="\\" { j+=2; continue }
+                if c==quote { quote="" }
+                j+=1; continue
+            }
+            if c=="'" || c=="\"" { quote=c; j+=1; continue }
+            if c=="{" {depth+=1} else if c=="}" {depth-=1; if depth==0 {break}}
+            j+=1
+        }
+        if j>=n { interpolation_piece tail; tail.literal=bootstrap_string_slice(text,i,n-i); int64 count=pieces.length; pieces = array<interpolation_piece>(pieces, count+1); pieces[count]=tail; return pieces }
+        interpolation_piece expression_piece; expression_piece.expression=bootstrap_string_slice(text,i+2,j-i-2); int64 count=pieces.length; pieces = array<interpolation_piece>(pieces, count+1); pieces[count]=expression_piece
+        i=j+1; start=j+1
+    }
+    if start<n { interpolation_piece tail; tail.literal=bootstrap_string_slice(text,start,n-start); int64 count=pieces.length; pieces = array<interpolation_piece>(pieces, count+1); pieces[count]=tail }
+    return pieces
+}
+
+BootstrapInterpolationArgumentResult interpolation_argument(llvm_lowerer* lowerer, IRValue value) {
+    BootstrapInterpolationArgumentResult result; result.value=value; result.llvm_type="%p"; result.ok=true
+    if value.type_info!=null && value.type_info.name=="string" {result.llvm_type="%s"; return result}
+    if value.llvm_type=="ptr" {return result}
+    if value.llvm_type=="float" {string reg=next_register(lowerer); raw_line(lowerer, `  ${reg} = fpext float ${value.value} to double`); result.llvm_type="%g"; result.value.llvm_type="double"; result.value.value=reg; result.value.type_info=new SemanticType(); result.value.type_info.kind="float"; result.value.type_info.name="float64"; return result}
+    if value.llvm_type=="double" {result.llvm_type="%g"; return result}
+    if value.llvm_type=="i1" {SemanticType* target=new SemanticType(); target.kind="integer"; target.name="int32"; result.llvm_type="%d"; result.value=coerce(lowerer,value,target); return result}
+    if bootstrap_string_starts_with(value.llvm_type,"i")!=0 {SemanticType* target=new SemanticType(); target.kind="integer"; if is_unsigned_type(value.type_info) {result.llvm_type="%llu"; target.name="uint64"} else {result.llvm_type="%lld"; target.name="int64"}; result.value=coerce(lowerer,value,target); return result}
+    return result
+}
+
+SemanticType* infer_expression_type(llvm_lowerer* lowerer, Expr expression) {
+    if expression.kind==0 {SemanticType* unknown=new SemanticType(); unknown.kind="unknown"; return unknown}
+    SemanticType* existing=lowerer.result.expression_types[expression]; if existing!=null {return specialize_type(lowerer,existing)}
+    if expression.kind==EXPR_LITERAL {return literal_type(lowerer,bootstrap_as_literal_expr(expression))}
+    if expression.kind==EXPR_IDENTIFIER {IdentifierExpr* item=bootstrap_as_identifier_expr(expression); ir_local local=lowerer.locals[item.Name]; if local.type_info!=null{return local.type_info}; ir_local global=lowerer.globals[item.Name]; if global.type_info!=null{return global.type_info}; if lowerer.receiver!=null {Symbol* field=lowerer.receiver.fields[item.Name]; if field!=null{return field.type_info}}; Symbol* symbol=lowerer.result.root_namespace.symbols[item.Name]; if symbol!=null{return symbol.type_info}}
+    else if expression.kind==EXPR_INDEX {IndexExpr* item=bootstrap_as_index_expr(expression); SemanticType* object=infer_expression_type(lowerer,item.Object); if object!=null&&object.name=="string" {SemanticType* result=new SemanticType(); result.kind="char"; result.name="char"; return result}; return array_element_type(lowerer,object)}
+    else if expression.kind==EXPR_MEMBER {MemberExpr* item=bootstrap_as_member_expr(expression); if item.Object.kind==EXPR_IDENTIFIER {IdentifierExpr* identifier=bootstrap_as_identifier_expr(item.Object); Symbol* enum_symbol=lookup_type_symbol(lowerer,lowerer.result.root_namespace,identifier.Name,Map<Namespace*, bool>()); int64 imported_enum_value=0; if enum_member_value(enum_symbol,item.Name,&imported_enum_value){return clone_type(enum_symbol.type_info)}}; SemanticType* object=infer_expression_type(lowerer,item.Object); if item.Name=="length"||item.Name=="capacity" {SemanticType* result=new SemanticType(); result.kind="integer"; result.name="int64"; return result}; StructInfo* info=lowerer.struct_info[base_type_name(object)]; if info!=null {Symbol* field=info.fields[item.Name]; if field!=null{return field.type_info}}}
+    else if expression.kind==EXPR_UNARY {UnaryExpr* item=bootstrap_as_unary_expr(expression); SemanticType* operand=infer_expression_type(lowerer,item.Operand); if item.Operator=="!" {SemanticType* result=new SemanticType(); result.kind="bool"; result.name="bool"; return result}; return operand}
+    else if expression.kind==EXPR_BINARY {BinaryExpr* item=bootstrap_as_binary_expr(expression); if item.Operator=="=="||item.Operator=="!="||item.Operator=="<"||item.Operator=="<="||item.Operator==">"||item.Operator==">="||item.Operator=="&&"||item.Operator=="||" {SemanticType* result=new SemanticType(); result.kind="bool"; result.name="bool"; return result}; return infer_expression_type(lowerer,item.Left)}
+    else if expression.kind==EXPR_CALL {CallExpr* item=bootstrap_as_call_expr(expression); SemanticType* callee=infer_expression_type(lowerer,item.Callee); if callee!=null&&callee.callable!=null{return callee.callable.return_type}}
+    else if expression.kind==EXPR_CAST {CastExpr* item=bootstrap_as_cast_expr(expression); return resolve_ref(lowerer,item.Type)}
+    SemanticType* unknown=new SemanticType(); unknown.kind="unknown"; return unknown
+}
+
+void annotate_expression_types(llvm_lowerer* lowerer, Expr expression) {
+    if expression.kind==0 {return}
+    if expression.kind==EXPR_INDEX {IndexExpr* item=bootstrap_as_index_expr(expression); annotate_expression_types(lowerer,item.Object); annotate_expression_types(lowerer,item.Index)}
+    else if expression.kind==EXPR_MEMBER {annotate_expression_types(lowerer,bootstrap_as_member_expr(expression).Object)}
+    else if expression.kind==EXPR_UNARY {annotate_expression_types(lowerer,bootstrap_as_unary_expr(expression).Operand)}
+    else if expression.kind==EXPR_BINARY {BinaryExpr* item=bootstrap_as_binary_expr(expression); annotate_expression_types(lowerer,item.Left); annotate_expression_types(lowerer,item.Right)}
+    else if expression.kind==EXPR_CALL {CallExpr* item=bootstrap_as_call_expr(expression); annotate_expression_types(lowerer,item.Callee); int64 i=0; while i<item.Arguments.length {annotate_expression_types(lowerer,item.Arguments[i]); i+=1}}
+    else if expression.kind==EXPR_CAST {annotate_expression_types(lowerer,bootstrap_as_cast_expr(expression).Value)}
+    lowerer.result.expression_types[expression]=infer_expression_type(lowerer,expression)
+}
+
+IRValue emit_interpolated_string(llvm_lowerer* lowerer, LiteralExpr* literal, SemanticType* type_info) {
+    interpolation_piece[] pieces=split_interpolated_string(literal.Raw); string format=""; IRValue[] arguments; int64 i=0
+    while i<pieces.length {
+        interpolation_piece piece=pieces[i]
+        if piece.literal!="" {int64 j=0; while j<bootstrap_string_length(piece.literal) {string ch=bootstrap_string_slice(piece.literal,j,1); if ch=="%" {format = format + "%%"} else {format = format + ch}; j+=1}; i+=1; continue}
+        ExpressionParseResult parsed=ParseExpression(piece.expression)
+        if parsed.expression.kind==0||parsed.parseErrors.length!=0||parsed.lexErrors.length!=0 {format = format + "<invalid-interpolation>"; i+=1; continue}
+        annotate_expression_types(lowerer,parsed.expression); IRValue value=emit_expr(lowerer,parsed.expression); BootstrapInterpolationArgumentResult promoted=interpolation_argument(lowerer,value); format = format + promoted.llvm_type; int64 n=arguments.length; arguments = array<IRValue>(arguments, n+1); arguments[n]=promoted.value; i+=1
+    }
+    SemanticType* string_type=new SemanticType(); string_type.kind="string"; string_type.name="string"; IRValue format_value=static_string_value(lowerer,format,string_type); string[] arg_text; i=0
+    while i<arguments.length {int64 n=arg_text.length; arg_text = array<string>(arg_text, n+1); arg_text[n]=arguments[i].llvm_type+" "+arguments[i].value; i+=1}
+    string suffix=""; if arg_text.length>0 {suffix=", "+join_llvm_strings(arg_text,", ")}
+    string required32=next_register(lowerer); raw_line(lowerer, `  ${required32} = call i32 (ptr, i64, ptr, ...) @snprintf(ptr null, i64 0, ptr ${format_value.value}${suffix})`); string required64=next_register(lowerer); raw_line(lowerer, `  ${required64} = sext i32 ${required32} to i64`); string capacity=next_register(lowerer); raw_line(lowerer, `  ${capacity} = add i64 ${required64}, 1`); string buffer=next_register(lowerer); raw_line(lowerer, `  ${buffer} = call ptr @malloc(i64 ${capacity})`); raw_line(lowerer, `  call i32 (ptr, i64, ptr, ...) @snprintf(ptr ${buffer}, i64 ${capacity}, ptr ${format_value.value}${suffix})`)
+    IRValue result; result.llvm_type="ptr"; result.value=buffer; result.type_info=type_info; result.fresh=true; return result
+}
+
+SemanticType* literal_type(llvm_lowerer* lowerer, LiteralExpr* literal) { SemanticType* result=new SemanticType(); if literal==null {result.kind="unknown"; return result}; if literal.Kind=="integer" {result.kind="integer"; result.name="int64"; result.untyped_literal=true} else if literal.Kind=="float" {result.kind="float"; result.name="float64"; result.untyped_literal=true} else if literal.Kind=="bool" {result.kind="bool"; result.name="bool"} else if literal.Kind=="character" {result.kind="char"; result.name="char"} else if literal.Kind=="string"||literal.Kind=="interpolated_string" {result.kind="string"; result.name="string"} else if literal.Kind=="null" {result.kind="null"; result.name="null"} else {result.kind="unknown"}; return result }
+
+string base_type_name(SemanticType* type_info) { if type_info==null {return ""}; if type_info.generic_args.length>0 {return specialization_name(type_info.name,type_info.generic_args)}; return type_info.name }
+
+bool is_value_aggregate(SemanticType* type_info) { if type_info==null {return false}; if type_info.kind=="array" || type_info.array_dimensions.length>0 {return true}; if semantic_is_pointer(type_info) {return false}; return type_info.kind=="struct" }
+
+BootstrapActiveCatchResult active_catch(llvm_lowerer* lowerer) { BootstrapActiveCatchResult result; if lowerer.catch_stack.length==0 {result.ok=false; return result}; result.context=lowerer.catch_stack[lowerer.catch_stack.length-1]; result.ok=true; return result }
+
+void emit_checked_failure(llvm_lowerer* lowerer, string condition, string error_name, string message, string prefix) {
+    BootstrapActiveCatchResult active = active_catch(lowerer)
+    string fail_label = next_label(lowerer, prefix + ".fail")
+    string ok_label = next_label(lowerer, prefix + ".ok")
+    raw_line(lowerer, `  br i1 ${condition}, label %${ok_label}, label %${fail_label}`)
+    raw_line(lowerer, fail_label + ":")
+    if !active.ok {
+        raw_line(lowerer, "  call void @abort()")
+        raw_line(lowerer, "  unreachable")
+        raw_line(lowerer, ok_label + ":")
+        return
+    }
+    int64 id = lowerer.result.error_type_ids["builtin::" + error_name]
+    SemanticType* message_type = new SemanticType(); message_type.kind="string"; message_type.name="string"
+    IRValue message_value = static_string_value(lowerer, message, message_type)
+    store_error_value(lowerer, active.context.error_value, "1", `${id}`, message_value.value)
+    emit_catch_scope_cleanups(lowerer, active.context)
+    raw_line(lowerer, `  br label %${active.context.end_label}`)
+    raw_line(lowerer, ok_label + ":")
+}
+
+void emit_catch_scope_cleanups(llvm_lowerer* lowerer, catch_context context) {
+    int64 start = context.block_depth
+    if start < 0 { start = 0 }
+    if start > lowerer.block_stack.length { start = lowerer.block_stack.length }
+    int64 index = lowerer.block_stack.length - 1
+    while index >= start {
+        emit_value_cleanup_scope(lowerer, index)
+        emit_lifetime_cleanups(lowerer, lowerer.block_stack[index].node)
+        emit_mecc_clear_root_scope(lowerer, index)
+        index -= 1
+    }
+}
+
+void emit_control_scope_cleanups(llvm_lowerer* lowerer, int64 start) {
+    if start < 0 { start = 0 }
+    int64 index = lowerer.block_stack.length - 1
+    while index >= start {
+        emit_value_cleanup_scope(lowerer, index)
+        emit_lifetime_cleanups(lowerer, lowerer.block_stack[index].node)
+        emit_mecc_clear_root_scope(lowerer, index)
+        index -= 1
+    }
+}
+
+void emit_value_cleanup_scope(llvm_lowerer* lowerer, int64 index) {
+    if index < 0 || index >= lowerer.value_cleanup_scopes.length { return }
+    value_cleanup[] cleanups = lowerer.value_cleanup_scopes[index]
+    int64 i = cleanups.length - 1
+    while i >= 0 {
+        value_cleanup cleanup = cleanups[i]
+        string value = next_register(lowerer)
+        raw_line(lowerer, `  ${value} = load ptr, ptr ${cleanup.address}`)
+        emit_destroy_value(lowerer, value, cleanup.type_info)
+        raw_line(lowerer, `  store ptr null, ptr ${cleanup.address}`)
+        i -= 1
+    }
+}
+
+void emit_value_cleanups_from(llvm_lowerer* lowerer, int64 start) {
+    if start < 0 { start = 0 }
+    int64 index = lowerer.value_cleanup_scopes.length - 1
+    while index >= start {
+        emit_value_cleanup_scope(lowerer, index)
+        index -= 1
+    }
+}
+
+void emit_destroy_value(llvm_lowerer* lowerer, string value, SemanticType* type_info) {
+    type_info = specialize_type(lowerer, type_info)
+    if type_info == null || value == "" || (semantic_is_pointer(type_info) && type_info.kind != "array" && type_info.array_dimensions.length == 0) { return }
+    string non_null = next_register(lowerer)
+    string destroy_label = next_label(lowerer, "value.destroy")
+    string done_label = next_label(lowerer, "value.destroy.done")
+    raw_line(lowerer, `  ${non_null} = icmp ne ptr ${value}, null`)
+    raw_line(lowerer, `  br i1 ${non_null}, label %${destroy_label}, label %${done_label}`)
+    raw_line(lowerer, destroy_label + ":")
+    emit_destroy_value_nonnull(lowerer, value, type_info)
+    raw_line(lowerer, `  br label %${done_label}`)
+    raw_line(lowerer, done_label + ":")
+}
+
+void emit_destroy_call_temporary(llvm_lowerer* lowerer, IRValue value) {
+    if is_value_aggregate(value.type_info) { emit_destroy_value(lowerer, value.value, value.type_info); return }
+    if value.fresh && value.type_info != null && value.type_info.kind == "string" { raw_line(lowerer, `  call void @free(ptr ${value.value})`) }
+}
+
+void emit_destroy_value_nonnull(llvm_lowerer* lowerer, string value, SemanticType* type_info) {
+    if lowerer.result.mecc_enabled { raw_line(lowerer, `  call void @clyth_mecc_owner_release(ptr ${value})`) }
+    if type_info.kind == "array" || type_info.array_dimensions.length > 0 { emit_destroy_array_value(lowerer, value, type_info); return }
+    if type_info.kind != "struct" { return }
+    StructInfo* info = lowerer.struct_info[base_type_name(type_info)]
+    if info == null { raw_line(lowerer, `  call void @free(ptr ${value})`); return }
+    if info.destructor { raw_line(lowerer, `  call void @${llvm_destructor_name(info.name)}(ptr ${value})`) }
+    int64 i = 0
+    while i < info.field_order.length {
+        string name = info.field_order[i]
+        Symbol* field = info.fields[name]
+        if field != null {
+            SemanticType* field_type = specialize_type(lowerer, field.type_info)
+            if is_value_aggregate(field_type) {
+                string address = field_address(lowerer, value, info, name)
+                string nested = next_register(lowerer)
+                raw_line(lowerer, `  ${nested} = load ptr, ptr ${address}`)
+                emit_destroy_value(lowerer, nested, field_type)
+            }
+        }
+        i += 1
+    }
+    raw_line(lowerer, `  call void @free(ptr ${value})`)
+}
+
+void emit_destroy_array_value(llvm_lowerer* lowerer, string header, SemanticType* type_info) {
+    string data = array_data_pointer(lowerer, header)
+    SemanticType* element = array_element_type(lowerer, type_info)
+    if is_value_aggregate(element) {
+        string length_slot = next_register(lowerer); raw_line(lowerer, `  ${length_slot} = getelementptr i8, ptr ${header}, i64 8`)
+        string length = next_register(lowerer); raw_line(lowerer, `  ${length} = load i64, ptr ${length_slot}`)
+        string index_slot = next_register(lowerer); raw_line(lowerer, `  ${index_slot} = alloca i64`); raw_line(lowerer, `  store i64 0, ptr ${index_slot}`)
+        string cond_label = next_label(lowerer, "value.destroy.cond"); string body_label = next_label(lowerer, "value.destroy.body"); string end_label = next_label(lowerer, "value.destroy.end")
+        raw_line(lowerer, `  br label %${cond_label}`); raw_line(lowerer, cond_label + ":")
+        string index = next_register(lowerer); raw_line(lowerer, `  ${index} = load i64, ptr ${index_slot}`)
+        string more = next_register(lowerer); raw_line(lowerer, `  ${more} = icmp ult i64 ${index}, ${length}`)
+        raw_line(lowerer, `  br i1 ${more}, label %${body_label}, label %${end_label}`); raw_line(lowerer, body_label + ":")
+        string address = next_register(lowerer); raw_line(lowerer, `  ${address} = getelementptr ptr, ptr ${data}, i64 ${index}`)
+        string nested = next_register(lowerer); raw_line(lowerer, `  ${nested} = load ptr, ptr ${address}`); emit_destroy_value(lowerer, nested, element)
+        string next = next_register(lowerer); raw_line(lowerer, `  ${next} = add i64 ${index}, 1`); raw_line(lowerer, `  store i64 ${next}, ptr ${index_slot}`); raw_line(lowerer, `  br label %${cond_label}`)
+        raw_line(lowerer, end_label + ":")
+    }
+    raw_line(lowerer, `  call void @free(ptr ${data})`); raw_line(lowerer, `  call void @free(ptr ${header})`)
+}
+
+Symbol* lookup_error_type_symbol(llvm_lowerer* lowerer, Namespace* namespace, string name, Map<Namespace*, bool> seen) { if namespace==null || seen[namespace] {return null}; seen[namespace]=true; Symbol* symbol=namespace.symbols[name]; if symbol!=null && symbol.kind=="error_type" {return symbol}; int64 i=0; while i<namespace.open_imports.length {Symbol* found=lookup_error_type_symbol(lowerer,namespace.open_imports[i],name,seen); if found!=null{return found}; i+=1}; return null }
+
+void store_error_value(llvm_lowerer* lowerer, string object, string flag, string error_type, string message) {
+    StructInfo* info = lowerer.struct_info["Error"]
+    if info == null { return }
+    string flag_address = field_address(lowerer, object, info, "error"); raw_line(lowerer, `  store i1 ${flag}, ptr ${flag_address}`)
+    string type_address = field_address(lowerer, object, info, "error_type"); raw_line(lowerer, `  store i32 ${error_type}, ptr ${type_address}`)
+    string message_address = field_address(lowerer, object, info, "error_message"); raw_line(lowerer, `  store ptr ${message}, ptr ${message_address}`)
+}
+
+IRValue emit_catch(llvm_lowerer* lowerer, CallExpr* call, SemanticType* result_sem) {
+    StructInfo* info=lowerer.struct_info["Error"]; string object=next_register(lowerer); raw_line(lowerer,`  ${object} = call ptr @calloc(i64 1, i64 ${struct_storage_size(lowerer,info)})`)
+    SemanticType* string_type=new SemanticType(); string_type.kind="string"; string_type.name="string"; IRValue empty=static_string_value(lowerer,"",string_type); store_error_value(lowerer,object,"0","0",empty.value)
+    string end_label=next_label(lowerer,"catch.end"); catch_context context; context.error_value=object; context.end_label=end_label; context.block_depth=lowerer.block_stack.length; int64 n=lowerer.catch_stack.length; lowerer.catch_stack = array<catch_context>(lowerer.catch_stack, n+1); lowerer.catch_stack[n]=context
+    if call.Arguments.length==1 {if call.Arguments[0].kind==EXPR_LAMBDA {LambdaExpr* lambda=bootstrap_as_lambda_expr(call.Arguments[0]); bool terminated=emit_block(lowerer,lambda.Body); if !terminated {raw_line(lowerer,`  br label %${end_label}`)}} else {IRValue callback=emit_expr(lowerer,call.Arguments[0]); raw_line(lowerer,`  call void ${callback.value}()`); raw_line(lowerer,`  br label %${end_label}`)}} else {raw_line(lowerer,`  br label %${end_label}`)}
+    lowerer.catch_stack = array<catch_context>(lowerer.catch_stack, lowerer.catch_stack.length-1); raw_line(lowerer,end_label+":"); IRValue result; result.llvm_type="ptr"; result.value=object; result.type_info=new SemanticType(); result.type_info.kind="struct"; result.type_info.name="Error"; result.fresh=true; return result
+}
+
+bool bootstrap_string_contains_text(string value, string needle) { int64 n=bootstrap_string_length(value); int64 m=bootstrap_string_length(needle); if m==0{return true}; if m>n{return false}; int64 i=0; while i+m<=n {if bootstrap_string_slice(value,i,m)==needle{return true};i+=1};return false }
+
+IRValue emit_call(llvm_lowerer* lowerer, CallExpr* call, SemanticType* result_sem) {
+    if call==null {return zero_value(lowerer,result_sem)}
+    if call.Callee.kind==EXPR_IDENTIFIER {
+        IdentifierExpr* builtin=bootstrap_as_identifier_expr(call.Callee)
+        if builtin.Name=="catch" {return emit_catch(lowerer,call,result_sem)}
+        if builtin.Name=="raise" {if call.Arguments.length==2&&lowerer.catch_stack.length>0 {IRValue error_type=emit_expr(lowerer,call.Arguments[0]);IRValue message=emit_expr(lowerer,call.Arguments[1]);catch_context context=lowerer.catch_stack[lowerer.catch_stack.length-1];store_error_value(lowerer,context.error_value,"1",error_type.value,message.value);emit_catch_scope_cleanups(lowerer,context);raw_line(lowerer,`  br label %${context.end_label}`)};IRValue out;out.llvm_type="void";out.type_info=result_sem;return out}
+        if builtin.Name=="free" {if call.Arguments.length==1 {IRValue argument=emit_expr(lowerer,call.Arguments[0]);if argument.value!="null" {if lowerer.result.mecc_enabled{raw_line(lowerer,`  call void @clyth_mecc_owner_release(ptr ${argument.value})`)};int64 id=lowerer.result.expression_allocations[call.Arguments[0]];AllocationInfo* info=lowerer.result.allocations[id];if info!=null&&info.mecc{raw_line(lowerer,`  call void @clyth_mecc_release(ptr ${argument.value})`)}else{emit_destructor_for_value(lowerer,argument.value,info);raw_line(lowerer,`  call void @free(ptr ${argument.value})`)};string slot=lowerer.cleanup_slots[id];if slot!=""{raw_line(lowerer,`  store ptr null, ptr ${slot}`)}}};IRValue out;out.llvm_type="void";out.type_info=result_sem;return out}
+    }
+    SemanticType* callee_sem=lowerer.result.expression_types[call.Callee];if callee_sem==null{callee_sem=infer_expression_type(lowerer,call.Callee)}
+    SemanticType*[] expected;Expr[] default_values;bool variadic=false;bool native_variadic=false;bool heterogeneous_variadic=false
+    if callee_sem!=null&&callee_sem.callable!=null {expected=callee_sem.callable.parameters;default_values=callee_sem.callable.default_values;variadic=callee_sem.callable.variadic;native_variadic=callee_sem.callable.native_variadic;heterogeneous_variadic=callee_sem.callable.heterogeneous_variadic}
+    IRValue[] arguments;string function_name="";string indirect=""
+    if call.Callee.kind==EXPR_IDENTIFIER {
+        IdentifierExpr* callee=bootstrap_as_identifier_expr(call.Callee)
+        if lowerer.receiver!=null&&lowerer.receiver.methods[callee.Name]!=null {function_name=llvm_method_name(lowerer.receiver.name,callee.Name);IRValue self;self.llvm_type="ptr";self.value=lowerer.locals["this"].address;self.type_info=new SemanticType();self.type_info.kind="struct";self.type_info.name=lowerer.receiver.name;arguments = array<IRValue>(arguments, 1);arguments[0]=self}
+        else if lowerer.struct_info[callee.Name]!=null {StructInfo* struct_template=lowerer.struct_info[callee.Name];SemanticType* constructor_type=specialize_type(lowerer,result_sem);if call.Arguments.length==0&&struct_template.constructors.length>0&&!constructor_accepts_no_explicit_arguments(struct_template.constructors[0]){return default_struct_value(lowerer,constructor_type)};function_name=llvm_constructor_name(base_type_name(constructor_type));if struct_template.constructors.length>0 {SemanticCallable* ctor_callable=struct_template.constructors[0];Map<string,SemanticType*> substitutions=build_substitutions(struct_template.generic_parameters,constructor_type.generic_args);expected = array<SemanticType*>(expected, 0);int64 i=0;while i<ctor_callable.parameters.length{int64 n=expected.length;expected = array<SemanticType*>(expected, n+1);expected[n]=substitute_type(ctor_callable.parameters[i],substitutions);i+=1};default_values=ctor_callable.default_values;variadic=ctor_callable.variadic;native_variadic=ctor_callable.native_variadic;heterogeneous_variadic=ctor_callable.heterogeneous_variadic}}
+        else {ir_local local=lowerer.locals[callee.Name];if local.address!=""&&local.type_info!=null&&local.type_info.callable!=null{IRValue loaded=emit_expr(lowerer,call.Callee);indirect=loaded.value}else{function_name=sanitize_llvm_name(callee.Name)}}
+    } else if call.Callee.kind==EXPR_MEMBER {
+        MemberExpr* callee=bootstrap_as_member_expr(call.Callee);SemanticType* object_sem=specialize_type(lowerer,lowerer.result.expression_types[callee.Object]);if object_sem==null{object_sem=specialize_type(lowerer,infer_expression_type(lowerer,callee.Object))}
+        if object_sem!=null&&object_sem.kind=="namespace" {function_name=sanitize_llvm_name(callee.Name)} else {IRValue object=emit_expr(lowerer,callee.Object);int64 n=arguments.length;arguments = array<IRValue>(arguments, n+1);arguments[n]=object;function_name=llvm_method_name(base_type_name(object_sem),callee.Name)}
+    } else if call.Callee.kind==EXPR_GENERIC_SPECIALIZATION {
+        GenericSpecializationExpr* callee=bootstrap_as_generic_specialization_expr(call.Callee)
+        if callee.Target.kind==EXPR_IDENTIFIER {IdentifierExpr* id=bootstrap_as_identifier_expr(callee.Target);SemanticType* constructor_type=specialize_type(lowerer,result_sem);if constructor_type==null||constructor_type.name==""||constructor_type.kind=="unknown"{constructor_type=new SemanticType();constructor_type.kind="struct";constructor_type.name=id.Name;int64 i=0;while i<callee.TypeArguments.length{int64 n=constructor_type.generic_args.length;constructor_type.generic_args = array<SemanticType*>(constructor_type.generic_args, n+1);constructor_type.generic_args[n]=resolve_ref(lowerer,callee.TypeArguments[i]);i+=1}};if constructor_type.name==id.Name&&constructor_type.generic_args.length==0{int64 i=0;while i<callee.TypeArguments.length{int64 n=constructor_type.generic_args.length;constructor_type.generic_args = array<SemanticType*>(constructor_type.generic_args, n+1);constructor_type.generic_args[n]=resolve_ref(lowerer,callee.TypeArguments[i]);i+=1}};constructor_type=specialize_type(lowerer,constructor_type);StructInfo* info=lowerer.struct_info[base_type_name(constructor_type)];if info!=null{if call.Arguments.length==0&&info.constructors.length>0&&!constructor_accepts_no_explicit_arguments(info.constructors[0]){return default_struct_value(lowerer,constructor_type)};function_name=llvm_constructor_name(info.name);if info.constructors.length>0{SemanticCallable* ctor_callable=info.constructors[0];expected = array<SemanticType*>(expected, ctor_callable.parameters.length);int64 i=0;while i<ctor_callable.parameters.length{expected[i]=ctor_callable.parameters[i];i+=1};default_values=ctor_callable.default_values;variadic=ctor_callable.variadic;native_variadic=ctor_callable.native_variadic;heterogeneous_variadic=ctor_callable.heterogeneous_variadic}}else{function_name=sanitize_llvm_name(id.Name)}} else {IRValue v=emit_expr(lowerer,call.Callee);indirect=v.value}
+    } else {IRValue v=emit_expr(lowerer,call.Callee);indirect=v.value}
+    Expr[] effective_args;effective_args = array<Expr>(effective_args, call.Arguments.length);int64 i=0;while i<call.Arguments.length{effective_args[i]=call.Arguments[i];i+=1}
+    int64 fixed_count=expected.length;if variadic&&!native_variadic&&fixed_count>0{fixed_count-=1}
+    while effective_args.length<fixed_count {int64 index=effective_args.length;if index>=default_values.length||default_values[index].kind==0{break};effective_args = array<Expr>(effective_args, index+1);effective_args[index]=default_values[index]}
+    int64 regular_count=effective_args.length;if variadic&&!native_variadic&&regular_count>fixed_count{regular_count=fixed_count}
+    IRValue[] temporaries;i=0
+    while i<regular_count {Expr arg=effective_args[i];IRValue value;if i<expected.length{SemanticType* target=specialize_type(lowerer,expected[i]);if arg.kind==EXPR_ARRAY&&target!=null&&(target.kind=="array"||target.array_dimensions.length>0){value=emit_array_expr(lowerer,bootstrap_as_array_expr(arg),target,array_element_type(lowerer,target))}else{value=coerce(lowerer,emit_expr(lowerer,arg),target)};if is_value_aggregate(target)||(target!=null&&target.kind=="string"&&value.fresh){int64 n=temporaries.length;temporaries = array<IRValue>(temporaries, n+1);temporaries[n]=value}}else{value=emit_expr(lowerer,arg)};int64 n=arguments.length;arguments = array<IRValue>(arguments, n+1);arguments[n]=value;i+=1}
+    if variadic&&!native_variadic&&expected.length>0 {SemanticType* variadic_type=specialize_type(lowerer,expected[expected.length-1]);Expr[] tail;int64 tail_count=effective_args.length-regular_count;if tail_count>0{tail = array<Expr>(tail, tail_count);i=0;while i<tail_count{tail[i]=effective_args[regular_count+i];i+=1}};BootstrapVariadicPackResult packed=emit_variadic_pack(lowerer,tail,variadic_type,heterogeneous_variadic);int64 n=arguments.length;arguments = array<IRValue>(arguments, n+1);arguments[n]=packed.value;i=0;while i<packed.temporaries.length{n=temporaries.length;temporaries = array<IRValue>(temporaries, n+1);temporaries[n]=packed.temporaries[i];i+=1}} else {i=regular_count;while i<effective_args.length{int64 n=arguments.length;arguments = array<IRValue>(arguments, n+1);arguments[n]=emit_expr(lowerer,effective_args[i]);i+=1}}
+    string return_ty=llvm_type(lowerer,result_sem);string[] arg_text;i=0;while i<arguments.length{int64 n=arg_text.length;arg_text = array<string>(arg_text, n+1);arg_text[n]=arguments[i].llvm_type+" "+arguments[i].value;i+=1};string callee_text="@"+function_name;if indirect!=""{callee_text=indirect}
+    if function_name!=""&&!lowerer.defined[function_name]&&lowerer.declarations[function_name]=="" {string[] declaration_args;if arguments.length>0{i=0;while i<arguments.length{int64 n=declaration_args.length;declaration_args = array<string>(declaration_args, n+1);declaration_args[n]=arguments[i].llvm_type;i+=1}}else{i=0;while i<expected.length{int64 n=declaration_args.length;declaration_args = array<string>(declaration_args, n+1);declaration_args[n]=llvm_type(lowerer,expected[i]);i+=1}};if variadic{int64 n=declaration_args.length;declaration_args = array<string>(declaration_args, n+1);declaration_args[n]="..."};lowerer.declarations[function_name]="declare "+return_ty+" @"+function_name+"("+join_llvm_strings(declaration_args,", ")+")"}
+    if return_ty=="void" {raw_line(lowerer,"  call void "+callee_text+"("+join_llvm_strings(arg_text,", ")+")");i=temporaries.length-1;while i>=0{emit_destroy_call_temporary(lowerer,temporaries[i]);i-=1};IRValue out;out.llvm_type="void";out.value="";out.type_info=result_sem;return out}
+    string reg=next_register(lowerer);raw_line(lowerer,`  ${reg} = call ${return_ty} ${callee_text}(${join_llvm_strings(arg_text,", ")})`);i=temporaries.length-1;while i>=0{emit_destroy_call_temporary(lowerer,temporaries[i]);i-=1};IRValue out;out.llvm_type=return_ty;out.value=reg;out.type_info=result_sem;out.fresh=result_sem!=null&&result_sem.kind=="struct"&&result_sem.pointer_depth==0&&bootstrap_string_contains_text(function_name,"__ctor");return out
+}
+
+IRValue emit_lambda(llvm_lowerer* lowerer, LambdaExpr* lambda, SemanticType* sem) {
+    lowerer.lambda += 1; string name="clyth.lambda."+`${lowerer.lambda}`
+    string[] saved_lines=lowerer.current_lines; Map<string,ir_local> saved_locals=lowerer.locals; SemanticType* saved_return=lowerer.return_type; StructInfo* saved_receiver=lowerer.receiver; int64 saved_reg=lowerer.register; int64 saved_label=lowerer.label
+    lowerer.register=0; lowerer.label=0; lowerer.current_lines = array<string>(lowerer.current_lines, 0); lowerer.locals=Map<string,ir_local>(); lowerer.receiver=null
+    SemanticCallable* callable=null; if sem!=null {callable=sem.callable}; if callable==null {callable=new SemanticCallable(); callable.return_type=new SemanticType(); callable.return_type.kind="void"; callable.return_type.name="void"}
+    lowerer.return_type=callable.return_type; string[] params; int64 i=0
+    while i<lambda.Parameters.length {SemanticType* pt=new SemanticType(); pt.kind="unknown"; if i<callable.parameters.length {pt=callable.parameters[i]}; string ty=llvm_type(lowerer,pt); int64 n=params.length; params = array<string>(params, n+1); params[n]=ty+` %arg.${i}`; string addr=`%lambda.arg.addr.${i}`; ir_local local; local.address=addr; local.type_info=pt; lowerer.locals[lambda.Parameters[i].Name]=local; i+=1}
+    raw_line(lowerer,"define internal "+llvm_type(lowerer,callable.return_type)+" @"+name+"("+join_llvm_strings(params,", ")+") {"); raw_line(lowerer,"entry:")
+    i=0; while i<lambda.Parameters.length {ir_local local=lowerer.locals[lambda.Parameters[i].Name]; string ty=llvm_type(lowerer,local.type_info); raw_line(lowerer,`  ${local.address} = alloca ${ty}`); raw_line(lowerer,`  store ${ty} %arg.${i}, ptr ${local.address}`); i+=1}
+    bool term=emit_block(lowerer,lambda.Body); if !term {emit_default_return(lowerer,callable.return_type)}; raw_line(lowerer,"}"); string lambda_def=join_llvm_strings(lowerer.current_lines,"\n")
+    lowerer.current_lines=saved_lines; lowerer.locals=saved_locals; lowerer.return_type=saved_return; lowerer.receiver=saved_receiver; lowerer.register=saved_reg; lowerer.label=saved_label; int64 n=lowerer.function_defs.length; lowerer.function_defs = array<string>(lowerer.function_defs, n+1); lowerer.function_defs[n]=lambda_def
+    IRValue result; result.llvm_type="ptr"; result.value="@"+name; result.type_info=sem; return result
+}
+
+bool span_contains(Node outer, Node inner) { Span a=node_span(outer); Span b=node_span(inner); return a.Start.Offset<=b.Start.Offset && a.End.Offset>=b.End.Offset }
+
+void prepare_cleanup_slots(llvm_lowerer* lowerer, Node body) {
+    if body.kind == 0 { return }
+    Map<int64, bool> needed = Map<int64, bool>()
+    int64 i = 0
+    while i < lowerer.result.lifetime_actions.length {
+        LifetimeAction action = lowerer.result.lifetime_actions[i]
+        if action.kind == "cleanup" && action.allocation > 0 {
+            AllocationInfo* info = lowerer.result.allocations[action.allocation]
+            if info != null && info.new_expr != null && !info.mecc && span_contains(body, info.new_expr.node) {
+                needed[action.allocation] = true
+            }
+        }
+        i += 1
+    }
+    int64[] ids = needed.keys()
+    i = 1
+    while i < ids.length {
+        int64 value = ids[i]
+        int64 j = i
+        while j > 0 && ids[j - 1] > value { ids[j] = ids[j - 1]; j -= 1 }
+        ids[j] = value
+        i += 1
+    }
+    i = 0
+    while i < ids.length {
+        string slot = next_register(lowerer)
+        raw_line(lowerer, `  ${slot} = alloca ptr`)
+        raw_line(lowerer, `  store ptr null, ptr ${slot}`)
+        lowerer.cleanup_slots[ids[i]] = slot
+        i += 1
+    }
+}
+
+void emit_destructor_for_value(llvm_lowerer* lowerer, string value, AllocationInfo* info) {
+    if info == null || info.type_info == null { return }
+    SemanticType* type_info = clone_type(info.type_info)
+    if type_info.pointer_depth > 0 { type_info.pointer_depth -= 1 }
+    string name = base_type_name(type_info)
+    StructInfo* struct_info = lowerer.struct_info[name]
+    if struct_info == null || !struct_info.destructor { return }
+    string fn = llvm_destructor_name(name)
+    if !lowerer.defined[fn] && lowerer.declarations[fn] == "" { lowerer.declarations[fn] = `declare void @${fn}(ptr)` }
+    raw_line(lowerer, `  call void @${fn}(ptr ${value})`)
+}
+
+void emit_lifetime_cleanups(llvm_lowerer* lowerer, Node node) {
+    LifetimeAction[] actions = lowerer.lifetime_actions[node]
+    int64 i = 0
+    while i < actions.length {
+        LifetimeAction action = actions[i]
+        if action.kind == "cleanup" {
+            string slot = lowerer.cleanup_slots[action.allocation]
+            if slot != "" {
+                string value = next_register(lowerer)
+                raw_line(lowerer, `  ${value} = load ptr, ptr ${slot}`)
+                string occupied = next_register(lowerer)
+                raw_line(lowerer, `  ${occupied} = icmp ne ptr ${value}, null`)
+                string free_label = next_label(lowerer, "cleanup.free")
+                string done_label = next_label(lowerer, "cleanup.done")
+                raw_line(lowerer, `  br i1 ${occupied}, label %${free_label}, label %${done_label}`)
+                raw_line(lowerer, free_label + ":")
+                AllocationInfo* info = lowerer.result.allocations[action.allocation]
+                emit_destructor_for_value(lowerer, value, info)
+                raw_line(lowerer, `  call void @free(ptr ${value})`)
+                raw_line(lowerer, `  store ptr null, ptr ${slot}`)
+                raw_line(lowerer, `  br label %${done_label}`)
+                raw_line(lowerer, done_label + ":")
+            }
+        }
+        i += 1
+    }
+}
+
+void register_mecc_root(llvm_lowerer* lowerer, string slot) { if !lowerer.result.mecc_enabled || slot=="" || lowerer.mecc_root_scopes.length==0 {return}; int64 index=lowerer.mecc_root_scopes.length-1; auto n=lowerer.mecc_root_scopes[index].length; lowerer.mecc_root_scopes[index] = array<string>(lowerer.mecc_root_scopes[index], n+1); lowerer.mecc_root_scopes[index][n]=slot }
+
+void emit_mecc_clear_root_scope(llvm_lowerer* lowerer, int64 index) { if !lowerer.result.mecc_enabled || index<0 || index>=lowerer.mecc_root_scopes.length {return}; int64 i=0; while i<lowerer.mecc_root_scopes[index].length {string slot=lowerer.mecc_root_scopes[index][i]; raw_line(lowerer, `  call void @clyth_mecc_store(ptr null, ptr ${slot}, ptr null)`); i+=1} }
+
+void emit_mecc_clear_all_roots(llvm_lowerer* lowerer) { if !lowerer.result.mecc_enabled {return}; int64 index=lowerer.mecc_root_scopes.length-1; while index>=0 {emit_mecc_clear_root_scope(lowerer,index); index-=1} }
+
+void emit_mecc_function_frontier(llvm_lowerer* lowerer) { if !lowerer.result.mecc_enabled {return}; emit_mecc_clear_all_roots(lowerer); if llvm_type(lowerer,lowerer.return_type)!="ptr" {raw_line(lowerer,"  call void @clyth_mecc_collapse()")}}
+
+void emit_default_return(llvm_lowerer* lowerer, SemanticType* type_info) { emit_mecc_function_frontier(lowerer); IRValue value=zero_value(lowerer,type_info); if value.llvm_type=="void" {raw_line(lowerer,"  ret void")} else {raw_line(lowerer, `  ret ${value.llvm_type} ${value.value}`)} }
+IRValue zero_value(llvm_lowerer* lowerer, SemanticType* type_info) { IRValue result; result.llvm_type=llvm_type(lowerer,type_info); result.type_info=type_info; result.value="0"; if result.llvm_type=="ptr" {result.value="null"} else if result.llvm_type=="float"||result.llvm_type=="double" {result.value="0.0"} else if result.llvm_type=="void" {result.value=""}; return result }
+
+IRValue clone_struct_value(llvm_lowerer* lowerer, IRValue value, SemanticType* target) {
+    StructInfo* info=lowerer.struct_info[base_type_name(target)]
+    IRValue result; result.llvm_type="ptr"; result.value=value.value; result.type_info=target
+    if info==null || value.value=="null" {return result}
+    string copy_value=next_register(lowerer); raw_line(lowerer, `  ${copy_value} = call ptr @calloc(i64 1, i64 ${struct_storage_size(lowerer,info)})`)
+    int64 i=0
+    while i<info.field_order.length {
+        string name=info.field_order[i]; Symbol* field=info.fields[name]
+        if field!=null {
+            SemanticType* field_type=specialize_type(lowerer,field.type_info); string source_address=field_address(lowerer,value.value,info,name); string destination_address=field_address(lowerer,copy_value,info,name); string ty=llvm_type(lowerer,field_type); string loaded=next_register(lowerer)
+            raw_line(lowerer, `  ${loaded} = load ${ty}, ptr ${source_address}`)
+            IRValue field_value; field_value.llvm_type=ty; field_value.value=loaded; field_value.type_info=field_type
+            if field_type.kind=="struct" && field_type.pointer_depth==0 {field_value=clone_struct_value(lowerer,field_value,field_type)} else if field_type.kind=="array" || field_type.array_dimensions.length>0 {field_value=clone_array_value(lowerer,field_value,field_type)}
+            raw_line(lowerer, `  store ${field_value.llvm_type} ${field_value.value}, ptr ${destination_address}`)
+            if lowerer.result.mecc_enabled && semantic_is_pointer(field_type) && field_value.llvm_type=="ptr" {
+                raw_line(lowerer, `  call void @clyth_mecc_store(ptr ${copy_value}, ptr ${destination_address}, ptr ${field_value.value})`)
+            }
+        }
+        i+=1
+    }
+    result.value=copy_value; result.fresh=true; return result
+}
+
+IRValue clone_array_value(llvm_lowerer* lowerer, IRValue value, SemanticType* target) {
+    IRValue result; result.llvm_type="ptr"; result.value="null"; result.type_info=target
+    if value.value=="null" {return result}
+    string length_slot=next_register(lowerer); raw_line(lowerer, `  ${length_slot} = getelementptr i8, ptr ${value.value}, i64 8`)
+    string length=next_register(lowerer); raw_line(lowerer, `  ${length} = load i64, ptr ${length_slot}`)
+    string source_data=array_data_pointer(lowerer,value.value); SemanticType* element=array_element_type(lowerer,target); int64 element_size=semantic_storage_size(lowerer,element)
+    string new_header=next_register(lowerer); raw_line(lowerer, `  ${new_header} = call ptr @calloc(i64 1, i64 16)`)
+    string bytes=next_register(lowerer); raw_line(lowerer, `  ${bytes} = mul i64 ${length}, ${element_size}`)
+    string new_data=next_register(lowerer); raw_line(lowerer, `  ${new_data} = call ptr @calloc(i64 ${length}, i64 ${element_size})`)
+    if element.kind=="struct" && element.pointer_depth==0 {
+        string index_slot=next_register(lowerer); raw_line(lowerer, `  ${index_slot} = alloca i64`); raw_line(lowerer, `  store i64 0, ptr ${index_slot}`)
+        string cond_label=next_label(lowerer,"array.copy.cond"); string body_label=next_label(lowerer,"array.copy.body"); string end_label=next_label(lowerer,"array.copy.end"); raw_line(lowerer, `  br label %${cond_label}`); raw_line(lowerer,cond_label+":")
+        string index=next_register(lowerer); raw_line(lowerer, `  ${index} = load i64, ptr ${index_slot}`); string more=next_register(lowerer); raw_line(lowerer, `  ${more} = icmp ult i64 ${index}, ${length}`); raw_line(lowerer, `  br i1 ${more}, label %${body_label}, label %${end_label}`); raw_line(lowerer,body_label+":")
+        string source_element_address=next_register(lowerer); raw_line(lowerer, `  ${source_element_address} = getelementptr ptr, ptr ${source_data}, i64 ${index}`); string source_element=next_register(lowerer); raw_line(lowerer, `  ${source_element} = load ptr, ptr ${source_element_address}`)
+        string stored_slot=next_register(lowerer); raw_line(lowerer, `  ${stored_slot} = alloca ptr`)
+        string is_null=next_register(lowerer); raw_line(lowerer, `  ${is_null} = icmp eq ptr ${source_element}, null`)
+        string null_label=next_label(lowerer,"array.copy.null"); string clone_label=next_label(lowerer,"array.copy.clone"); string store_label=next_label(lowerer,"array.copy.store")
+        raw_line(lowerer, `  br i1 ${is_null}, label %${null_label}, label %${clone_label}`); raw_line(lowerer,null_label+":"); raw_line(lowerer, `  store ptr null, ptr ${stored_slot}`); raw_line(lowerer, `  br label %${store_label}`); raw_line(lowerer,clone_label+":")
+        IRValue temp; temp.llvm_type="ptr"; temp.value=source_element; temp.type_info=element; IRValue cloned=clone_struct_value(lowerer,temp,element); raw_line(lowerer, `  store ptr ${cloned.value}, ptr ${stored_slot}`); raw_line(lowerer, `  br label %${store_label}`); raw_line(lowerer,store_label+":")
+        string stored_element=next_register(lowerer); raw_line(lowerer, `  ${stored_element} = load ptr, ptr ${stored_slot}`)
+        string destination_element_address=next_register(lowerer); raw_line(lowerer, `  ${destination_element_address} = getelementptr ptr, ptr ${new_data}, i64 ${index}`); raw_line(lowerer, `  store ptr ${stored_element}, ptr ${destination_element_address}`)
+        if lowerer.result.mecc_enabled { raw_line(lowerer, `  call void @clyth_mecc_store(ptr ${new_header}, ptr ${destination_element_address}, ptr ${stored_element})`) }
+        string next_index=next_register(lowerer); raw_line(lowerer, `  ${next_index} = add i64 ${index}, 1`); raw_line(lowerer, `  store i64 ${next_index}, ptr ${index_slot}`); raw_line(lowerer, `  br label %${cond_label}`); raw_line(lowerer,end_label+":")
+    } else {
+        raw_line(lowerer, `  call ptr @memcpy(ptr ${new_data}, ptr ${source_data}, i64 ${bytes})`)
+        if lowerer.result.mecc_enabled && semantic_is_pointer(element) {
+            string edge_index_slot=next_register(lowerer); raw_line(lowerer, `  ${edge_index_slot} = alloca i64`); raw_line(lowerer, `  store i64 0, ptr ${edge_index_slot}`)
+            string edge_cond=next_label(lowerer,"array.edge.cond"); string edge_body=next_label(lowerer,"array.edge.body"); string edge_end=next_label(lowerer,"array.edge.end")
+            raw_line(lowerer, `  br label %${edge_cond}`); raw_line(lowerer,edge_cond+":")
+            string edge_index=next_register(lowerer); raw_line(lowerer, `  ${edge_index} = load i64, ptr ${edge_index_slot}`); string edge_more=next_register(lowerer); raw_line(lowerer, `  ${edge_more} = icmp ult i64 ${edge_index}, ${length}`); raw_line(lowerer, `  br i1 ${edge_more}, label %${edge_body}, label %${edge_end}`); raw_line(lowerer,edge_body+":")
+            string edge_slot=next_register(lowerer); raw_line(lowerer, `  ${edge_slot} = getelementptr ptr, ptr ${new_data}, i64 ${edge_index}`); string edge_target=next_register(lowerer); raw_line(lowerer, `  ${edge_target} = load ptr, ptr ${edge_slot}`); raw_line(lowerer, `  call void @clyth_mecc_store(ptr ${new_header}, ptr ${edge_slot}, ptr ${edge_target})`)
+            string edge_next=next_register(lowerer); raw_line(lowerer, `  ${edge_next} = add i64 ${edge_index}, 1`); raw_line(lowerer, `  store i64 ${edge_next}, ptr ${edge_index_slot}`); raw_line(lowerer, `  br label %${edge_cond}`); raw_line(lowerer,edge_end+":")
+        }
+    }
+    string data_slot=next_register(lowerer); raw_line(lowerer, `  ${data_slot} = getelementptr i8, ptr ${new_header}, i64 0`); raw_line(lowerer, `  store ptr ${new_data}, ptr ${data_slot}`); string new_length_slot=next_register(lowerer); raw_line(lowerer, `  ${new_length_slot} = getelementptr i8, ptr ${new_header}, i64 8`); raw_line(lowerer, `  store i64 ${length}, ptr ${new_length_slot}`)
+    result.value=new_header; result.fresh=true; return result
+}
+
+IRValue coerce(llvm_lowerer* lowerer, IRValue value, SemanticType* target) {
+    if target==null || is_unknown_type(target) {return value}
+    string target_ty=llvm_type(lowerer,target)
+    if target.kind=="struct" && target.pointer_depth==0 && value.llvm_type=="ptr" && value.type_info!=null && value.type_info.kind=="struct" && value.type_info.pointer_depth==0 {if value.fresh {value.type_info=target; value.fresh=false; return value}; return clone_struct_value(lowerer,value,target)}
+    bool target_array = target.kind=="array" || target.array_dimensions.length>0
+    bool value_array = value.type_info!=null && (value.type_info.kind=="array" || value.type_info.array_dimensions.length>0)
+    if target_array && value.llvm_type=="ptr" && value_array {if value.fresh {value.type_info=target; value.fresh=false; return value}; return clone_array_value(lowerer,value,target)}
+    if value.llvm_type==target_ty {value.type_info=target; return value}
+    IRValue result; result.llvm_type=target_ty; result.type_info=target
+    if target_ty=="void" {result.llvm_type="void"; return result}
+    if value.llvm_type=="ptr" && target_ty=="ptr" {result.llvm_type="ptr"; result.value=value.value; return result}
+    string reg=next_register(lowerer)
+    if bootstrap_string_starts_with(value.llvm_type,"i")!=0 && bootstrap_string_starts_with(target_ty,"i")!=0 {
+        int64 from_bits=bootstrap_decimal_int(bootstrap_string_slice(value.llvm_type,1,bootstrap_string_length(value.llvm_type)-1)); int64 to_bits=bootstrap_decimal_int(bootstrap_string_slice(target_ty,1,bootstrap_string_length(target_ty)-1)); string op="trunc"
+        if from_bits<to_bits {op="sext"; if is_unsigned_type(value.type_info) {op="zext"}}
+        raw_line(lowerer, `  ${reg} = ${op} ${value.llvm_type} ${value.value} to ${target_ty}`); result.value=reg; return result
+    }
+    if value.llvm_type=="ptr" && bootstrap_string_starts_with(target_ty,"i")!=0 {raw_line(lowerer, `  ${reg} = ptrtoint ptr ${value.value} to ${target_ty}`); result.value=reg; return result}
+    if bootstrap_string_starts_with(value.llvm_type,"i")!=0 && target_ty=="ptr" {raw_line(lowerer, `  ${reg} = inttoptr ${value.llvm_type} ${value.value} to ptr`); result.llvm_type="ptr"; result.value=reg; return result}
+    bool target_float = target_ty=="float" || target_ty=="double"
+    if bootstrap_string_starts_with(value.llvm_type,"i")!=0 && target_float {string op="sitofp"; if is_unsigned_type(value.type_info){op="uitofp"}; raw_line(lowerer, `  ${reg} = ${op} ${value.llvm_type} ${value.value} to ${target_ty}`); result.value=reg; return result}
+    bool value_float = value.llvm_type=="float" || value.llvm_type=="double"
+    if value_float && bootstrap_string_starts_with(target_ty,"i")!=0 {string op="fptosi"; if is_unsigned_type(target){op="fptoui"}; raw_line(lowerer, `  ${reg} = ${op} ${value.llvm_type} ${value.value} to ${target_ty}`); result.value=reg; return result}
+    return zero_value(lowerer,target)
+}
+
+bool is_unsigned_type(SemanticType* type_info) { if type_info==null {return false}; return bootstrap_string_starts_with(type_info.name,"uint")!=0 || type_info.name=="uintptr" || type_info.name=="char" || type_info.kind=="bool" || type_info.name=="bool" }
+
+IRValue to_bool(llvm_lowerer* lowerer, IRValue value) {
+    if value.llvm_type=="i1" {return value}; string reg=next_register(lowerer)
+    if value.llvm_type=="ptr" {raw_line(lowerer, `  ${reg} = icmp ne ptr ${value.value}, null`)}
+    else if value.llvm_type=="float" || value.llvm_type=="double" {raw_line(lowerer, `  ${reg} = fcmp one ${value.llvm_type} ${value.value}, 0.0`)}
+    else {raw_line(lowerer, `  ${reg} = icmp ne ${value.llvm_type} ${value.value}, 0`)}
+    SemanticType* sem=new SemanticType(); sem.kind="bool"; sem.name="bool"; IRValue result; result.llvm_type="i1"; result.value=reg; result.type_info=sem; return result
+}
+
+string address_of(llvm_lowerer* lowerer, Expr expression) {
+    BootstrapAssignmentAddressResult result = assignment_address(lowerer, expression)
+    if !result.ok || result.address == "" { return "null" }
+    return result.address
+}
+BootstrapAssignmentAddressResult assignment_address(llvm_lowerer* lowerer, Expr expression) {
+    BootstrapAssignmentAddressOwnerResult owned = assignment_address_with_owner(lowerer, expression)
+    BootstrapAssignmentAddressResult result
+    result.address = owned.address; result.type_info = owned.type_info; result.ok = owned.ok
+    return result
+}
+
+BootstrapAssignmentAddressOwnerResult assignment_address_with_owner(llvm_lowerer* lowerer, Expr expression) {
+    BootstrapAssignmentAddressOwnerResult result; result.address=""; result.type_info=lowerer.result.expression_types[expression]; result.owner="null"; result.ok=false
+    if expression.kind == EXPR_IDENTIFIER && expression.identifier != null {
+        IdentifierExpr* item = expression.identifier
+        ir_local local = lowerer.locals[item.Name]
+        if local.address != "" { result.address=local.address; result.type_info=local.type_info; result.ok=true; return result }
+        ir_local global = lowerer.globals[item.Name]
+        if global.address != "" { result.address=global.address; result.type_info=global.type_info; result.ok=true; return result }
+        if lowerer.receiver != null {
+            Symbol* field = lowerer.receiver.fields[item.Name]
+            if field != null { string owner=lowerer.locals["this"].address; result.address=field_address(lowerer,owner,lowerer.receiver,item.Name); result.type_info=field.type_info; result.owner=owner; result.ok=true; return result }
+        }
+    } else if expression.kind == EXPR_MEMBER && expression.member != null {
+        MemberExpr* item = expression.member
+        IRValue object = emit_expr(lowerer, item.Object)
+        SemanticType* object_sem = specialize_type(lowerer, lowerer.result.expression_types[item.Object])
+        if object_sem == null || object_sem.kind == "unknown" { object_sem = specialize_type(lowerer, infer_expression_type(lowerer, item.Object)) }
+        if object_sem != null && (object_sem.pointer_depth > 0 || object_sem.kind == "pointer") {
+            string non_null=next_register(lowerer); raw_line(lowerer, `  ${non_null} = icmp ne ptr ${object.value}, null`); emit_checked_failure(lowerer,non_null,"null_reference","null pointer member access","nullref")
+        }
+        StructInfo* info = lowerer.struct_info[base_type_name(object_sem)]
+        if info != null { Symbol* field=info.fields[item.Name]; if field!=null {result.address=field_address(lowerer,object.value,info,item.Name); result.type_info=field.type_info; result.owner=object.value; result.ok=true; return result} }
+    } else if expression.kind == EXPR_INDEX && expression.index != null {
+        IndexExpr* item = expression.index
+        IRValue object=emit_expr(lowerer,item.Object)
+        SemanticType* integer_type=new SemanticType(); integer_type.kind="integer"; integer_type.name="int64"
+        IRValue index=coerce(lowerer,emit_expr(lowerer,item.Index),integer_type)
+        SemanticType* object_sem=specialize_type(lowerer,lowerer.result.expression_types[item.Object])
+        if object_sem==null || object_sem.kind=="unknown" {object_sem=specialize_type(lowerer,infer_expression_type(lowerer,item.Object))}
+        emit_index_bounds_check(lowerer,item,object,index,object_sem)
+        SemanticType* sem=specialize_type(lowerer,lowerer.result.expression_types[expression]); string ty=llvm_type(lowerer,sem); string data=object.value
+        if object_sem==null || object_sem.kind!="string" || object_sem.array_dimensions.length!=0 {data=array_data_pointer(lowerer,object.value)}
+        string address=next_register(lowerer); raw_line(lowerer, `  ${address} = getelementptr ${ty}, ptr ${data}, i64 ${index.value}`)
+        result.address=address; result.type_info=sem; result.owner=object.value; result.ok=true; return result
+    } else if expression.kind == EXPR_UNARY && expression.unary != null && expression.unary.Operator == "*" {
+        UnaryExpr* item=expression.unary; IRValue pointer=emit_expr(lowerer,item.Operand)
+        if pointer.llvm_type!="ptr" {return result}
+        string non_null=next_register(lowerer); raw_line(lowerer, `  ${non_null} = icmp ne ptr ${pointer.value}, null`); emit_checked_failure(lowerer,non_null,"null_reference","null pointer dereference","nullref")
+        result.address=pointer.value; result.type_info=specialize_type(lowerer,lowerer.result.expression_types[expression]); result.owner="null"; result.ok=true; return result
+    }
+    return result
+}
+
+void emit_index_bounds_check(llvm_lowerer* lowerer, IndexExpr* item, IRValue object, IRValue index, SemanticType* object_sem) {
+    if object_sem == null || lowerer.result.index_safety[item.node] == "proven_safe" { return }
+    string length = ""
+    if object_sem.kind == "string" && object_sem.array_dimensions.length == 0 {
+        string length_reg = next_register(lowerer)
+        raw_line(lowerer, `  ${length_reg} = call i64 @strlen(ptr ${object.value})`)
+        length = length_reg
+    } else if object_sem.array_dimensions.length > 0 || object_sem.kind == "array" {
+        if object_sem.array_dimensions.length > 0 && !object_sem.array_dimensions[0].dynamic && object_sem.array_dimensions[0].size != "" {
+            length = object_sem.array_dimensions[0].size
+        } else {
+            string length_slot = next_register(lowerer)
+            raw_line(lowerer, `  ${length_slot} = getelementptr i8, ptr ${object.value}, i64 8`)
+            string length_reg = next_register(lowerer)
+            raw_line(lowerer, `  ${length_reg} = load i64, ptr ${length_slot}`)
+            length = length_reg
+        }
+    }
+    if length == "" { return }
+    string in_bounds = next_register(lowerer)
+    raw_line(lowerer, `  ${in_bounds} = icmp ult i64 ${index.value}, ${length}`)
+    emit_checked_failure(lowerer, in_bounds, "bounds_error", "array or string index out of bounds", "bounds")
+}
+
+string array_data_pointer(llvm_lowerer* lowerer, string header) { string slot=next_register(lowerer); raw_line(lowerer, `  ${slot} = getelementptr i8, ptr ${header}, i64 0`); string data=next_register(lowerer); raw_line(lowerer, `  ${data} = load ptr, ptr ${slot}`); return data }
+
+int64 llvm_storage_size(llvm_lowerer* lowerer, string llvm_type_name) { if llvm_type_name=="i1"||llvm_type_name=="i8" {return 1}; if llvm_type_name=="i16" {return 2}; if llvm_type_name=="i32"||llvm_type_name=="float" {return 4}; return 8 }
+
+int64 align_up(int64 value, int64 alignment) { if alignment<=1 {return value}; return ((value+alignment-1)/alignment)*alignment }
+
+int64 semantic_storage_size(llvm_lowerer* lowerer, SemanticType* type_info) { return llvm_storage_size(lowerer,llvm_type(lowerer,type_info)) }
+
+int64 semantic_alignment(llvm_lowerer* lowerer, SemanticType* type_info) { int64 size=semantic_storage_size(lowerer,type_info); if size>8{return 8}; if size<1{return 1}; return size }
+
+int64 struct_field_offset(llvm_lowerer* lowerer, StructInfo* info, string field_name) { if info==null{return 0}; int64 offset=0; string[] names=info.field_order; if names.length==0 {names=info.fields.keys(); sort_strings(names)}; int64 i=0; while i<names.length {Symbol* field=info.fields[names[i]]; if field!=null {int64 alignment=semantic_alignment(lowerer,field.type_info); offset=align_up(offset,alignment); if names[i]==field_name{return offset}; offset+=semantic_storage_size(lowerer,field.type_info)}; i+=1}; return offset }
+
+int64 struct_storage_size(llvm_lowerer* lowerer, StructInfo* info) { if info==null||info.fields.length==0{return 1}; int64 offset=0; int64 max_alignment=1; string[] names=info.field_order; if names.length==0 {names=info.fields.keys(); sort_strings(names)}; int64 i=0; while i<names.length {Symbol* field=info.fields[names[i]]; if field!=null {int64 alignment=semantic_alignment(lowerer,field.type_info); if alignment>max_alignment{max_alignment=alignment}; offset=align_up(offset,alignment); offset+=semantic_storage_size(lowerer,field.type_info)}; i+=1}; return align_up(offset,max_alignment) }
+
+void initialize_struct_fields(llvm_lowerer* lowerer, string object, StructInfo* info) {
+    if info==null {return}; int64 i=0
+    while i<info.field_order.length {
+        string name=info.field_order[i]; Symbol* field=info.fields[name]
+        if field!=null {
+            SemanticType* field_type=specialize_type(lowerer,field.type_info); string address=field_address(lowerer,object,info,name)
+            if field_type.array_dimensions.length>0 || field_type.kind=="array" {
+                int64 count=0; if field_type.array_dimensions.length>0 && !field_type.array_dimensions[0].dynamic {count=bootstrap_decimal_int(field_type.array_dimensions[0].size)}
+                SemanticType* element=array_element_type(lowerer,field_type); int64 element_size=semantic_storage_size(lowerer,element); string header=next_register(lowerer); raw_line(lowerer, `  ${header} = call ptr @calloc(i64 1, i64 16)` )
+                if count>0 {string data=next_register(lowerer); raw_line(lowerer, `  ${data} = call ptr @calloc(i64 ${count}, i64 ${element_size})`); string data_slot=next_register(lowerer); raw_line(lowerer, `  ${data_slot} = getelementptr i8, ptr ${header}, i64 0`); raw_line(lowerer, `  store ptr ${data}, ptr ${data_slot}`)}
+                string length_slot=next_register(lowerer); raw_line(lowerer, `  ${length_slot} = getelementptr i8, ptr ${header}, i64 8`); raw_line(lowerer, `  store i64 ${count}, ptr ${length_slot}`); raw_line(lowerer, `  store ptr ${header}, ptr ${address}`)
+            } else if field_type.kind=="struct" && field_type.pointer_depth==0 {
+                StructInfo* nested_info=lowerer.struct_info[base_type_name(field_type)]; if nested_info!=null {string nested=next_register(lowerer); int64 size=struct_storage_size(lowerer,nested_info); raw_line(lowerer, `  ${nested} = call ptr @calloc(i64 1, i64 ${size})`); initialize_struct_fields(lowerer,nested,nested_info); raw_line(lowerer, `  store ptr ${nested}, ptr ${address}`)}
+            }
+        }; i+=1
+    }
+}
+
+string field_address(llvm_lowerer* lowerer, string object, StructInfo* info, string field_name) { int64 offset=struct_field_offset(lowerer,info,field_name); string address=next_register(lowerer); raw_line(lowerer, `  ${address} = getelementptr i8, ptr ${object}, i64 ${offset}`); return address }
+IRValue load_receiver_field(llvm_lowerer* lowerer, string name, SemanticType* sem) { ir_local self=lowerer.locals["this"]; if self.address=="" || lowerer.receiver==null {return zero_value(lowerer,sem)}; string address=field_address(lowerer,self.address,lowerer.receiver,name); string ty=llvm_type(lowerer,sem); string value=next_register(lowerer); raw_line(lowerer, `  ${value} = load ${ty}, ptr ${address}`); IRValue result; result.llvm_type=ty; result.value=value; result.type_info=sem; return result }

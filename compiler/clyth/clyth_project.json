@@ -1,0 +1,11 @@
+{
+  "project-name": "clyth",
+  "version": "1.0.0",
+  "project-type": "program",
+  "license": {
+    "spdx": "MIT",
+    "file": "../../LICENSE"
+  },
+  "entry": "src/main.clyth",
+  "dependencies": {}
+}

@@ -1,0 +1,9 @@
+struct Counter {
+    int32 read() {
+        return 1
+    }
+
+    int32 read(int32 fallback) {
+        return fallback
+    }
+}

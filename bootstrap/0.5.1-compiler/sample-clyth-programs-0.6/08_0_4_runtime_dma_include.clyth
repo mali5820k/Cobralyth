@@ -1,7 +1,0 @@
-import dma/dma.clyth
-extern C int32 printf(string format, ...)
-
-int32 main(string[] args) {
-    printf("dma runtime include linked\n")
-    return 0
-}

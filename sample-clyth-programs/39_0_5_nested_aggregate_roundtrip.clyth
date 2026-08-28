@@ -1,0 +1,29 @@
+extern C int32 printf(string formatted_string, ...)
+
+struct NestedInner {
+    int32 value
+}
+
+struct NestedOuter {
+    NestedInner inner
+    int32 marker
+}
+
+NestedOuter roundtrip() {
+    NestedInner inner
+    inner.value = 40
+
+    NestedOuter first
+    first.inner = inner
+    first.marker = 2
+
+    NestedOuter[1] values = [first]
+    return values[0]
+}
+
+int32 main() {
+    NestedOuter result = roundtrip()
+    int32 total = result.inner.value + result.marker
+    printf("nested aggregate=%d\n", total)
+    return total - 42
+}

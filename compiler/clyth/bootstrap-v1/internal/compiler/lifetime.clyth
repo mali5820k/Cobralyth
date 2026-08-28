@@ -1,0 +1,568 @@
+// Direct Clyth port of compiler/go/internal/compiler/lifetime.go.
+// This is part of the Stage-1 self-host bootstrap and intentionally contains
+// no delegation back to the Go compiler.
+
+import "semantic_analyzer.clyth"
+import "semantic_types.clyth"
+import "../frontend/ast/ast.clyth"
+import "../frontend/token/token.clyth"
+import collections
+import string
+
+struct lifetime_binding {
+    string name
+    int64 depth
+    SemanticType* type_info
+    int64 allocation
+    Map<int64, bool> aggregate_allocs
+    Map<string, int64> aggregate_fields
+    Map<int64, bool> container_allocs
+    string origin
+}
+
+struct lifetime_allocation_state {
+    bool live
+    bool owned_here
+    int64 created_depth
+    Map<string, bool> external_domains
+    MeccPolicy policy
+    string origin
+}
+
+struct lifetime_flow {
+    Map<string, lifetime_binding*[]> bindings
+    Map<int64, lifetime_allocation_state*> allocations
+    int64 depth
+    MeccPolicy policy
+    bool terminated
+}
+
+struct lifetime_context {
+    SemanticAnalyzer* analyzer
+    AnalysisResult* result
+    SemanticOptions options
+    Namespace* namespace
+    string path
+    Map<NewExpr*, int64> allocation_ids
+    Map<Expr, int64> external_ids
+    int64 next_allocation
+    int64 next_external
+    Map<string, bool> action_keys
+    Map<string, bool> diagnostic_keys
+}
+
+struct BootstrapIdentifierNameResult { string name bool ok }
+
+lifetime_flow*[] append_lifetime_flow(lifetime_flow*[] values, lifetime_flow* value) {
+    auto n = values.length; lifetime_flow*[] replacement = array<lifetime_flow*>(n + 1); auto i = 0; while i < n { replacement[i] = values[i]; i += 1 }; replacement[n] = value; return replacement
+}
+lifetime_flow*[] append_lifetime_flows(lifetime_flow*[] left, lifetime_flow*[] right) {
+    auto old = left.length; lifetime_flow*[] replacement = array<lifetime_flow*>(old + right.length); auto i = 0
+    while i < old { replacement[i] = left[i]; i += 1 }; i = 0
+    while i < right.length { replacement[old + i] = right[i]; i += 1 }
+    return replacement
+}
+string[] append_lifetime_string(string[] values, string value) {
+    auto n = values.length; string[] replacement = array<string>(n + 1); auto i = 0; while i < n { replacement[i] = values[i]; i += 1 }; replacement[n] = value; return replacement
+}
+int64[] append_lifetime_int(int64[] values, int64 value) {
+    auto n = values.length; int64[] replacement = array<int64>(n + 1); auto i = 0; while i < n { replacement[i] = values[i]; i += 1 }; replacement[n] = value; return replacement
+}
+lifetime_binding*[] append_lifetime_binding(lifetime_binding*[] values, lifetime_binding* value) {
+    auto n = values.length; lifetime_binding*[] replacement = array<lifetime_binding*>(n + 1); auto i = 0; while i < n { replacement[i] = values[i]; i += 1 }; replacement[n] = value; return replacement
+}
+LifetimeAction[] append_lifetime_action(LifetimeAction[] values, LifetimeAction value) {
+    auto n = values.length; LifetimeAction[] replacement = array<LifetimeAction>(n + 1); auto i = 0; while i < n { replacement[i] = values[i]; i += 1 }; replacement[n] = value; return replacement
+}
+CompilerDiagnostic[] append_compiler_diagnostic(CompilerDiagnostic[] values, CompilerDiagnostic value) {
+    auto n = values.length; CompilerDiagnostic[] replacement = array<CompilerDiagnostic>(n + 1); auto i = 0; while i < n { replacement[i] = values[i]; i += 1 }; replacement[n] = value; return replacement
+}
+string[] sort_lifetime_strings(string[] values) {
+    auto i = 1
+    while i < values.length { auto v = values[i]; auto j = i; while j > 0 && values[j - 1] > v { values[j] = values[j - 1]; j -= 1 }; values[j] = v; i += 1 }
+    return values
+}
+int64[] sort_lifetime_ints(int64[] values) {
+    auto i = 1
+    while i < values.length { auto v = values[i]; auto j = i; while j > 0 && values[j - 1] > v { values[j] = values[j - 1]; j -= 1 }; values[j] = v; i += 1 }
+    return values
+}
+string lifetime_domains_text(string[] values) {
+    auto out = "["; auto i = 0
+    while i < values.length { if i > 0 { out = out + " " }; out = out + values[i]; i += 1 }
+    return out + "]"
+}
+
+void analyze_lifetimes(SemanticAnalyzer* analyzer, AnalysisResult* result, SemanticOptions options) {
+    lifetime_context* context = new lifetime_context()
+    context.analyzer = analyzer; context.result = result; context.options = options
+    context.allocation_ids = Map<NewExpr*, int64>(); context.external_ids = Map<Expr, int64>()
+    context.next_allocation = 1; context.next_external = -1
+    context.action_keys = Map<string, bool>(); context.diagnostic_keys = Map<string, bool>()
+
+    string[] paths = analyzer.programs.keys(); paths = sort_lifetime_strings(paths)
+    auto i = 0
+    while i < paths.length {
+        auto path = paths[i]; auto program = analyzer.programs[path]; auto namespace = analyzer.path_namespaces[path]
+        if program != null && namespace != null { context.namespace = namespace; context.path = path; analyze_program(context, program) }
+        i += 1
+    }
+    if result.mecc_macros_present && !options.mecc_enabled {
+        CompilerDiagnostic diagnostic; diagnostic.level = "info"; diagnostic.code = "MECC_CONFIG_IGNORED"
+        diagnostic.message = "Project contains MECC macros - ignoring since MECC is disabled in this build"; diagnostic.source_path = result.root_path
+        result.compiler_diagnostics = append_compiler_diagnostic(result.compiler_diagnostics, diagnostic)
+    }
+}
+
+void analyze_program(lifetime_context* context, Program* program) {
+    MeccPolicy file_policy
+    auto i = 0
+    while i < program.Declarations.length {
+        auto declaration = program.Declarations[i]
+        if declaration.kind == DECL_MECC_CONFIG {
+            auto item = bootstrap_as_mecc_config_directive_decl(declaration); context.result.mecc_macros_present = true
+            if validate_mecc_property(context, item.Property, node_from_mecc_config_directive_decl(item)) {
+                if context.options.mecc_enabled { file_policy.compacting = item.Value }
+                context.result.mecc_policy_by_node[node_from_mecc_config_directive_decl(item)] = file_policy
+            }
+        } else if declaration.kind == DECL_FUNCTION {
+            auto item = bootstrap_as_function_decl(declaration); if item.Body != null { lifetime_analyze_function(context, item, item.Parameters, item.Body, file_policy) }
+        } else if declaration.kind == DECL_STRUCT {
+            auto item = bootstrap_as_struct_decl(declaration); auto j = 0
+            while j < item.Members.length {
+                auto member = item.Members[j]
+                if member.kind == MEMBER_METHOD { auto typed = bootstrap_as_method_decl(member); if typed.Function.Body != null { lifetime_analyze_function(context, &typed.Function, typed.Function.Parameters, typed.Function.Body, file_policy) } }
+                else if member.kind == MEMBER_CONSTRUCTOR { auto typed = bootstrap_as_constructor_member(member); lifetime_analyze_function(context, null, typed.Constructor.Parameters, typed.Constructor.Body, file_policy) }
+                else if member.kind == MEMBER_DESTRUCTOR { auto typed = bootstrap_as_destructor_member(member); lifetime_analyze_function(context, null, null, typed.Destructor.Body, file_policy) }
+                j += 1
+            }
+        } else if declaration.kind == DECL_METHOD_BLOCK {
+            auto item = bootstrap_as_method_block_decl(declaration); auto j = 0
+            while j < item.Members.length {
+                auto member = item.Members[j]
+                if member.kind == MEMBER_METHOD { auto typed = bootstrap_as_method_decl(member); lifetime_analyze_function(context, &typed.Function, typed.Function.Parameters, typed.Function.Body, file_policy) }
+                else if member.kind == MEMBER_CONSTRUCTOR { auto typed = bootstrap_as_constructor_member(member); lifetime_analyze_function(context, null, typed.Constructor.Parameters, typed.Constructor.Body, file_policy) }
+                else if member.kind == MEMBER_DESTRUCTOR { auto typed = bootstrap_as_destructor_member(member); lifetime_analyze_function(context, null, null, typed.Destructor.Body, file_policy) }
+                j += 1
+            }
+        }
+        i += 1
+    }
+}
+
+bool validate_mecc_property(lifetime_context* context, string property, Node node) {
+    if property == "compacting" { return true }
+    add_error(context.analyzer, context.path, node, "unknown #MECC_config property '" + property + "'"); return false
+}
+
+lifetime_flow* new_lifetime_flow(MeccPolicy policy) {
+    lifetime_flow* flow = new lifetime_flow(); flow.bindings = Map<string, lifetime_binding*[]>(); flow.allocations = Map<int64, lifetime_allocation_state*>(); flow.policy = policy; return flow
+}
+
+lifetime_flow* clone_lifetime_flow(lifetime_flow* flow) {
+    lifetime_flow* cloned = new lifetime_flow(); cloned.bindings = Map<string, lifetime_binding*[]>(); cloned.allocations = Map<int64, lifetime_allocation_state*>()
+    cloned.depth = flow.depth; cloned.policy = flow.policy; cloned.terminated = flow.terminated
+    string[] names = flow.bindings.keys(); int64 i = 0
+    while i < names.length {
+        string name = names[i]; lifetime_binding*[] stack = flow.bindings[name]; lifetime_binding*[] copy_stack = array<lifetime_binding*>(stack.length); int64 j = 0
+        while j < stack.length {
+            auto source = stack[j]; lifetime_binding* copy = new lifetime_binding(); copy.name = source.name; copy.depth = source.depth; copy.type_info = source.type_info; copy.allocation = source.allocation; copy.origin = source.origin
+            copy.aggregate_allocs = Map<int64, bool>(); int64[] ids = source.aggregate_allocs.keys(); auto k = 0; while k < ids.length { copy.aggregate_allocs[ids[k]] = source.aggregate_allocs[ids[k]]; k += 1 }
+            copy.aggregate_fields = Map<string, int64>(); string[] fields = source.aggregate_fields.keys(); k = 0; while k < fields.length { copy.aggregate_fields[fields[k]] = source.aggregate_fields[fields[k]]; k += 1 }
+            copy.container_allocs = Map<int64, bool>(); ids = source.container_allocs.keys(); k = 0; while k < ids.length { copy.container_allocs[ids[k]] = source.container_allocs[ids[k]]; k += 1 }
+            copy_stack[j] = copy; j += 1
+        }
+        cloned.bindings[name] = copy_stack; i += 1
+    }
+    int64[] alloc_ids = flow.allocations.keys(); i = 0
+    while i < alloc_ids.length {
+        int64 id = alloc_ids[i]; lifetime_allocation_state* source = flow.allocations[id]; lifetime_allocation_state* copy = new lifetime_allocation_state()
+        copy.live = source.live; copy.owned_here = source.owned_here; copy.created_depth = source.created_depth; copy.policy = source.policy; copy.origin = source.origin; copy.external_domains = Map<string, bool>()
+        string[] domains = source.external_domains.keys(); int64 j = 0; while j < domains.length { copy.external_domains[domains[j]] = source.external_domains[domains[j]]; j += 1 }
+        cloned.allocations[id] = copy; i += 1
+    }
+    return cloned
+}
+
+lifetime_binding* current_binding(lifetime_flow* flow, string name) {
+    lifetime_binding*[] stack = flow.bindings[name]; if stack.length == 0 { return null }; return stack[stack.length - 1]
+}
+void push_binding(lifetime_flow* flow, lifetime_binding* binding) {
+    flow.bindings[binding.name] = append_lifetime_binding(flow.bindings[binding.name], binding)
+}
+void pop_depth(lifetime_flow* flow, int64 depth) {
+    string[] names = flow.bindings.keys(); int64 i = 0
+    while i < names.length {
+        string name = names[i]; lifetime_binding*[] stack = flow.bindings[name]
+        while stack.length > 0 && stack[stack.length - 1].depth >= depth { int64 new_length = stack.length - 1; lifetime_binding*[] replacement = array<lifetime_binding*>(new_length); int64 j = 0; while j < new_length { replacement[j] = stack[j]; j += 1 }; stack = replacement }
+        if stack.length == 0 { flow.bindings.remove(name) } else { flow.bindings[name] = stack }
+        i += 1
+    }
+}
+
+void lifetime_analyze_function(lifetime_context* context, FunctionDecl* function, Parameter*[] parameters, BlockStmt* body, MeccPolicy policy) {
+    auto flow = new_lifetime_flow(policy); auto i = 0
+    while i < parameters.length {
+        auto parameter = parameters[i]
+        if parameter != null && parameter.Name != "" {
+            auto type_info = resolve_type_ref(context.analyzer, context.namespace, parameter.Type, Map<string, SemanticType*>(), context.path)
+            lifetime_binding* binding = new lifetime_binding(); binding.name = parameter.Name; binding.depth = 0; binding.type_info = type_info; binding.aggregate_allocs = Map<int64, bool>(); binding.aggregate_fields = Map<string, int64>(); binding.container_allocs = Map<int64, bool>(); binding.origin = "parameter"
+            if semantic_is_pointer(type_info) {
+                auto id = context.next_external; context.next_external -= 1; binding.allocation = id
+                lifetime_allocation_state* allocation = new lifetime_allocation_state(); allocation.live = true; allocation.owned_here = false; allocation.created_depth = -1; allocation.external_domains = Map<string, bool>(); allocation.external_domains["caller"] = true; allocation.origin = "parameter"; flow.allocations[id] = allocation
+            }
+            push_binding(flow, binding)
+        }
+        i += 1
+    }
+    lifetime_flow*[] initial; initial = append_lifetime_flow(initial, flow); auto states = lifetime_analyze_block(context, initial, body, false); i = 0
+    while i < states.length { if !states[i].terminated { finalize_function_state(context, states[i], node_from_block_stmt(body)) }; i += 1 }
+    auto ignored = function
+}
+
+lifetime_flow*[] lifetime_analyze_block(lifetime_context* context, lifetime_flow*[] states, BlockStmt* block, bool nested) {
+    if block == null { return states }
+    lifetime_flow*[] result_states; auto i = 0
+    while i < states.length {
+        auto initial = states[i]
+        if initial.terminated { result_states = append_lifetime_flow(result_states, initial); i += 1; continue }
+        auto state = clone_lifetime_flow(initial); if nested { state.depth += 1 }; auto entry_depth = state.depth
+        lifetime_flow*[] active; active = append_lifetime_flow(active, state); auto s = 0
+        while s < block.Statements.length {
+            lifetime_flow*[] next; auto j = 0
+            while j < active.length { auto current = active[j]; if current.terminated { next = append_lifetime_flow(next, current) } else { next = append_lifetime_flows(next, analyze_statement(context, current, block.Statements[s])) }; j += 1 }
+            active = limit_states(context, next); s += 1
+        }
+        auto j = 0
+        while j < active.length {
+            auto current = active[j]; if !current.terminated { cleanup_depth(context, current, entry_depth, node_from_block_stmt(block)) }
+            if nested { pop_depth(current, entry_depth); current.depth -= 1 }
+            result_states = append_lifetime_flow(result_states, current); j += 1
+        }
+        i += 1
+    }
+    return limit_states(context, result_states)
+}
+
+lifetime_flow*[] limit_states(lifetime_context* context, lifetime_flow*[] states) {
+    auto ignored = context; int64 max_states = 64; if states.length <= max_states { return states }; lifetime_flow*[] limited = array<lifetime_flow*>(max_states); int64 i = 0; while i < max_states { limited[i] = states[i]; i += 1 }; return limited
+}
+
+lifetime_flow*[] single_lifetime_state(lifetime_flow* flow) { lifetime_flow*[] values; return append_lifetime_flow(values, flow) }
+
+lifetime_flow*[] analyze_statement(lifetime_context* context, lifetime_flow* flow, Stmt statement) {
+    if statement.kind == STMT_MECC_CONFIG {
+        auto item = bootstrap_as_mecc_config_directive_stmt(statement); context.result.mecc_macros_present = true
+        if validate_mecc_property(context, item.Property, node_from_stmt(statement)) && context.options.mecc_enabled { flow.policy.compacting = item.Value }
+        context.result.mecc_policy_by_node[node_from_stmt(statement)] = flow.policy; return single_lifetime_state(flow)
+    }
+    if statement.kind == STMT_VAR {
+        auto item = bootstrap_as_var_decl_stmt(statement); auto type_info = resolve_type_ref(context.analyzer, context.namespace, item.Type, Map<string, SemanticType*>(), context.path)
+        if item.Type != null && item.Type.Name == "auto" && expr_present(item.Initializer) { type_info = clone_type(context.result.expression_types[item.Initializer]) }
+        lifetime_binding* binding = new lifetime_binding(); binding.name = item.Name; binding.depth = flow.depth; binding.type_info = type_info; binding.aggregate_allocs = Map<int64, bool>(); binding.aggregate_fields = Map<string, int64>(); binding.container_allocs = Map<int64, bool>(); binding.origin = "local"
+        if expr_present(item.Initializer) {
+            auto id = eval_pointer_value(context, flow, item.Initializer, true); if id != 0 && semantic_is_pointer(type_info) { binding.allocation = id }
+            auto source_result = identifier_name(item.Initializer)
+            if source_result.ok { auto source = current_binding(flow, source_result.name); if source != null { int64[] ids = source.aggregate_allocs.keys(); auto i = 0; while i < ids.length { binding.aggregate_allocs[ids[i]] = true; i += 1 }; string[] fields = source.aggregate_fields.keys(); i = 0; while i < fields.length { binding.aggregate_fields[fields[i]] = source.aggregate_fields[fields[i]]; i += 1 }; ids = source.container_allocs.keys(); i = 0; while i < ids.length { binding.container_allocs[ids[i]] = true; i += 1 } } }
+        }
+        push_binding(flow, binding); return single_lifetime_state(flow)
+    }
+    if statement.kind == STMT_EXPR { eval_expr(context, flow, bootstrap_as_expr_stmt(statement).Expression, true); return single_lifetime_state(flow) }
+    if statement.kind == STMT_RETURN {
+        auto item = bootstrap_as_return_stmt(statement); Map<int64, bool> returned
+        if expr_present(item.Value) {
+            auto id = eval_pointer_value(context, flow, item.Value, true); if id != 0 { returned[id] = true; mark_external(context, flow, id, "return") }
+            auto result = identifier_name(item.Value); if result.ok { auto binding = current_binding(flow, result.name); if binding != null { auto ids = binding.aggregate_allocs.keys(); auto i = 0; while i < ids.length { returned[ids[i]] = true; mark_external(context, flow, ids[i], "return:" + result.name); i += 1 } } }
+        }
+        cleanup_before_return(context, flow, returned, node_from_stmt(statement)); finalize_escape_state(context, flow); flow.terminated = true; return single_lifetime_state(flow)
+    }
+    if statement.kind == STMT_IF {
+        auto item = bootstrap_as_if_stmt(statement); eval_expr(context, flow, item.Condition, true); auto then_flow = clone_lifetime_flow(flow); auto else_flow = clone_lifetime_flow(flow)
+        auto then_states = analyze_nested_statement(context, then_flow, item.Then); auto else_states = single_lifetime_state(else_flow)
+        if stmt_present(item.Else) { else_states = analyze_nested_statement(context, else_flow, item.Else) }; return append_lifetime_flows(then_states, else_states)
+    }
+    if statement.kind == STMT_WHILE {
+        auto item = bootstrap_as_while_stmt(statement); eval_expr(context, flow, item.Condition, true); auto zero = clone_lifetime_flow(flow); auto one = clone_lifetime_flow(flow); auto body = analyze_nested_statement(context, one, item.Body); return append_lifetime_flows(single_lifetime_state(zero), body)
+    }
+    if statement.kind == STMT_FOR {
+        auto item = bootstrap_as_for_stmt(statement); auto loop_flow = clone_lifetime_flow(flow)
+        if stmt_present(item.Init) { auto states = analyze_statement(context, loop_flow, item.Init); if states.length > 0 { loop_flow = states[0] } }
+        if expr_present(item.Condition) { eval_expr(context, loop_flow, item.Condition, true) }
+        auto zero = clone_lifetime_flow(loop_flow); auto one = clone_lifetime_flow(loop_flow); auto body = analyze_nested_statement(context, one, item.Body); auto i = 0
+        while i < body.length { if expr_present(item.Post) && !body[i].terminated { eval_expr(context, body[i], item.Post, true) }; i += 1 }; return append_lifetime_flows(single_lifetime_state(zero), body)
+    }
+    if statement.kind == STMT_SWITCH {
+        auto item = bootstrap_as_switch_stmt(statement); eval_expr(context, flow, item.Value, true); lifetime_flow*[] states; auto i = 0
+        while i < item.Cases.length { auto switch_case = item.Cases[i]; auto branch = clone_lifetime_flow(flow); if expr_present(switch_case.Value) { eval_expr(context, branch, switch_case.Value, true) }; auto j = 0; while j < switch_case.Statements.length { auto branch_states = analyze_statement(context, branch, switch_case.Statements[j]); if branch_states.length == 0 { break }; branch = branch_states[0]; j += 1 }; states = append_lifetime_flow(states, branch); i += 1 }
+        if states.length == 0 { states = append_lifetime_flow(states, flow) }; return states
+    }
+    if statement.kind == STMT_BLOCK { return lifetime_analyze_block(context, single_lifetime_state(flow), bootstrap_as_block_stmt(statement), true) }
+    return single_lifetime_state(flow)
+}
+
+lifetime_flow*[] analyze_nested_statement(lifetime_context* context, lifetime_flow* flow, Stmt statement) {
+    if statement.kind == STMT_BLOCK { return lifetime_analyze_block(context, single_lifetime_state(flow), bootstrap_as_block_stmt(statement), true) }
+    return analyze_statement(context, flow, statement)
+}
+
+bool semantic_is_pointer(SemanticType* type_info) { return type_info != null && (type_info.pointer_depth > 0 || type_info.kind == "pointer") }
+BootstrapIdentifierNameResult identifier_name(Expr expression) {
+    BootstrapIdentifierNameResult result; if expression.kind == EXPR_IDENTIFIER { result.name = bootstrap_as_identifier_expr(expression).Name; result.ok = true }; return result
+}
+
+void eval_expr(lifetime_context* context, lifetime_flow* flow, Expr expression, bool read) {
+    if !expr_present(expression) { return }
+    if expression.kind == EXPR_IDENTIFIER { if read { auto item = bootstrap_as_identifier_expr(expression); check_binding_use(context, flow, item.Name, node_from_expr(expression)) }; return }
+    if expression.kind == EXPR_UNARY { eval_expr(context, flow, bootstrap_as_unary_expr(expression).Operand, read); return }
+    if expression.kind == EXPR_BINARY { auto item = bootstrap_as_binary_expr(expression); eval_expr(context, flow, item.Left, true); eval_expr(context, flow, item.Right, true); return }
+    if expression.kind == EXPR_ASSIGN { eval_assignment(context, flow, bootstrap_as_assign_expr(expression)); return }
+    if expression.kind == EXPR_CALL {
+        auto item = bootstrap_as_call_expr(expression)
+        if is_free_call(context, item) { eval_free(context, flow, item); return }
+        if item.Callee.kind == EXPR_IDENTIFIER && bootstrap_as_identifier_expr(item.Callee).Name == "catch" && item.Arguments.length == 1 && item.Arguments[0].kind == EXPR_LAMBDA {
+            auto lambda = bootstrap_as_lambda_expr(item.Arguments[0]); auto states = lifetime_analyze_block(context, single_lifetime_state(flow), lambda.Body, true)
+            if states.length == 1 { flow.bindings = states[0].bindings; flow.allocations = states[0].allocations; flow.depth = states[0].depth; flow.policy = states[0].policy; flow.terminated = states[0].terminated }; return
+        }
+        eval_expr(context, flow, item.Callee, true); auto i = 0; while i < item.Arguments.length { eval_expr(context, flow, item.Arguments[i], true); i += 1 }
+        // Conservatively preserve pointer arguments across ordinary call boundaries.
+        // Helpers may retain them in longer-lived compiler state; callable escape
+        // summaries can make this more precise after bootstrap convergence.
+        i = 0
+        while i < item.Arguments.length {
+            Expr argument = item.Arguments[i]
+            if semantic_is_pointer(context.result.expression_types[argument]) {
+                int64 id = eval_pointer_value(context, flow, argument, false)
+                if id != 0 { mark_external(context, flow, id, "callee-argument:" + `${i}`) }
+            }
+            i += 1
+        }
+        record_container_call(context, flow, item); return
+    }
+    if expression.kind == EXPR_MEMBER { auto item = bootstrap_as_member_expr(expression); if semantic_is_pointer(context.result.expression_types[item.Object]) { auto ignored = eval_pointer_value(context, flow, item.Object, true) } else { eval_expr(context, flow, item.Object, true) }; return }
+    if expression.kind == EXPR_INDEX { auto item = bootstrap_as_index_expr(expression); eval_expr(context, flow, item.Object, true); eval_expr(context, flow, item.Index, true); return }
+    if expression.kind == EXPR_ARRAY { auto item = bootstrap_as_array_expr(expression); auto i = 0; while i < item.Elements.length { eval_expr(context, flow, item.Elements[i], true); i += 1 }; return }
+    if expression.kind == EXPR_KEY_VALUE { auto item = bootstrap_as_key_value_expr(expression); eval_expr(context, flow, item.Key, true); eval_expr(context, flow, item.Value, true); return }
+    if expression.kind == EXPR_NEW { auto ignored = eval_pointer_value(context, flow, expression, read); return }
+    if expression.kind == EXPR_CAST { eval_expr(context, flow, bootstrap_as_cast_expr(expression).Value, read); return }
+    if expression.kind == EXPR_GENERIC_SPECIALIZATION { eval_expr(context, flow, bootstrap_as_generic_specialization_expr(expression).Target, read); return }
+}
+
+int64 eval_pointer_value(lifetime_context* context, lifetime_flow* flow, Expr expression, bool read) {
+    if !expr_present(expression) { return 0 }
+    if expression.kind == EXPR_NEW {
+        auto item = bootstrap_as_new_expr(expression); auto id = allocation_id(context, item)
+        if flow.allocations[id] == null {
+            lifetime_allocation_state* state = new lifetime_allocation_state(); state.live = true; state.owned_here = true; state.created_depth = flow.depth; state.external_domains = Map<string, bool>(); state.policy = flow.policy; state.origin = "new"; flow.allocations[id] = state
+            AllocationInfo* info = new AllocationInfo(); info.id = id; info.new_expr = item; info.source_path = context.path; info.source_span = item.SourceSpan; info.type_info = clone_type(context.result.expression_types[expression]); info.policy = flow.policy; context.result.allocations[id] = info
+            context.result.allocation_by_new[item] = id; context.result.mecc_policy_by_node[node_from_new_expr(item)] = flow.policy
+        }
+        eval_expr(context, flow, item.Value, true); context.result.expression_allocations[expression] = id; return id
+    }
+    if expression.kind == EXPR_IDENTIFIER {
+        auto item = bootstrap_as_identifier_expr(expression); auto binding = current_binding(flow, item.Name); if binding == null { return 0 }; if read { check_binding_use(context, flow, item.Name, node_from_identifier_expr(item)) }; if binding.allocation != 0 { context.result.expression_allocations[expression] = binding.allocation }; return binding.allocation
+    }
+    if expression.kind == EXPR_LITERAL { if bootstrap_as_literal_expr(expression).Kind == "null" { return 0 } }
+    else if expression.kind == EXPR_CAST { return eval_pointer_value(context, flow, bootstrap_as_cast_expr(expression).Value, read) }
+    else if expression.kind == EXPR_MEMBER {
+        auto item = bootstrap_as_member_expr(expression); eval_expr(context, flow, item.Object, read); auto base = identifier_name(item.Object)
+        if base.ok { auto binding = current_binding(flow, base.name); if binding != null { auto id = binding.aggregate_fields[item.Name]; if id != 0 { if read { auto allocation = flow.allocations[id]; if allocation != null && !allocation.live { add_lifetime_error(context, node_from_member_expr(item), "provable use after free through '" + base.name + "." + item.Name + "'") } }; context.result.expression_allocations[expression] = id; return id } } }
+        auto semantic = context.result.expression_types[expression]; if semantic_is_pointer(semantic) { auto id = external_allocation_id(context, flow, expression); context.result.expression_allocations[expression] = id; return id }
+    } else if expression.kind == EXPR_INDEX || expression.kind == EXPR_CALL {
+        eval_expr(context, flow, expression, read); auto semantic = context.result.expression_types[expression]; if semantic_is_pointer(semantic) { auto id = external_allocation_id(context, flow, expression); context.result.expression_allocations[expression] = id; return id }
+    }
+    eval_expr(context, flow, expression, read); return 0
+}
+
+int64 allocation_id(lifetime_context* context, NewExpr* expression) {
+    auto id = context.allocation_ids[expression]; if id != 0 { return id }; id = context.next_allocation; context.next_allocation += 1; context.allocation_ids[expression] = id; return id
+}
+int64 external_allocation_id(lifetime_context* context, lifetime_flow* flow, Expr expression) {
+    auto id = context.external_ids[expression]
+    if id != 0 { if flow.allocations[id] == null { lifetime_allocation_state* state = new lifetime_allocation_state(); state.live = true; state.external_domains = Map<string, bool>(); state.external_domains["external"] = true; state.origin = "external"; flow.allocations[id] = state }; return id }
+    id = context.next_external; context.next_external -= 1; context.external_ids[expression] = id; lifetime_allocation_state* state = new lifetime_allocation_state(); state.live = true; state.external_domains = Map<string, bool>(); state.external_domains["external"] = true; state.origin = "external"; flow.allocations[id] = state; return id
+}
+void check_binding_use(lifetime_context* context, lifetime_flow* flow, string name, Node node) {
+    auto binding = current_binding(flow, name); if binding == null || binding.allocation == 0 { return }; auto allocation = flow.allocations[binding.allocation]; if allocation != null && !allocation.live { add_lifetime_error(context, node, "provable use after free through '" + name + "'") }
+}
+
+void copy_aggregate_binding(lifetime_binding* destination, lifetime_binding* source) {
+    int64[] ids = source.aggregate_allocs.keys(); auto i = 0; while i < ids.length { destination.aggregate_allocs[ids[i]] = true; i += 1 }
+    string[] fields = source.aggregate_fields.keys(); i = 0; while i < fields.length { destination.aggregate_fields[fields[i]] = source.aggregate_fields[fields[i]]; i += 1 }
+    ids = source.container_allocs.keys(); i = 0; while i < ids.length { destination.container_allocs[ids[i]] = true; i += 1 }
+}
+
+
+BootstrapIdentifierNameResult storage_base_identifier_name(Expr expression) {
+    if expression.kind == EXPR_IDENTIFIER { return identifier_name(expression) }
+    if expression.kind == EXPR_MEMBER { return storage_base_identifier_name(bootstrap_as_member_expr(expression).Object) }
+    if expression.kind == EXPR_INDEX { return storage_base_identifier_name(bootstrap_as_index_expr(expression).Object) }
+    BootstrapIdentifierNameResult result
+    return result
+}
+
+void eval_assignment(lifetime_context* context, lifetime_flow* flow, AssignExpr* assignment) {
+    if assignment.Target.kind == EXPR_IDENTIFIER {
+        auto identifier = bootstrap_as_identifier_expr(assignment.Target); auto binding = current_binding(flow, identifier.Name)
+        if binding != null {
+            int64 old_allocation = binding.allocation; Map<int64, bool> old_aggregate_ids; int64[] old_ids = binding.aggregate_allocs.keys(); int64 i = 0; while i < old_ids.length { old_aggregate_ids[old_ids[i]] = true; i += 1 }
+            int64 new_allocation = eval_pointer_value(context, flow, assignment.Value, true); if semantic_is_pointer(binding.type_info) { binding.allocation = new_allocation }
+            if !semantic_is_pointer(binding.type_info) {
+                binding.aggregate_allocs = Map<int64, bool>(); binding.aggregate_fields = Map<string, int64>(); binding.container_allocs = Map<int64, bool>(); auto source_result = identifier_name(assignment.Value); if source_result.ok { auto source = current_binding(flow, source_result.name); if source != null { copy_aggregate_binding(binding, source) } }
+                old_ids = old_aggregate_ids.keys(); i = 0; while i < old_ids.length { if !binding.aggregate_allocs[old_ids[i]] { maybe_cleanup_after_detach(context, flow, old_ids[i], node_from_assign_expr(assignment)) }; i += 1 }
+            }
+            if old_allocation > 0 && old_allocation != new_allocation { maybe_cleanup_after_detach(context, flow, old_allocation, node_from_assign_expr(assignment)) }; return
+        }
+        int64 id = eval_pointer_value(context, flow, assignment.Value, true); if id != 0 { mark_external(context, flow, id, "global:" + identifier.Name) }; return
+    }
+    if assignment.Target.kind == EXPR_INDEX {
+        IndexExpr* index = bootstrap_as_index_expr(assignment.Target)
+        int64 id = eval_pointer_value(context, flow, assignment.Value, true)
+        eval_expr(context, flow, index.Object, true)
+        eval_expr(context, flow, index.Index, true)
+        if id == 0 { return }
+        BootstrapIdentifierNameResult base = storage_base_identifier_name(index.Object)
+        if base.ok {
+            lifetime_binding* binding = current_binding(flow, base.name)
+            if binding != null {
+                if binding.origin == "parameter" || (semantic_is_pointer(binding.type_info) && binding.allocation < 0) { mark_external(context, flow, id, "caller-container:" + base.name) }
+                else { binding.aggregate_allocs[id] = true; binding.container_allocs[id] = true }
+                return
+            }
+            mark_external(context, flow, id, "global-container:" + base.name)
+            return
+        }
+        mark_external(context, flow, id, "aggregate:index")
+        return
+    }
+    if assignment.Target.kind == EXPR_MEMBER {
+        auto member = bootstrap_as_member_expr(assignment.Target); int64 id = eval_pointer_value(context, flow, assignment.Value, true); eval_expr(context, flow, member.Object, true); auto base = identifier_name(member.Object)
+        if base.ok {
+            auto binding = current_binding(flow, base.name)
+            if binding != null {
+                if binding.origin == "parameter" || (semantic_is_pointer(binding.type_info) && binding.allocation < 0) { if id != 0 { mark_external(context, flow, id, "caller:" + base.name + "." + member.Name) } }
+                else { int64 previous = binding.aggregate_fields[member.Name]; if previous != 0 && previous != id { binding.aggregate_fields.remove(member.Name) }; if id != 0 { binding.aggregate_allocs[id] = true; binding.aggregate_fields[member.Name] = id }; if previous != 0 && previous != id && !binding_has_aggregate_reference(binding, previous) { binding.aggregate_allocs.remove(previous); maybe_cleanup_after_detach(context, flow, previous, node_from_assign_expr(assignment)) } }
+                return
+            }
+            if id != 0 { mark_external(context, flow, id, "global:" + base.name + "." + member.Name) }; return
+        }
+        if id != 0 { mark_external(context, flow, id, "aggregate:unknown") }; return
+    }
+    eval_expr(context, flow, assignment.Target, true); eval_expr(context, flow, assignment.Value, true)
+}
+
+void maybe_cleanup_after_detach(lifetime_context* context, lifetime_flow* flow, int64 allocation_id_value, Node node) {
+    lifetime_allocation_state* allocation = flow.allocations[allocation_id_value]; if allocation == null || !allocation.live || !allocation.owned_here || external_domain_count(allocation) != 0 { return }; if has_local_reference(context, flow, allocation_id_value) { return }
+    add_action(context, "cleanup", allocation_id_value, node, "previous allocation has no remaining live alias or escape", allocation.policy); allocation.live = false; auto info = context.result.allocations[allocation_id_value]; if info != null { info.destruction_reason = "reassignment after final local reference" }
+}
+bool has_local_reference(lifetime_context* context, lifetime_flow* flow, int64 allocation_id_value) {
+    auto ignored = context; lifetime_binding*[][] stacks = flow.bindings.values(); int64 i = 0; while i < stacks.length { lifetime_binding*[] stack = stacks[i]; int64 j = 0; while j < stack.length { if stack[j].allocation == allocation_id_value || stack[j].aggregate_allocs[allocation_id_value] { return true }; j += 1 }; i += 1 }; return false
+}
+bool is_free_call(lifetime_context* context, CallExpr* call) { auto ignored = context; return call.Callee.kind == EXPR_IDENTIFIER && bootstrap_as_identifier_expr(call.Callee).Name == "free" }
+
+void eval_free(lifetime_context* context, lifetime_flow* flow, CallExpr* call) {
+    if call.Arguments.length != 1 {
+        add_lifetime_error(context, node_from_call_expr(call), "free expects exactly one argument, got " + `${call.Arguments.length}`); auto i = 0; while i < call.Arguments.length { eval_expr(context, flow, call.Arguments[i], true); i += 1 }; return
+    }
+    auto argument = call.Arguments[0]
+    if argument.kind == EXPR_LITERAL && bootstrap_as_literal_expr(argument).Kind == "null" { return }
+    if argument.kind == EXPR_UNARY {
+        auto unary = bootstrap_as_unary_expr(argument); if unary.Operator == "&" && unary.Operand.kind == EXPR_IDENTIFIER { auto identifier = bootstrap_as_identifier_expr(unary.Operand); auto binding = current_binding(flow, identifier.Name); if binding != null && !semantic_is_pointer(binding.type_info) { add_lifetime_error(context, node_from_call_expr(call), "cannot free stack allocation '&" + identifier.Name + "'"); return } }
+    }
+    auto argument_type = context.result.expression_types[argument]; if argument_type != null && argument_type.is_const { add_lifetime_error(context, node_from_call_expr(call), "cannot destroy allocation through const pointer access path"); return }
+    auto id = eval_pointer_value(context, flow, argument, false)
+    if id == 0 { if argument_type != null && !semantic_is_pointer(argument_type) && argument_type.kind != "null" { add_lifetime_error(context, node_from_call_expr(call), "free requires a raw pointer or null") }; return }
+    auto allocation = flow.allocations[id]; if allocation == null { return }; if !allocation.live { add_lifetime_error(context, node_from_call_expr(call), "double free of the same allocation"); return }
+    allocation.live = false; add_action(context, "explicit_free", id, node_from_call_expr(call), "explicit programmer destruction suppresses compiler cleanup", allocation.policy); AllocationInfo* info = context.result.allocations[id]; if info != null { info.explicitly_freed = true; info.destruction_reason = "explicit free" }
+    if free_leaves_container_reference(context, flow, id, argument) { add_diagnostic(context, "warning", "LIFETIME_STALE_CONTAINER_REF", node_from_call_expr(call), "allocation was freed while a container/aggregate reference may remain; the compiler leaves that reference untouched") }
+}
+
+bool free_leaves_container_reference(lifetime_context* context, lifetime_flow* flow, int64 allocation_id_value, Expr argument) {
+    auto ignored = context; if argument.kind == EXPR_MEMBER { return true }; lifetime_binding*[][] stacks = flow.bindings.values(); int64 i = 0
+    while i < stacks.length { lifetime_binding*[] stack = stacks[i]; int64 j = 0; while j < stack.length { if stack[j].aggregate_allocs[allocation_id_value] { return true }; j += 1 }; i += 1 }
+    if argument.kind == EXPR_CALL { auto call = bootstrap_as_call_expr(argument); if call.Callee.kind == EXPR_MEMBER && bootstrap_as_member_expr(call.Callee).Name == "get" { return true } }; return false
+}
+
+void record_container_call(lifetime_context* context, lifetime_flow* flow, CallExpr* call) {
+    if call.Callee.kind != EXPR_MEMBER { return }; auto member = bootstrap_as_member_expr(call.Callee); if member.Name != "append" && member.Name != "insert" && member.Name != "put" { return }; auto base = identifier_name(member.Object); auto i = 0
+    while i < call.Arguments.length { auto id = eval_pointer_value(context, flow, call.Arguments[i], false); if id != 0 && base.ok { auto binding = current_binding(flow, base.name); if binding != null { if binding.origin == "parameter" || (semantic_is_pointer(binding.type_info) && binding.allocation < 0) { mark_external(context, flow, id, "caller-container:" + base.name) } else { binding.aggregate_allocs[id] = true; binding.container_allocs[id] = true } } else { mark_external(context, flow, id, "global-container:" + base.name) } }; i += 1 }
+}
+
+bool binding_has_aggregate_reference(lifetime_binding* binding, int64 allocation_id_value) {
+    if binding == null || allocation_id_value == 0 { return false }; if binding.container_allocs[allocation_id_value] { return true }; auto ids = binding.aggregate_fields.values(); auto i = 0; while i < ids.length { if ids[i] == allocation_id_value { return true }; i += 1 }; return false
+}
+void mark_external(lifetime_context* context, lifetime_flow* flow, int64 allocation_id_value, string domain) {
+    lifetime_allocation_state* allocation = flow.allocations[allocation_id_value]
+    if allocation == null { return }
+    if allocation.external_domains[domain] { return }
+    allocation.external_domains[domain] = true
+    auto info = context.result.allocations[allocation_id_value]
+    if info != null { info.escaped = true }
+    lifetime_binding*[][] stacks = flow.bindings.values()
+    int64 i = 0
+    while i < stacks.length {
+        lifetime_binding*[] stack = stacks[i]
+        int64 j = 0
+        while j < stack.length {
+            lifetime_binding* binding = stack[j]
+            if binding.allocation == allocation_id_value {
+                int64[] children = binding.aggregate_allocs.keys()
+                int64 k = 0
+                while k < children.length {
+                    int64 child_id = children[k]
+                    if child_id != 0 && child_id != allocation_id_value { mark_external(context, flow, child_id, domain + ":aggregate") }
+                    k += 1
+                }
+            }
+            j += 1
+        }
+        i += 1
+    }
+}
+
+bool outer_reference_exists(lifetime_flow* flow, int64 allocation_id_value, int64 depth) {
+    lifetime_binding*[][] stacks = flow.bindings.values(); int64 i = 0; while i < stacks.length { lifetime_binding*[] stack = stacks[i]; int64 j = 0; while j < stack.length { if stack[j].depth < depth && (stack[j].allocation == allocation_id_value || stack[j].aggregate_allocs[allocation_id_value]) { return true }; j += 1 }; i += 1 }; return false
+}
+
+int64 external_domain_count(lifetime_allocation_state* allocation) {
+    if allocation == null { return 0 }
+    string[] domains = allocation.external_domains.keys()
+    return domains.length
+}
+
+void cleanup_depth(lifetime_context* context, lifetime_flow* flow, int64 depth, Node node) {
+    int64[] candidate_ids; int64[] keys = flow.allocations.keys(); int64 i = 0
+    while i < keys.length { int64 id = keys[i]; lifetime_allocation_state* allocation = flow.allocations[id]; if id > 0 && allocation != null && allocation.live && allocation.owned_here && allocation.created_depth >= depth && external_domain_count(allocation) == 0 && !outer_reference_exists(flow, id, depth) { candidate_ids = append_lifetime_int(candidate_ids, id) }; i += 1 }
+    candidate_ids = sort_lifetime_ints(candidate_ids); i = 0; while i < candidate_ids.length { int64 id = candidate_ids[i]; lifetime_allocation_state* allocation = flow.allocations[id]; add_action(context, "cleanup", id, node, "allocation does not escape lexical scope", allocation.policy); allocation.live = false; AllocationInfo* info = context.result.allocations[id]; if info != null && info.destruction_reason == "" { info.destruction_reason = "lexical scope exit" }; i += 1 }
+}
+void cleanup_before_return(lifetime_context* context, lifetime_flow* flow, Map<int64, bool> returned, Node node) {
+    int64[] ids; int64[] keys = flow.allocations.keys(); int64 i = 0
+    while i < keys.length { int64 id = keys[i]; lifetime_allocation_state* allocation = flow.allocations[id]; if id > 0 && allocation != null && allocation.live && allocation.owned_here && !returned[id] && external_domain_count(allocation) == 0 { ids = append_lifetime_int(ids, id) }; i += 1 }
+    ids = sort_lifetime_ints(ids); i = 0; while i < ids.length { int64 id = ids[i]; lifetime_allocation_state* allocation = flow.allocations[id]; add_action(context, "cleanup", id, node, "function exits while allocation remains locally reachable only", allocation.policy); allocation.live = false; AllocationInfo* info = context.result.allocations[id]; if info != null && info.destruction_reason == "" { info.destruction_reason = "function return" }; i += 1 }
+}
+void finalize_function_state(lifetime_context* context, lifetime_flow* flow, Node node) {
+    finalize_escape_state(context, flow); int64[] ids; int64[] keys = flow.allocations.keys(); int64 i = 0
+    while i < keys.length { int64 id = keys[i]; lifetime_allocation_state* allocation = flow.allocations[id]; if id > 0 && allocation != null && allocation.live && allocation.owned_here && external_domain_count(allocation) == 0 { ids = append_lifetime_int(ids, id) }; i += 1 }
+    ids = sort_lifetime_ints(ids); i = 0; while i < ids.length { int64 id = ids[i]; lifetime_allocation_state* allocation = flow.allocations[id]; add_action(context, "cleanup", id, node, "allocation does not escape function lifetime domain", allocation.policy); allocation.live = false; AllocationInfo* info = context.result.allocations[id]; if info != null && info.destruction_reason == "" { info.destruction_reason = "function exit" }; i += 1 }
+}
+void finalize_escape_state(lifetime_context* context, lifetime_flow* flow) {
+    int64[] keys = flow.allocations.keys(); int64 i = 0
+    while i < keys.length {
+        int64 id = keys[i]; lifetime_allocation_state* allocation = flow.allocations[id]
+        if id > 0 && allocation != null && allocation.live && allocation.owned_here && external_domain_count(allocation) > 1 {
+            string[] domains = sort_lifetime_strings(allocation.external_domains.keys()); string reason = "allocation escapes into multiple simultaneous lifetime domains: " + lifetime_domains_text(domains); AllocationInfo* info = context.result.allocations[id]
+            if context.options.mecc_enabled { if info != null { info.mecc = true; info.escaped = true; info.destruction_reason = "MECC estate reclamation" }; if info != null { add_action(context, "mecc", id, node_from_new_expr(info.new_expr), reason, allocation.policy); add_diagnostic(context, "info", "MECC001", node_from_new_expr(info.new_expr), reason + "; MECC estate management selected (compacting=" + `${allocation.policy.compacting}` + ")") } }
+            else if info != null { add_error(context.analyzer, context.path, node_from_new_expr(info.new_expr), reason + "; build with --mecc=true to permit runtime estate management or provide an explicit deterministic lifetime path") }
+        }
+        i += 1
+    }
+}
+
+void add_action(lifetime_context* context, string kind, int64 allocation, Node node, string reason, MeccPolicy policy) {
+    auto span = node_span(node); auto key = kind + ":" + `${allocation}` + ":" + `${span.Start.Offset}` + ":" + `${span.End.Offset}`; if context.action_keys[key] { return }; context.action_keys[key] = true
+    LifetimeAction action; action.kind = kind; action.allocation = allocation; action.node = node; action.reason = reason; action.policy = policy; context.result.lifetime_actions = append_lifetime_action(context.result.lifetime_actions, action)
+}
+void add_lifetime_error(lifetime_context* context, Node node, string message) { add_error(context.analyzer, context.path, node, message) }
+void add_diagnostic(lifetime_context* context, string level, string code, Node node, string message) {
+    auto span = node_span(node); auto key = level + ":" + code + ":" + context.path + ":" + `${span.Start.Offset}`; if context.diagnostic_keys[key] { return }; context.diagnostic_keys[key] = true
+    CompilerDiagnostic diagnostic; diagnostic.level = level; diagnostic.code = code; diagnostic.message = message; diagnostic.source_path = context.path; diagnostic.source_span = span; context.result.compiler_diagnostics = append_compiler_diagnostic(context.result.compiler_diagnostics, diagnostic)
+}

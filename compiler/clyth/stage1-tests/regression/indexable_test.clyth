@@ -1,0 +1,21 @@
+struct Pair : Indexable {
+    int32 left
+    int32 right
+
+    int32 on_read_index(uint64 index) {
+        if index == 0 { return left }
+        return right
+    }
+
+    void on_write_index(uint64 index, int32 value) {
+        if index == 0 { left = value; return }
+        right = value
+    }
+}
+
+int32 main() {
+    Pair p
+    p[0] = 7
+    p[1] = 9
+    return p[0] + p[1] - 16
+}

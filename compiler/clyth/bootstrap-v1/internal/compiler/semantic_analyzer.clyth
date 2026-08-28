@@ -1,0 +1,2312 @@
+// AUTO-TRANSLATED BOOTSTRAP SEED FROM FROZEN GO V1.0.0 IMPLEMENTATION.
+// Source: compiler/go/internal/compiler/semantic_analyzer.go
+// This file preserves implementation logic for the Go -> Clyth bootstrap port.
+
+// package compiler
+
+// Go imports:
+// "fmt"
+// "os"
+// "path/filepath"
+// "sort"
+// "strconv"
+// "strings"
+// "github.com/mali5820k/clyth-bootstrap/internal/frontend/ast"
+// "github.com/mali5820k/clyth-bootstrap/internal/frontend/parser"
+// "github.com/mali5820k/clyth-bootstrap/internal/frontend/token"
+
+import "semantic_types.clyth"
+import "../frontend/ast/ast.clyth"
+import "../frontend/parser/parser.clyth"
+import "../frontend/token/token.clyth"
+import collections
+import string
+import file-io
+
+bool semantic_stage2_trace_enabled() { return environment_value_copy("CLYTH_STAGE2_TRACE") != "" }
+void semantic_stage2_trace(string text) { if semantic_stage2_trace_enabled() { println("stage2-sem: "+text) } }
+
+// SemanticAnalyzer owns one complete semantic-analysis session, including all
+// recursively loaded local files and read-only runtime module namespaces.
+struct SemanticAnalyzer {
+	string root_path
+	string repo_root
+	Map<string, Namespace*> namespaces
+	Map<string, Namespace*> path_namespaces
+	Map<string, Program*> programs
+	Scope*[] scopes
+	SemanticError[] semantic_errors
+	GenericSpecialization[] specializations
+	Map<string, bool> specialization_keys
+	Map<Expr, SemanticType*> expression_types
+	int64 breakable_depth
+	int64 loop_depth
+	string current_receiver
+	int64 catch_depth
+	Map<string, int64> error_type_ids
+	Map<string, integer_range>[] integer_ranges
+	Map<int64, Map<string, int64>> integer_constants
+	Map<IndexExpr*, string> index_safety
+}
+
+struct integer_range {
+	int64 minimum
+	int64 maximum
+}
+
+struct SemanticOptions {
+	bool mecc_enabled
+}
+
+
+struct BootstrapIntegerResult { int64 value bool ok }
+struct BootstrapIntegerRangeResult { string name integer_range bounds bool ok }
+
+struct BootstrapErrorDeclaration {
+    string qualified
+    string name
+    string path
+    ErrorTypeDirectiveDecl* node
+}
+struct AnalyzeFileResult {
+    AnalysisResult* result
+    SemanticError[] errors
+    string error_message
+}
+
+SemanticType* make_semantic_type(string kind, string name) {
+    SemanticType* value = new SemanticType(); value.kind = kind; value.name = name; return value
+}
+SemanticType* make_semantic_literal_type(string kind, string name) {
+    SemanticType* value = make_semantic_type(kind, name); value.untyped_literal = true; return value
+}
+string[] generic_parameter_names(GenericParameter[] parameters) {
+    string[] names; names = array<string>(parameters.length); int64 i=0
+    while i < parameters.length { names[i]=parameters[i].Name; i+=1 }
+    return names
+}
+bool expr_present(Expr value) { return value.kind != 0 }
+bool stmt_present(Stmt value) { return value.kind != 0 }
+bool is_integer_type_name(string name) {
+    return name=="int8" || name=="int16" || name=="int32" || name=="int64" || name=="uint8" || name=="uint16" || name=="uint32" || name=="uint64"
+}
+string named_type_kind(string name) {
+    if name=="void" { return "void" }
+    if name=="bool" { return "bool" }
+    if name=="string" { return "string" }
+    if name=="char" { return "char" }
+    if name=="float32" || name=="float64" { return "float" }
+    if is_integer_type_name(name) { return "integer" }
+    return "unknown"
+}
+bool comparison_or_boolean_operator(string op) {
+    return op=="==" || op=="!=" || op=="<" || op=="<=" || op==">" || op==">=" || op=="&&" || op=="||"
+}
+bool semantic_is_array_type(SemanticType* value) { return value != null && (value.kind=="array" || value.array_dimensions.length>0) }
+BootstrapIntegerResult integer_result(int64 value, bool ok) { BootstrapIntegerResult r; r.value=value; r.ok=ok; return r }
+BootstrapIntegerRangeResult range_result(string name, integer_range bounds, bool ok) { BootstrapIntegerRangeResult r; r.name=name; r.bounds=bounds; r.ok=ok; return r }
+integer_range empty_integer_range() { integer_range r; return r }
+BootstrapErrorDeclaration make_error_declaration(string qualified, string name, string path, ErrorTypeDirectiveDecl* node) {
+    BootstrapErrorDeclaration d; d.qualified=qualified; d.name=name; d.path=path; d.node=node; return d
+}
+BootstrapErrorDeclaration[] sort_error_declarations(BootstrapErrorDeclaration[] values) {
+    int64 i=1
+    while i < values.length {
+        BootstrapErrorDeclaration current_value=values[i]; int64 j=i
+        while j>0 && values[j-1].qualified > current_value.qualified { values[j]=values[j-1]; j-=1 }
+        values[j]=current_value; i+=1
+    }
+    return values
+}
+SemanticArrayDimension[] append_dimension_array(SemanticArrayDimension[] values, SemanticArrayDimension value) {
+    int64 n=values.length; values = array<SemanticArrayDimension>(values, n+1); values[n]=value; return values
+}
+SemanticArrayDimension[] append_dimension_arrays(SemanticArrayDimension[] left, SemanticArrayDimension[] right) {
+    int64 old=left.length; left = array<SemanticArrayDimension>(left, old+right.length); int64 i=0; while i<right.length { left[old+i]=right[i]; i+=1 }; return left
+}
+
+SemanticError[] append_semantic_error_array(SemanticError[] values, SemanticError value) {
+    int64 n = values.length; values = array<SemanticError>(values, n + 1); values[n] = value; return values
+}
+string[] append_string_array(string[] values, string value) {
+    int64 n = values.length; values = array<string>(values, n + 1); values[n] = value; return values
+}
+Namespace*[] append_namespace_array(Namespace*[] values, Namespace* value) {
+    int64 n = values.length; values = array<Namespace*>(values, n + 1); values[n] = value; return values
+}
+BootstrapErrorDeclaration[] append_error_declaration_array(BootstrapErrorDeclaration[] values, BootstrapErrorDeclaration value) {
+    int64 n = values.length; values = array<BootstrapErrorDeclaration>(values, n + 1); values[n] = value; return values
+}
+SemanticCallable*[] append_callable_array(SemanticCallable*[] values, SemanticCallable* value) {
+    int64 n = values.length; values = array<SemanticCallable*>(values, n + 1); values[n] = value; return values
+}
+Scope*[] append_scope_array(Scope*[] values, Scope* value) {
+    int64 n = values.length; values = array<Scope*>(values, n + 1); values[n] = value; return values
+}
+Map<string, integer_range>[] append_range_map_array(Map<string, integer_range>[] values, Map<string, integer_range> value) {
+    int64 n = values.length; values = array<Map<string, integer_range>>(values, n + 1); values[n] = value; return values
+}
+GenericSpecialization[] append_specialization_array(GenericSpecialization[] values, GenericSpecialization value) {
+    int64 n = values.length; values = array<GenericSpecialization>(values, n + 1); values[n] = value; return values
+}
+Expr[] append_semantic_expr_array(Expr[] values, Expr value) {
+    int64 n = values.length; values = array<Expr>(values, n + 1); values[n] = value; return values
+}
+
+string semantic_path_join2(string left, string right) {
+    if left == "" { return right }
+    if right == "" { return left }
+    if bootstrap_string_ends_with(left, "/") != 0 { return left + right }
+    return left + "/" + right
+}
+string semantic_path_join3(string a, string b, string c) { return semantic_path_join2(semantic_path_join2(a, b), c) }
+string semantic_path_join4(string a, string b, string c, string d) { return semantic_path_join2(semantic_path_join3(a, b, c), d) }
+string normalize_import_path(string value) {
+    string out = ""; int64 i = 0; int64 n = bootstrap_string_length(value)
+    while i < n { string ch = bootstrap_string_slice(value, i, 1); if ch == "\\" { out = out + "/" } else { out = out + ch }; i += 1 }
+    return out
+}
+string[] split_nonempty_lines(string value) {
+    string[] output; int64 start = 0; int64 i = 0; int64 n = bootstrap_string_length(value)
+    while i <= n {
+        if i == n || bootstrap_string_slice(value, i, 1) == "\n" {
+            if i > start { output = append_string_array(output, bootstrap_string_slice(value, start, i - start)) }
+            start = i + 1
+        }
+        i += 1
+    }
+    return output
+}
+
+AnalyzeFileResult analyze_file(string path, Program* program) {
+    SemanticOptions options
+    options.mecc_enabled = false
+    return analyze_file_with_options(path, program, options)
+}
+
+AnalyzeFileResult analyze_file_with_options(string path, Program* program, SemanticOptions options) {
+    semantic_stage2_trace("analyze enter: "+path)
+    string absolute = absolute_path(path)
+    semantic_stage2_trace("absolute path ready")
+    if absolute == "" { absolute = path }
+    SemanticAnalyzer* analyzer = new SemanticAnalyzer()
+    semantic_stage2_trace("analyzer allocated")
+    analyzer.root_path = absolute
+    analyzer.repo_root = find_repo_root(path_dirname_copy(absolute))
+    analyzer.namespaces = Map<string, Namespace*>()
+    analyzer.path_namespaces = Map<string, Namespace*>()
+    analyzer.programs = Map<string, Program*>()
+    analyzer.specialization_keys = Map<string, bool>()
+    analyzer.expression_types = Map<Expr, SemanticType*>()
+    analyzer.error_type_ids = Map<string, int64>()
+    analyzer.integer_constants = Map<int64, Map<string, int64>>()
+    analyzer.index_safety = Map<IndexExpr*, string>()
+    semantic_stage2_trace("analyzer maps ready")
+
+    semantic_stage2_trace("load root namespace begin")
+    Namespace* root_namespace = load_source_namespace(analyzer, absolute, "root", "file", program)
+    semantic_stage2_trace("load root namespace end")
+    AnalyzeFileResult output
+    if root_namespace == null { output.errors = analyzer.semantic_errors; return output }
+    semantic_stage2_trace("resolve imports begin")
+    resolve_all_imports(analyzer)
+    semantic_stage2_trace("resolve imports end")
+    semantic_stage2_trace("register error types begin")
+    register_error_types(analyzer)
+    semantic_stage2_trace("register error types end")
+    semantic_stage2_trace("collect declarations begin")
+    collect_all_declarations(analyzer)
+    semantic_stage2_trace("collect declarations end")
+    semantic_stage2_trace("bind methods begin")
+    bind_all_methods(analyzer)
+    semantic_stage2_trace("bind methods end")
+    semantic_stage2_trace("analyze bodies begin")
+    analyze_namespace_bodies(analyzer, root_namespace)
+    semantic_stage2_trace("analyze bodies end")
+
+    semantic_stage2_trace("allocate result begin")
+    AnalysisResult* result = new AnalysisResult()
+    result.root_path = absolute
+    result.root_namespace = root_namespace
+    result.scopes = analyzer.scopes
+    result.namespaces = analyzer.namespaces
+    result.specializations = analyzer.specializations
+    result.semantic_errors = analyzer.semantic_errors
+    result.expression_types = analyzer.expression_types
+    result.mecc_enabled = options.mecc_enabled
+    result.mecc_policy_by_node = Map<Node, MeccPolicy>()
+    result.allocations = Map<int64, AllocationInfo*>()
+    result.allocation_by_new = Map<NewExpr*, int64>()
+    result.expression_allocations = Map<Expr, int64>()
+    result.error_type_ids = analyzer.error_type_ids
+    result.index_safety = analyzer.index_safety
+    // Lifetime planning is wired back in after lifetime.clyth is normalized.
+    result.semantic_errors = analyzer.semantic_errors
+    output.result = result
+    output.errors = analyzer.semantic_errors
+    semantic_stage2_trace("analyze complete")
+    return output
+}
+
+string find_repo_root(string start) {
+    string current_path = absolute_path(start)
+    if current_path == "" { current_path = start }
+    while true {
+        if is_directory(semantic_path_join2(current_path, "module-src")) != 0 { return current_path }
+        string parent_path = path_dirname_copy(current_path)
+        if parent_path == current_path || parent_path == "" { return start }
+        current_path = parent_path
+    }
+}
+
+void add_error(SemanticAnalyzer* analyzer, string path, Node node, string message) {
+    SemanticError semantic_error
+    semantic_error.source_path = path
+    semantic_error.source_span = node_span(node)
+    semantic_error.message = message
+    analyzer.semantic_errors = append_semantic_error_array(analyzer.semantic_errors, semantic_error)
+}
+
+Namespace* load_source_namespace(SemanticAnalyzer* analyzer, string path, string name, string kind, Program* supplied) {
+    semantic_stage2_trace("load source absolute begin")
+    string clean_path = absolute_path(path)
+    semantic_stage2_trace("load source absolute end")
+    if clean_path == "" { clean_path = path }
+    semantic_stage2_trace("load source map lookup begin")
+    Namespace* existing = analyzer.path_namespaces[clean_path]
+    semantic_stage2_trace("load source map lookup end")
+    if existing != null { semantic_stage2_trace("load source existing namespace"); return existing }
+    Program* program = supplied
+    if program == null {
+        semantic_stage2_trace("load source file exists begin")
+        if file_exists(clean_path) == 0 {
+            SemanticError read_error; read_error.source_path = clean_path; read_error.message = "unable to read source file"
+            analyzer.semantic_errors = append_semantic_error_array(analyzer.semantic_errors, read_error)
+            return null
+        }
+        semantic_stage2_trace("load source file exists end")
+        semantic_stage2_trace("load source read begin")
+        string data = read_text(clean_path)
+        semantic_stage2_trace("load source read end")
+        semantic_stage2_trace("load source parse begin")
+        ParseResult parsed = Parse(data)
+        semantic_stage2_trace("load source parse end")
+        int64 i = 0
+        while i < parsed.lexErrors.length {
+            LexerError item = parsed.lexErrors[i]
+            SemanticError translated; translated.source_path=clean_path; translated.source_span=item.Span; translated.message=item.Message
+            analyzer.semantic_errors = append_semantic_error_array(analyzer.semantic_errors, translated); i += 1
+        }
+        i = 0
+        while i < parsed.parseErrors.length {
+            ParserError item = parsed.parseErrors[i]
+            SemanticError translated; translated.source_path=clean_path; translated.source_span=item.Span; translated.message=item.Message
+            analyzer.semantic_errors = append_semantic_error_array(analyzer.semantic_errors, translated); i += 1
+        }
+        program = parsed.program
+    }
+    semantic_stage2_trace("load source namespace allocation begin")
+    Namespace* namespace = new Namespace()
+    semantic_stage2_trace("load source namespace allocation end")
+    namespace.name = name; namespace.source_path = clean_path; namespace.import_kind = kind
+    namespace.symbols = Map<string, Symbol*>(); namespace.structs = Map<string, StructInfo*>(); namespace.protocols = Map<string, ProtocolInfo*>(); namespace.alias_imports = Map<string, Namespace*>()
+    analyzer.path_namespaces[clean_path] = namespace
+    analyzer.namespaces[name + "@" + clean_path] = namespace
+    analyzer.programs[clean_path] = program
+    semantic_stage2_trace("load source namespace registered")
+    return namespace
+}
+
+void resolve_all_imports(SemanticAnalyzer* analyzer) {
+    bool changed = true
+    int64 pass = 0
+    while changed {
+        semantic_stage2_trace("resolve pass "+`${pass}`+" begin")
+        changed = false
+        string[] paths = analyzer.path_namespaces.keys()
+        int64 i = 0
+        while i < paths.length {
+            string path = paths[i]
+            semantic_stage2_trace("resolve namespace: "+path)
+            Namespace* namespace = analyzer.path_namespaces[path]
+            int64 before = analyzer.path_namespaces.length
+            resolve_imports(analyzer, namespace, analyzer.programs[path])
+            if analyzer.path_namespaces.length > before { changed = true }
+            i += 1
+        }
+        semantic_stage2_trace("resolve pass "+`${pass}`+" end")
+        pass += 1
+    }
+}
+
+void resolve_imports(SemanticAnalyzer* analyzer, Namespace* namespace, Program* program) {
+    if namespace == null || program == null || namespace.open_imports.length + namespace.alias_imports.length > 0 { return }
+    int64 i = 0
+    while i < program.Declarations.length {
+        semantic_stage2_trace("import scan declaration "+`${i}`)
+        ImportDecl* import_decl = bootstrap_as_import_decl(program.Declarations[i])
+        if import_decl != null {
+            semantic_stage2_trace("import declaration found")
+            semantic_stage2_trace("import kind: "+import_decl.Kind)
+            semantic_stage2_trace("import target: "+import_decl.Target)
+            Namespace* imported
+            if import_decl.Kind == "file" {
+                semantic_stage2_trace("file import dirname begin")
+                string import_dir = path_dirname_copy(namespace.source_path)
+                semantic_stage2_trace("file import dirname end")
+                string normalized_target = normalize_import_path(import_decl.Target)
+                semantic_stage2_trace("file import normalize end")
+                string imported_path = semantic_path_join2(import_dir, normalized_target)
+                semantic_stage2_trace("file import path: "+imported_path)
+                semantic_stage2_trace("load source namespace begin")
+                imported = load_source_namespace(analyzer, imported_path, import_decl.Target, "file", null)
+                semantic_stage2_trace("load source namespace end")
+            } else {
+                semantic_stage2_trace("load module namespace begin")
+                imported = load_module_namespace(analyzer, import_decl.Target)
+                semantic_stage2_trace("load module namespace end")
+            }
+            semantic_stage2_trace("import load returned")
+            if imported == null { add_error(analyzer, namespace.source_path, node_from_import_decl(import_decl), "unable to resolve import " + import_decl.Target) }
+            else if import_decl.Alias != "" { namespace.alias_imports[import_decl.Alias] = imported }
+            else { namespace.open_imports = append_namespace_array(namespace.open_imports, imported) }
+            semantic_stage2_trace("import attached")
+        }
+        i += 1
+    }
+}
+
+Namespace* load_module_namespace(SemanticAnalyzer* analyzer, string module_name) {
+    Namespace*[] existing_namespaces = analyzer.namespaces.values()
+    int64 i = 0
+    while i < existing_namespaces.length {
+        Namespace* existing = existing_namespaces[i]
+        if existing != null && existing.name == module_name && existing.import_kind == "module" { return existing }
+        i += 1
+    }
+    string[] patterns
+    patterns = append_string_array(patterns, semantic_path_join4(analyzer.repo_root, "module-src", "runtime", module_name))
+    patterns = append_string_array(patterns, semantic_path_join4(analyzer.repo_root, "module-src", "core", module_name))
+    string module_dir = ""
+    i = 0
+    while i < patterns.length { if is_directory(patterns[i]) != 0 { module_dir = patterns[i]; break }; i += 1 }
+    if module_dir == "" { return null }
+    Namespace* namespace = new Namespace()
+    namespace.name=module_name; namespace.source_path=module_dir; namespace.import_kind="module"
+    namespace.symbols=Map<string,Symbol*>(); namespace.structs=Map<string,StructInfo*>(); namespace.protocols=Map<string,ProtocolInfo*>(); namespace.alias_imports=Map<string,Namespace*>()
+    analyzer.namespaces[module_name + "@" + module_dir] = namespace
+    string[] source_files = split_nonempty_lines(glob_text(semantic_path_join3(module_dir, "src", "*.clyth")))
+    i = 0
+    while i < source_files.length {
+        string source_file = source_files[i]
+        if file_exists(source_file) != 0 {
+            ParseResult parsed = Parse(read_text(source_file))
+            if parsed.parseErrors.length + parsed.lexErrors.length == 0 {
+                analyzer.programs[source_file] = parsed.program
+                analyzer.path_namespaces[source_file] = namespace
+            }
+        }
+        i += 1
+    }
+    return namespace
+}
+
+void register_error_types(SemanticAnalyzer* analyzer) { // translated Go receiver method
+    // Built-in identities occupy a stable low range; user/module identities are
+    // assigned deterministically from their fully-qualified declaration names.
+    string[] builtins = array<string>(7); builtins[0]="none"; builtins[1]="bounds_error"; builtins[2]="null_reference"; builtins[3]="invalid_memory_access"; builtins[4]="arithmetic_error"; builtins[5]="io_error"; builtins[6]="device_timeout"
+    for int64 index = 0; index < builtins.length; index += 1 {
+        string name = builtins[index]
+        analyzer.error_type_ids["builtin::"+name] = index
+    }
+
+    BootstrapErrorDeclaration[] items
+    string[] program_paths = analyzer.programs.keys()
+    for int64 path_index = 0; path_index < program_paths.length; path_index += 1 {
+        string path = program_paths[path_index]
+        Program* program = analyzer.programs[path]
+        Namespace* namespace = analyzer.path_namespaces[path]
+        if namespace == null {
+            continue
+        }
+        for int64 declaration_index = 0; declaration_index < program.Declarations.length; declaration_index += 1 {
+            Decl raw = program.Declarations[declaration_index]
+            ErrorTypeDirectiveDecl* item = bootstrap_as_error_type_directive_decl(raw)
+            if item == null {
+                continue
+            }
+            BootstrapErrorDeclaration entry = make_error_declaration(namespace.name+"::"+item.Name, item.Name, path, item)
+            items = append_error_declaration_array(items, entry)
+        }
+    }
+    items = sort_error_declarations(items)
+    for int64 item_index = 0; item_index < items.length; item_index += 1 {
+        BootstrapErrorDeclaration item = items[item_index]
+        if analyzer.error_type_ids.contains_key(item.qualified) {
+            add_error(analyzer, item.path, node_from_error_type_directive(item.node), "duplicate #ErrorType declaration '"+item.name+"'")
+            continue
+        }
+        int64 id = 1024 + analyzer.error_type_ids.length
+        analyzer.error_type_ids[item.qualified] = id
+        Namespace* namespace = analyzer.path_namespaces[item.path]
+        Symbol* symbol = new Symbol()
+        symbol.name = item.name
+        symbol.kind = "error_type"
+        symbol.type_info = make_semantic_type("error_type", "ErrorType")
+        symbol.declaration = node_from_error_type_directive(item.node)
+        symbol.namespace_name = namespace.name
+        symbol.error_type_id = id
+        declare_symbol(analyzer, namespace, item.path, item.name, symbol)
+    }
+}
+
+void collect_all_declarations(SemanticAnalyzer* analyzer) { // translated Go receiver method
+    // Hoist named types across every loaded namespace before resolving any
+    // function, field, or global signatures. This makes module dependency order
+    // irrelevant and mirrors Clyth's declaration-before-body semantics.
+    string[] paths = analyzer.programs.keys()
+    for int64 path_index = 0; path_index < paths.length; path_index += 1 {
+        string path = paths[path_index]
+        Program* program = analyzer.programs[path]
+        Namespace* namespace = analyzer.path_namespaces[path]
+        for int64 declaration_index = 0; declaration_index < program.Declarations.length; declaration_index += 1 {
+            Decl declaration = program.Declarations[declaration_index]
+
+            StructDecl* struct_decl = bootstrap_as_struct_decl(declaration)
+            if struct_decl != null {
+                string[] generic_names = generic_parameter_names(struct_decl.GenericParameters)
+                if namespace.structs[struct_decl.Name] == null {
+                    StructInfo* info = new StructInfo()
+                    info.name = struct_decl.Name
+                    info.declaration = struct_decl
+                    info.generic_parameters = generic_names
+                    info.fields = Map<string, Symbol*>()
+                    info.methods = Map<string, Symbol*>()
+                    namespace.structs[struct_decl.Name] = info
+                }
+                Symbol* symbol = new Symbol()
+                symbol.name = struct_decl.Name
+                symbol.kind = "struct"
+                symbol.type_info = make_semantic_type("struct", struct_decl.Name)
+                symbol.declaration = node_from_struct_decl(struct_decl)
+                symbol.namespace_name = namespace.name
+                symbol.generic_parameters = generic_names
+                declare_symbol(analyzer, namespace, path, struct_decl.Name, symbol)
+                continue
+            }
+
+            EnumDecl* enum_decl = bootstrap_as_enum_decl(declaration)
+            if enum_decl != null {
+                Symbol* symbol = new Symbol()
+                symbol.name = enum_decl.Name
+                symbol.kind = "struct"
+                symbol.type_info = make_semantic_type("enum", enum_decl.Name)
+                symbol.declaration = node_from_enum_decl(enum_decl)
+                symbol.namespace_name = namespace.name
+                declare_symbol(analyzer, namespace, path, enum_decl.Name, symbol)
+                continue
+            }
+
+            ProtocolDecl* protocol_decl = bootstrap_as_protocol_decl(declaration)
+            if protocol_decl != null {
+                string[] generic_names = generic_parameter_names(protocol_decl.GenericParameters)
+                if namespace.protocols[protocol_decl.Name] == null {
+                    ProtocolInfo* info = new ProtocolInfo()
+                    info.name = protocol_decl.Name
+                    info.declaration = protocol_decl
+                    info.generic_parameters = generic_names
+                    info.methods = Map<string, Symbol*>()
+                    namespace.protocols[protocol_decl.Name] = info
+                }
+                Symbol* symbol = new Symbol()
+                symbol.name = protocol_decl.Name
+                symbol.kind = "protocol"
+                symbol.type_info = make_semantic_type("protocol", protocol_decl.Name)
+                symbol.declaration = node_from_protocol_decl(protocol_decl)
+                symbol.namespace_name = namespace.name
+                symbol.generic_parameters = generic_names
+                declare_symbol(analyzer, namespace, path, protocol_decl.Name, symbol)
+            }
+        }
+    }
+
+    for int64 path_index = 0; path_index < paths.length; path_index += 1 {
+        string path = paths[path_index]
+        collect_declarations(analyzer, analyzer.path_namespaces[path], path, analyzer.programs[path])
+    }
+}
+
+void collect_declarations(SemanticAnalyzer* analyzer, Namespace* namespace, string path, Program* program) { // translated Go receiver method
+    for int64 declaration_index = 0; declaration_index < program.Declarations.length; declaration_index += 1 {
+        Decl declaration = program.Declarations[declaration_index]
+
+        StructDecl* struct_decl = bootstrap_as_struct_decl(declaration)
+        if struct_decl != null {
+            // Named structs were already installed by collect_all_declarations'
+            // hoist pass. Reusing that symbol avoids manufacturing a second AST
+            // wrapper for the same declaration and falsely diagnosing a duplicate.
+            if namespace.symbols[struct_decl.Name] != null { continue }
+            string[] generic_names = generic_parameter_names(struct_decl.GenericParameters)
+            StructInfo* info = namespace.structs[struct_decl.Name]
+            if info == null {
+                info = new StructInfo()
+                info.name = struct_decl.Name
+                info.declaration = struct_decl
+                info.generic_parameters = generic_names
+                info.fields = Map<string, Symbol*>()
+                info.methods = Map<string, Symbol*>()
+                namespace.structs[struct_decl.Name] = info
+            }
+            Symbol* symbol = new Symbol()
+            symbol.name = struct_decl.Name
+            symbol.kind = "struct"
+            symbol.type_info = make_semantic_type("struct", struct_decl.Name)
+            symbol.declaration = node_from_struct_decl(struct_decl)
+            symbol.namespace_name = namespace.name
+            symbol.generic_parameters = generic_names
+            declare_symbol(analyzer, namespace, path, struct_decl.Name, symbol)
+            continue
+        }
+
+        EnumDecl* enum_decl = bootstrap_as_enum_decl(declaration)
+        if enum_decl != null {
+            if namespace.symbols[enum_decl.Name] != null { continue }
+            Symbol* symbol = new Symbol()
+            symbol.name = enum_decl.Name
+            symbol.kind = "struct"
+            symbol.type_info = make_semantic_type("enum", enum_decl.Name)
+            symbol.declaration = node_from_enum_decl(enum_decl)
+            symbol.namespace_name = namespace.name
+            declare_symbol(analyzer, namespace, path, enum_decl.Name, symbol)
+            continue
+        }
+
+        ProtocolDecl* protocol_decl = bootstrap_as_protocol_decl(declaration)
+        if protocol_decl != null {
+            if namespace.symbols[protocol_decl.Name] != null { continue }
+            string[] generic_names = generic_parameter_names(protocol_decl.GenericParameters)
+            ProtocolInfo* info = new ProtocolInfo()
+            info.name = protocol_decl.Name
+            info.declaration = protocol_decl
+            info.generic_parameters = generic_names
+            info.methods = Map<string, Symbol*>()
+            namespace.protocols[protocol_decl.Name] = info
+            Symbol* symbol = new Symbol()
+            symbol.name = protocol_decl.Name
+            symbol.kind = "protocol"
+            symbol.type_info = make_semantic_type("protocol", protocol_decl.Name)
+            symbol.declaration = node_from_protocol_decl(protocol_decl)
+            symbol.namespace_name = namespace.name
+            symbol.generic_parameters = generic_names
+            declare_symbol(analyzer, namespace, path, protocol_decl.Name, symbol)
+            continue
+        }
+
+        FunctionDecl* function_decl = bootstrap_as_function_decl(declaration)
+        if function_decl != null {
+            Symbol* symbol = new Symbol()
+            symbol.name = function_decl.Name
+            symbol.kind = "function"
+            symbol.type_info = resolve_callable_type(analyzer, namespace, function_decl.ReturnType, function_decl.Parameters, Map<string, SemanticType*>())
+            symbol.declaration = node_from_function_decl(function_decl)
+            symbol.namespace_name = namespace.name
+            symbol.receiver_name = function_decl.Receiver
+            declare_symbol(analyzer, namespace, path, function_decl.Name, symbol)
+            continue
+        }
+
+        GlobalVarDecl* global_decl = bootstrap_as_global_var_decl(declaration)
+        if global_decl != null {
+            Symbol* symbol = new Symbol()
+            symbol.name = global_decl.Name
+            symbol.kind = "global"
+            symbol.type_info = resolve_type_ref(analyzer, namespace, global_decl.Type, Map<string, SemanticType*>(), path)
+            symbol.declaration = node_from_global_var_decl(global_decl)
+            symbol.namespace_name = namespace.name
+            declare_symbol(analyzer, namespace, path, global_decl.Name, symbol)
+        }
+    }
+
+    for int64 declaration_index = 0; declaration_index < program.Declarations.length; declaration_index += 1 {
+        Decl declaration = program.Declarations[declaration_index]
+        StructDecl* struct_decl = bootstrap_as_struct_decl(declaration)
+        if struct_decl != null {
+            collect_struct_members(analyzer, namespace, path, namespace.structs[struct_decl.Name], struct_decl.Members, Map<string, SemanticType*>())
+        }
+        ProtocolDecl* protocol_decl = bootstrap_as_protocol_decl(declaration)
+        if protocol_decl != null {
+            collect_protocol_members(analyzer, namespace, path, protocol_decl)
+        }
+    }
+}
+
+bool same_declaration_identity(Node left, Node right) {
+    if left.category != right.category { return false }
+    if left.category == NODE_DECL {
+        if left.declaration.kind != right.declaration.kind { return false }
+        if left.declaration.kind == DECL_STRUCT { return left.declaration.struct_decl == right.declaration.struct_decl }
+        if left.declaration.kind == DECL_ENUM { return left.declaration.enum_decl == right.declaration.enum_decl }
+        if left.declaration.kind == DECL_PROTOCOL { return left.declaration.protocol_decl == right.declaration.protocol_decl }
+        if left.declaration.kind == DECL_FUNCTION { return left.declaration.function_decl == right.declaration.function_decl }
+        if left.declaration.kind == DECL_GLOBAL_VAR { return left.declaration.global_var_decl == right.declaration.global_var_decl }
+        if left.declaration.kind == DECL_ERROR_TYPE { return left.declaration.error_type == right.declaration.error_type }
+        if left.declaration.kind == DECL_IMPORT { return left.declaration.import_decl == right.declaration.import_decl }
+        if left.declaration.kind == DECL_METHOD_BLOCK { return left.declaration.method_block_decl == right.declaration.method_block_decl }
+        if left.declaration.kind == DECL_MECC_CONFIG { return left.declaration.mecc_config == right.declaration.mecc_config }
+    }
+    if left.category == 10 { return left.field == right.field }
+    if left.category == 11 { return left.method == right.method }
+    if left.category == 12 { return left.parameter == right.parameter }
+    if left.category == 13 { return left.protocol_member == right.protocol_member }
+    if left.category == 14 { return left.type_ref == right.type_ref }
+    if left.category == 15 { return left.switch_case == right.switch_case }
+    return false
+}
+
+void declare_symbol(SemanticAnalyzer* analyzer, Namespace* namespace, string path, string name, Symbol* symbol) { // translated Go receiver method
+    Symbol* existing = namespace.symbols[name]
+    if existing != null && !same_declaration_identity(existing.declaration, symbol.declaration) {
+        add_error(analyzer, path, symbol.declaration, "duplicate declaration '"+name+"'")
+        return
+    }
+    namespace.symbols[name] = symbol
+}
+
+void collect_struct_members(SemanticAnalyzer* analyzer, Namespace* namespace, string path, StructInfo* info, StructMember[] members, Map<string, SemanticType*> substitutions) { // translated Go receiver method
+    if info == null {
+        return
+    }
+    Map<string, SemanticType*> generic_set = Map<string, SemanticType*>()
+    for int64 generic_index = 0; generic_index < info.generic_parameters.length; generic_index += 1 {
+        string name = info.generic_parameters[generic_index]
+        generic_set[name] = make_semantic_type("unknown", name)
+    }
+    if substitutions.length > 0 {
+        string[] substitution_keys = substitutions.keys()
+        for int64 substitution_index = 0; substitution_index < substitution_keys.length; substitution_index += 1 {
+            string key = substitution_keys[substitution_index]
+            generic_set[key] = substitutions[key]
+        }
+    }
+
+    for int64 member_index = 0; member_index < members.length; member_index += 1 {
+        StructMember member = members[member_index]
+        FieldDecl* field = bootstrap_as_field_decl(member)
+        if field != null {
+            if info.fields[field.Name] == null {
+                info.field_order = append_string_array(info.field_order, field.Name)
+            }
+            Symbol* symbol = new Symbol()
+            symbol.name = field.Name
+            symbol.kind = "field"
+            symbol.type_info = resolve_type_ref(analyzer, namespace, field.Type, generic_set, path)
+            symbol.declaration = node_from_field_decl(field)
+            symbol.namespace_name = namespace.name
+            symbol.receiver_name = info.name
+            info.fields[field.Name] = symbol
+            continue
+        }
+
+        MethodDecl* method = bootstrap_as_method_decl(member)
+        if method != null {
+            Symbol* symbol = new Symbol()
+            symbol.name = method.Function.Name
+            symbol.kind = "method"
+            symbol.type_info = resolve_callable_type(analyzer, namespace, method.Function.ReturnType, method.Function.Parameters, generic_set)
+            symbol.declaration = node_from_method_decl(method)
+            symbol.namespace_name = namespace.name
+            symbol.receiver_name = info.name
+            info.methods[method.Function.Name] = symbol
+            continue
+        }
+
+        ConstructorMember* ctor_member = bootstrap_as_constructor_member(member)
+        if ctor_member != null {
+            TypeRef* return_ref = new TypeRef()
+            return_ref.Name = info.name
+            SemanticType* constructor_type = resolve_callable_type(analyzer, namespace, return_ref, ctor_member.Constructor.Parameters, generic_set)
+            info.constructors = append_callable_array(info.constructors, constructor_type.callable)
+            continue
+        }
+
+        DestructorMember* dtor_member = bootstrap_as_destructor_member(member)
+        if dtor_member != null {
+            info.destructor = true
+        }
+    }
+}
+
+void collect_protocol_members(SemanticAnalyzer* analyzer, Namespace* namespace, string path, ProtocolDecl* declaration) { // translated Go receiver method
+    ProtocolInfo* info = namespace.protocols[declaration.Name]
+    if info == null {
+        return
+    }
+    Map<string, SemanticType*> generic_set = Map<string, SemanticType*>()
+    for int64 generic_index = 0; generic_index < info.generic_parameters.length; generic_index += 1 {
+        string name = info.generic_parameters[generic_index]
+        generic_set[name] = make_semantic_type("unknown", name)
+    }
+    for int64 member_index = 0; member_index < declaration.Members.length; member_index += 1 {
+        ProtocolMember* member = declaration.Members[member_index]
+        Symbol* symbol = new Symbol()
+        symbol.name = member.Name
+        symbol.kind = "method"
+        symbol.type_info = resolve_callable_type(analyzer, namespace, member.ReturnType, member.Parameters, generic_set)
+        symbol.declaration = node_from_protocol_member(member)
+        symbol.namespace_name = namespace.name
+        info.methods[member.Name] = symbol
+    }
+}
+
+void bind_all_methods(SemanticAnalyzer* analyzer) { // translated Go receiver method
+    string[] paths = analyzer.programs.keys()
+    for int64 path_index = 0; path_index < paths.length; path_index += 1 {
+        string path = paths[path_index]
+        Program* program = analyzer.programs[path]
+        Namespace* namespace = analyzer.path_namespaces[path]
+        for int64 declaration_index = 0; declaration_index < program.Declarations.length; declaration_index += 1 {
+            Decl declaration = program.Declarations[declaration_index]
+            MethodBlockDecl* method_block = bootstrap_as_method_block_decl(declaration)
+            if method_block != null {
+                StructInfo* info = lookup_struct(analyzer, namespace, method_block.Receiver.Name)
+                if info != null {
+                    collect_struct_members(analyzer, namespace, path, info, method_block.Members, Map<string, SemanticType*>())
+                }
+                continue
+            }
+            FunctionDecl* function_decl = bootstrap_as_function_decl(declaration)
+            if function_decl != null && function_decl.Receiver != "" {
+                StructInfo* info = lookup_struct(analyzer, namespace, function_decl.Receiver)
+                if info != null {
+                    Symbol* symbol = new Symbol()
+                    symbol.name = function_decl.Name
+                    symbol.kind = "method"
+                    symbol.type_info = resolve_callable_type(analyzer, namespace, function_decl.ReturnType, function_decl.Parameters, Map<string, SemanticType*>())
+                    symbol.declaration = node_from_function_decl(function_decl)
+                    symbol.namespace_name = namespace.name
+                    symbol.receiver_name = function_decl.Receiver
+                    info.methods[function_decl.Name] = symbol
+                }
+            }
+        }
+    }
+}
+
+SemanticType* resolve_callable_type(SemanticAnalyzer* analyzer, Namespace* namespace, TypeRef* return_ref, Parameter*[] parameters, Map<string, SemanticType*> substitutions) { // translated Go receiver method
+    SemanticCallable* callable = new SemanticCallable()
+    callable.return_type = resolve_type_ref(analyzer, namespace, return_ref, substitutions, namespace.source_path)
+    bool seen_default = false
+    for int64 parameter_index = 0; parameter_index < parameters.length; parameter_index += 1 {
+        Parameter* parameter = parameters[parameter_index]
+        SemanticType* parameter_type = resolve_type_ref(analyzer, namespace, parameter.Type, substitutions, namespace.source_path)
+        callable.parameters = append_semantic_type(callable.parameters, parameter_type)
+        callable.default_values = append_semantic_expr_array(callable.default_values, parameter.DefaultValue)
+        if expr_present(parameter.DefaultValue) {
+            seen_default = true
+        } else if !parameter.Variadic && !seen_default {
+            callable.required_parameters += 1
+        }
+        if parameter.Variadic {
+            callable.variadic = true
+            callable.native_variadic = parameter.Type == null
+            callable.heterogeneous_variadic = parameter.Type != null && parameter.Type.Name == "auto"
+        }
+    }
+    SemanticType* result = new SemanticType()
+    result.kind = "callable"
+    result.callable = callable
+    return result
+}
+
+SemanticType* resolve_type_ref(SemanticAnalyzer* analyzer, Namespace* namespace, TypeRef* ref, Map<string, SemanticType*> substitutions, string path) { // translated Go receiver method
+    if ref == null {
+        return make_semantic_type("unknown", "")
+    }
+    if substitutions.length > 0 {
+        SemanticType* replacement = substitutions[ref.Name]
+        if replacement != null {
+            SemanticType* cloned = clone_type(replacement)
+            cloned.pointer_depth += ref.PointerDepth
+            cloned.is_const = cloned.is_const || ref.Const
+            for int64 dimension_index = 0; dimension_index < ref.Arrays.length; dimension_index += 1 {
+                ArrayDimension dimension = ref.Arrays[dimension_index]
+                string size = ""
+                LiteralExpr* literal = bootstrap_as_literal_expr(dimension.Size)
+                if literal != null {
+                    size = literal.Raw
+                }
+                SemanticArrayDimension resolved_dimension
+                resolved_dimension.dynamic = dimension.Dynamic
+                resolved_dimension.size = size
+                cloned.array_dimensions = append_dimension_array(cloned.array_dimensions, resolved_dimension)
+            }
+            if cloned.array_dimensions.length > 0 {
+                cloned.kind = "array"
+            } else if cloned.pointer_depth > 0 {
+                cloned.kind = "pointer"
+            }
+            return cloned
+        }
+    }
+
+    if ref.Callable != null {
+        SemanticCallable* callable = new SemanticCallable()
+        callable.return_type = resolve_type_ref(analyzer, namespace, ref.Callable.Return, substitutions, path)
+        callable.variadic = ref.Callable.Variadic
+        for int64 parameter_index = 0; parameter_index < ref.Callable.Parameters.length; parameter_index += 1 {
+            TypeRef* parameter = ref.Callable.Parameters[parameter_index]
+            callable.parameters = append_semantic_type(callable.parameters, resolve_type_ref(analyzer, namespace, parameter, substitutions, path))
+            if !(ref.Callable.Variadic && parameter_index == ref.Callable.Parameters.length-1) {
+                callable.required_parameters += 1
+            }
+        }
+        if ref.Callable.Variadic && ref.Callable.Parameters.length > 0 {
+            TypeRef* last = ref.Callable.Parameters[ref.Callable.Parameters.length-1]
+            callable.heterogeneous_variadic = last != null && last.Name == "auto"
+        }
+        SemanticType* callable_type = new SemanticType()
+        callable_type.kind = "callable"
+        callable_type.callable = callable
+        callable_type.is_const = ref.Const
+        return callable_type
+    }
+
+    string kind = "unknown"
+    if ref.Name == "void" {
+        kind = "void"
+    } else if ref.Name == "bool" {
+        kind = "bool"
+    } else if ref.Name == "string" {
+        kind = "string"
+    } else if ref.Name == "Error" {
+        kind = "struct"
+    } else if ref.Name == "ErrorType" {
+        kind = "error_type"
+    } else if ref.Name == "char" {
+        kind = "char"
+    } else if ref.Name == "float32" || ref.Name == "float64" {
+        kind = "float"
+    } else if is_integer_type_name(ref.Name) {
+        kind = "integer"
+    }
+
+    Symbol* resolved_symbol = lookup_namespace_symbol(analyzer, namespace, ref.Name)
+    if resolved_symbol != null {
+        if resolved_symbol.type_info != null && resolved_symbol.type_info.kind == "enum" {
+            kind = "enum"
+        } else if resolved_symbol.kind == "struct" {
+            kind = "struct"
+        } else if resolved_symbol.kind == "protocol" {
+            kind = "protocol"
+        }
+    }
+
+    SemanticType* result = new SemanticType()
+    result.kind = kind
+    result.name = ref.Name
+    result.pointer_depth = ref.PointerDepth
+    result.is_const = ref.Const
+    for int64 argument_index = 0; argument_index < ref.GenericArgs.length; argument_index += 1 {
+        result.generic_args = append_semantic_type(result.generic_args, resolve_type_ref(analyzer, namespace, ref.GenericArgs[argument_index], substitutions, path))
+    }
+    for int64 dimension_index = 0; dimension_index < ref.Arrays.length; dimension_index += 1 {
+        ArrayDimension dimension = ref.Arrays[dimension_index]
+        string size = ""
+        LiteralExpr* literal = bootstrap_as_literal_expr(dimension.Size)
+        if literal != null {
+            size = literal.Raw
+        }
+        SemanticArrayDimension resolved_dimension
+        resolved_dimension.dynamic = dimension.Dynamic
+        resolved_dimension.size = size
+        result.array_dimensions = append_dimension_array(result.array_dimensions, resolved_dimension)
+    }
+    if result.array_dimensions.length > 0 {
+        result.kind = "array"
+    }
+    if result.pointer_depth > 0 {
+        result.kind = "pointer"
+    }
+    if result.generic_args.length > 0 {
+        record_specialization(analyzer, ref.Name, result.generic_args, ref.SourceSpan, path)
+        validate_hashable_generic(analyzer, namespace, result, node_from_type_ref(ref), path)
+    }
+    return result
+}
+
+// validate_hashable_generic enforces the V1.0.0 Map/Set key contract.
+// Generic templates whose key remains unresolved are checked at specialization.
+void validate_hashable_generic(SemanticAnalyzer* analyzer, Namespace* namespace, SemanticType* type_info, Node node, string path) { // translated Go receiver method
+    if type_info == null || type_info.generic_args.length == 0 {
+        return
+    }
+    SemanticType* key = null
+    if type_info.name == "Map" {
+        if type_info.generic_args.length >= 1 {
+            key = type_info.generic_args[0]
+        }
+    } else if type_info.name == "Set" {
+        key = type_info.generic_args[0]
+    } else {
+        return
+    }
+    if key == null || key.kind == "unknown" {
+        return
+    }
+    if !type_is_hashable(analyzer, namespace, key, Map<string, bool>()) {
+        add_error(analyzer, path, node, type_info.name+" key type '"+type_name(key)+"' is not hashable; provide a deterministic uint64 hash() implementation or use a hashable key type")
+    }
+}
+
+bool type_is_hashable(SemanticAnalyzer* analyzer, Namespace* namespace, SemanticType* type_info, Map<string, bool> visiting) { // translated Go receiver method
+    if type_info == null || type_info.kind == "unknown" {
+        return false
+    }
+    if type_info.pointer_depth > 0 || type_info.kind == "pointer" {
+        return true
+    }
+    if type_info.array_dimensions.length > 0 || type_info.kind == "array" || type_info.kind == "callable" || type_info.kind == "namespace" || type_info.kind == "protocol" || type_info.kind == "void" {
+        return false
+    }
+    if type_info.kind == "bool" || type_info.kind == "integer" || type_info.kind == "float" || type_info.kind == "string" || type_info.kind == "char" || type_info.kind == "enum" {
+        return true
+    }
+    if type_info.kind != "struct" {
+        return false
+    }
+    string key = type_name(type_info)
+    if visiting[key] {
+        return false
+    }
+    StructInfo* info = lookup_struct(analyzer, namespace, type_info.name)
+    if info == null {
+        return false
+    }
+    Map<string, SemanticType*> substitutions = build_substitutions(info.generic_parameters, type_info.generic_args)
+    Symbol* hash_method = info.methods["hash"]
+    if hash_method != null && hash_method.type_info != null && hash_method.type_info.callable != null {
+        SemanticCallable* callable = substitute_type(hash_method.type_info, substitutions).callable
+        if callable != null && callable.parameters.length == 0 && callable.return_type != null && callable.return_type.name == "uint64" {
+            return true
+        }
+    }
+    visiting[key] = true
+    string[] field_names = info.fields.keys()
+    for int64 field_index = 0; field_index < field_names.length; field_index += 1 {
+        Symbol* field = info.fields[field_names[field_index]]
+        SemanticType* field_type = substitute_type(field.type_info, substitutions)
+        if field_type == null {
+            visiting.remove(key)
+            return false
+        }
+        if field_type.pointer_depth > 0 || field_type.kind == "pointer" {
+            SemanticType* pointee = clone_type(field_type)
+            if pointee.pointer_depth > 0 {
+                pointee.pointer_depth -= 1
+            }
+            if pointee.pointer_depth == 0 && lookup_struct(analyzer, namespace, pointee.name) != null {
+                pointee.kind = "struct"
+            }
+            if !type_is_hashable(analyzer, namespace, pointee, visiting) {
+                visiting.remove(key)
+                return false
+            }
+            continue
+        }
+        if !type_is_hashable(analyzer, namespace, field_type, visiting) {
+            visiting.remove(key)
+            return false
+        }
+    }
+    visiting.remove(key)
+    return true
+}
+
+SemanticType* make_semantic_type_namespace(string namespace_name) {
+    SemanticType* value=make_semantic_type("namespace", "namespace"); value.namespace_name=namespace_name; return value
+}
+Map<string, integer_range>[] drop_last_range_map(Map<string, integer_range>[] values) {
+    if values.length>0 { values = array<Map<string, integer_range>>(values, values.length-1) }; return values
+}
+Namespace* find_namespace_by_name(Map<string, Namespace*> namespaces, string name) {
+    Namespace*[] values=namespaces.values(); int64 i=0
+    while i<values.length { if values[i]!=null && values[i].name==name { return values[i] }; i+=1 }; return null
+}
+integer_range make_integer_range(int64 minimum, int64 maximum) { integer_range r; r.minimum=minimum; r.maximum=maximum; return r }
+BootstrapIntegerRangeResult combine_integer_ranges(string op, integer_range left, integer_range right) {
+    if op=="+" { return range_result("",make_integer_range(left.minimum+right.minimum,left.maximum+right.maximum),true) }
+    if op=="-" { return range_result("",make_integer_range(left.minimum-right.maximum,left.maximum-right.minimum),true) }
+    if op=="*" {
+        int64 a=left.minimum*right.minimum; int64 b=left.minimum*right.maximum; int64 c=left.maximum*right.minimum; int64 d=left.maximum*right.maximum
+        int64 minimum=a; int64 maximum=a
+        if b<minimum {minimum=b}; if c<minimum {minimum=c}; if d<minimum {minimum=d}
+        if b>maximum {maximum=b}; if c>maximum {maximum=c}; if d>maximum {maximum=d}
+        return range_result("",make_integer_range(minimum,maximum),true)
+    }
+    return range_result("",empty_integer_range(),false)
+}
+BootstrapIntegerRangeResult compute_loop_integer_range(string name, int64 start, int64 limit, int64 step, string op) {
+    if step>0 && op=="<" { if start>=limit { return range_result("",empty_integer_range(),false) }; return range_result(name,make_integer_range(start,limit-1),true) }
+    if step>0 && op=="<=" { if start>limit { return range_result("",empty_integer_range(),false) }; return range_result(name,make_integer_range(start,limit),true) }
+    if step<0 && op==">" { if start<=limit { return range_result("",empty_integer_range(),false) }; return range_result(name,make_integer_range(limit+1,start),true) }
+    if step<0 && op==">=" { if start<limit { return range_result("",empty_integer_range(),false) }; return range_result(name,make_integer_range(limit,start),true) }
+    return range_result("",empty_integer_range(),false)
+}
+int64 digit_value(string ch) {
+    if ch=="0" {return 0}; if ch=="1" {return 1}; if ch=="2" {return 2}; if ch=="3" {return 3}; if ch=="4" {return 4}; if ch=="5" {return 5}; if ch=="6" {return 6}; if ch=="7" {return 7}; if ch=="8" {return 8}; if ch=="9" {return 9}
+    if ch=="a"||ch=="A" {return 10}; if ch=="b"||ch=="B" {return 11}; if ch=="c"||ch=="C" {return 12}; if ch=="d"||ch=="D" {return 13}; if ch=="e"||ch=="E" {return 14}; if ch=="f"||ch=="F" {return 15}; return -1
+}
+BootstrapIntegerResult parse_integer_literal(string raw) {
+    int64 base=10; int64 i=0; int64 n=bootstrap_string_length(raw)
+    if n>=2 && bootstrap_string_slice(raw,0,1)=="0" {
+        string p=bootstrap_string_slice(raw,1,1)
+        if p=="x"||p=="X" {base=16;i=2} else if p=="b"||p=="B" {base=2;i=2} else if p=="o"||p=="O" {base=8;i=2}
+    }
+    int64 value=0; bool any=false
+    while i<n { string ch=bootstrap_string_slice(raw,i,1); i+=1; if ch=="_" {continue}; int64 d=digit_value(ch); if d<0||d>=base {return integer_result(0,false)}; value=value*base+d; any=true }
+    return integer_result(value,any)
+}
+
+Symbol* lookup_namespace_symbol(SemanticAnalyzer* analyzer, Namespace* namespace, string name) {
+    return lookup_namespace_symbol_seen(analyzer, namespace, name, Map<Namespace*, bool>())
+}
+
+Symbol* lookup_namespace_symbol_seen(SemanticAnalyzer* analyzer, Namespace* namespace, string name, Map<Namespace*, bool> seen) {
+    if namespace == null || seen.contains_key(namespace) { return null }
+    seen[namespace] = true
+    Symbol* direct = namespace.symbols[name]
+    if direct != null { return direct }
+    Symbol* found = null
+    int64 i = 0
+    while i < namespace.open_imports.length {
+        Symbol* candidate = lookup_namespace_symbol_seen(analyzer, namespace.open_imports[i], name, seen)
+        if candidate != null {
+            if found != null && found != candidate {
+                if found.kind != candidate.kind || !types_compatible(found.type_info, candidate.type_info) { return null }
+            }
+            if found == null { found = candidate }
+        }
+        i += 1
+    }
+    return found
+}
+
+StructInfo* lookup_struct(SemanticAnalyzer* analyzer, Namespace* namespace, string name) {
+    return lookup_struct_seen(analyzer, namespace, name, Map<Namespace*, bool>())
+}
+
+StructInfo* lookup_struct_seen(SemanticAnalyzer* analyzer, Namespace* namespace, string name, Map<Namespace*, bool> seen) {
+    if namespace == null || seen.contains_key(namespace) { return null }
+    seen[namespace] = true
+    StructInfo* direct = namespace.structs[name]
+    if direct != null { return direct }
+    int64 i = 0
+    while i < namespace.open_imports.length {
+        StructInfo* candidate = lookup_struct_seen(analyzer, namespace.open_imports[i], name, seen)
+        if candidate != null { return candidate }
+        i += 1
+    }
+    return null
+}
+
+Scope* new_scope(SemanticAnalyzer* analyzer, int64 parent_id, string kind) { // translated Go receiver method
+    Scope* scope = new Scope()
+    scope.id = analyzer.scopes.length
+    scope.parent_id = parent_id
+    scope.kind = kind
+    scope.symbols = Map<string, Symbol*>()
+    analyzer.scopes = append_scope_array(analyzer.scopes, scope)
+    analyzer.integer_constants[scope.id] = Map<string, int64>()
+    return scope
+}
+
+Symbol* scope_lookup(SemanticAnalyzer* analyzer, Scope* scope, string name) { // translated Go receiver method
+    Scope* current = scope
+    while current != null {
+        Symbol* symbol = current.symbols[name]
+        if symbol != null {
+            return symbol
+        }
+        if current.parent_id < 0 {
+            return null
+        }
+        current = analyzer.scopes[current.parent_id]
+    }
+    return null
+}
+
+void declare_local(SemanticAnalyzer* analyzer, string path, Scope* scope, Node node, string name, string kind, SemanticType* type_info) { // translated Go receiver method
+    Symbol* existing = scope.symbols[name]
+    if existing != null {
+        if existing.kind != "field" && existing.kind != "method" {
+            add_error(analyzer, path, node, "duplicate declaration '"+name+"' in the same scope")
+            return
+        }
+    }
+    Symbol* symbol = new Symbol()
+    symbol.name = name
+    symbol.kind = kind
+    symbol.type_info = type_info
+    symbol.declaration = node
+    symbol.scope_id = scope.id
+    scope.symbols[name] = symbol
+}
+
+void analyze_namespace_bodies(SemanticAnalyzer* analyzer, Namespace* namespace) { // translated Go receiver method
+    if namespace == null || namespace.analyzed_bodies {
+        return
+    }
+    namespace.analyzed_bodies = true
+    string[] paths = analyzer.programs.keys()
+    for int64 path_index = 0; path_index < paths.length; path_index += 1 {
+        string path = paths[path_index]
+        if analyzer.path_namespaces[path] != namespace {
+            continue
+        }
+        analyze_program_bodies(analyzer, namespace, path, analyzer.programs[path])
+    }
+    string[] aliases = namespace.alias_imports.keys()
+    for int64 alias_index = 0; alias_index < aliases.length; alias_index += 1 {
+        Namespace* imported = namespace.alias_imports[aliases[alias_index]]
+        if imported.import_kind == "file" {
+            analyze_namespace_bodies(analyzer, imported)
+        }
+    }
+    for int64 import_index = 0; import_index < namespace.open_imports.length; import_index += 1 {
+        Namespace* imported = namespace.open_imports[import_index]
+        if imported.import_kind == "file" {
+            analyze_namespace_bodies(analyzer, imported)
+        }
+    }
+}
+
+void analyze_program_bodies(SemanticAnalyzer* analyzer, Namespace* namespace, string path, Program* program) { // translated Go receiver method
+    Scope* global_scope = new_scope(analyzer, -1, "namespace")
+    string[] symbol_names = namespace.symbols.keys()
+    for int64 symbol_index = 0; symbol_index < symbol_names.length; symbol_index += 1 {
+        string name = symbol_names[symbol_index]
+        global_scope.symbols[name] = namespace.symbols[name]
+    }
+    string[] aliases = namespace.alias_imports.keys()
+    for int64 alias_index = 0; alias_index < aliases.length; alias_index += 1 {
+        string alias = aliases[alias_index]
+        Namespace* imported = namespace.alias_imports[alias]
+        Symbol* symbol = new Symbol()
+        symbol.name = alias
+        symbol.kind = "namespace"
+        symbol.type_info = make_semantic_type_namespace(imported.name)
+        symbol.namespace_name = imported.name
+        global_scope.symbols[alias] = symbol
+    }
+
+    for int64 declaration_index = 0; declaration_index < program.Declarations.length; declaration_index += 1 {
+        Decl declaration = program.Declarations[declaration_index]
+
+        GlobalVarDecl* global_decl = bootstrap_as_global_var_decl(declaration)
+        if global_decl != null {
+            if expr_present(global_decl.Initializer) {
+                bool is_auto = global_decl.Type != null && global_decl.Type.Name == "auto" && global_decl.Type.Callable == null
+                SemanticType* target = resolve_type_ref(analyzer, namespace, global_decl.Type, Map<string, SemanticType*>(), path)
+                SemanticType* expected_type = target
+                if is_auto {
+                    expected_type = null
+                }
+                SemanticType* value = infer_expr(analyzer, namespace, path, global_scope, global_decl.Initializer, expected_type)
+                if is_auto {
+                    target = clone_type(value)
+                    Symbol* symbol = namespace.symbols[global_decl.Name]
+                    if symbol != null {
+                        symbol.type_info = target
+                    }
+                } else if !types_compatible(target, value) {
+                    add_error(analyzer, path, node_from_global_var_decl(global_decl), "cannot initialize '"+global_decl.Name+"' of type "+type_name(target)+" with "+type_name(value))
+                }
+            } else if global_decl.Type != null && global_decl.Type.Name == "auto" {
+                add_error(analyzer, path, node_from_global_var_decl(global_decl), "auto declaration '"+global_decl.Name+"' requires an initializer")
+            }
+            continue
+        }
+
+        FunctionDecl* function_decl = bootstrap_as_function_decl(declaration)
+        if function_decl != null {
+            if function_decl.Body != null {
+                analyze_function(analyzer, namespace, path, global_scope, function_decl, function_decl.Receiver)
+            }
+            continue
+        }
+
+        StructDecl* struct_decl = bootstrap_as_struct_decl(declaration)
+        if struct_decl != null {
+            for int64 member_index = 0; member_index < struct_decl.Members.length; member_index += 1 {
+                analyze_struct_member(analyzer, namespace, path, global_scope, struct_decl.Name, struct_decl.Members[member_index])
+            }
+            continue
+        }
+
+        MethodBlockDecl* method_block = bootstrap_as_method_block_decl(declaration)
+        if method_block != null {
+            for int64 member_index = 0; member_index < method_block.Members.length; member_index += 1 {
+                analyze_struct_member(analyzer, namespace, path, global_scope, method_block.Receiver.Name, method_block.Members[member_index])
+            }
+        }
+    }
+}
+
+SemanticType* parameter_type(SemanticAnalyzer* analyzer, Namespace* namespace, string path, Parameter* parameter) { // translated Go receiver method
+    SemanticType* resolved = resolve_type_ref(analyzer, namespace, parameter.Type, Map<string, SemanticType*>(), path)
+    if parameter != null && parameter.Variadic && parameter.Type != null {
+        if parameter.Type.Name == "auto" {
+            SemanticType* variadic_type = new SemanticType()
+            variadic_type.kind = "array"
+            variadic_type.name = "auto_variadic"
+            SemanticArrayDimension dynamic_dimension
+            dynamic_dimension.dynamic = true
+            variadic_type.array_dimensions = append_dimension_array(variadic_type.array_dimensions, dynamic_dimension)
+            return variadic_type
+        }
+        SemanticType* element = clone_type(resolved)
+        SemanticType* array = clone_type(element)
+        array.kind = "array"
+        array.name = element.name
+        SemanticArrayDimension dynamic_dimension
+        dynamic_dimension.dynamic = true
+        array.array_dimensions = append_dimension_array(array.array_dimensions, dynamic_dimension)
+        return array
+    }
+    return resolved
+}
+
+void analyze_struct_member(SemanticAnalyzer* analyzer, Namespace* namespace, string path, Scope* parent, string receiver, StructMember member) { // translated Go receiver method
+    string previous_receiver = analyzer.current_receiver
+    analyzer.current_receiver = receiver
+
+    MethodDecl* method = bootstrap_as_method_decl(member)
+    if method != null {
+        if method.Function.Body != null {
+            // Analyze inline struct methods in the receiver scope directly.
+            // Forwarding the receiver name through another string parameter
+            // destabilizes the bootstrap value transport before Stage-1 owns
+            // that parameter independently.
+            Scope* scope = new_scope(analyzer, parent.id, "function")
+            seed_receiver_scope(analyzer, namespace, scope, receiver)
+            for int64 parameter_index = 0; parameter_index < method.Function.Parameters.length; parameter_index += 1 {
+                Parameter* parameter = method.Function.Parameters[parameter_index]
+                declare_local(analyzer, path, scope, node_from_parameter(parameter), parameter.Name, "parameter", parameter_type(analyzer, namespace, path, parameter))
+            }
+            SemanticType* return_type = resolve_type_ref(analyzer, namespace, method.Function.ReturnType, Map<string, SemanticType*>(), path)
+            analyze_block(analyzer, namespace, path, scope, method.Function.Body, return_type)
+        }
+        analyzer.current_receiver = previous_receiver
+        return
+    }
+
+    ConstructorMember* ctor_member = bootstrap_as_constructor_member(member)
+    if ctor_member != null {
+        Scope* scope = new_scope(analyzer, parent.id, "constructor")
+        seed_receiver_scope(analyzer, namespace, scope, receiver)
+        for int64 parameter_index = 0; parameter_index < ctor_member.Constructor.Parameters.length; parameter_index += 1 {
+            Parameter* parameter = ctor_member.Constructor.Parameters[parameter_index]
+            declare_local(analyzer, path, scope, node_from_parameter(parameter), parameter.Name, "parameter", parameter_type(analyzer, namespace, path, parameter))
+        }
+        analyze_block(analyzer, namespace, path, scope, ctor_member.Constructor.Body, make_semantic_type("void", "void"))
+        analyzer.current_receiver = previous_receiver
+        return
+    }
+
+    DestructorMember* dtor_member = bootstrap_as_destructor_member(member)
+    if dtor_member != null {
+        Scope* scope = new_scope(analyzer, parent.id, "destructor")
+        seed_receiver_scope(analyzer, namespace, scope, receiver)
+        analyze_block(analyzer, namespace, path, scope, dtor_member.Destructor.Body, make_semantic_type("void", "void"))
+    }
+    analyzer.current_receiver = previous_receiver
+}
+
+void seed_receiver_scope(SemanticAnalyzer* analyzer, Namespace* namespace, Scope* scope, string receiver) { // translated Go receiver method
+    SemanticType* receiver_type = make_semantic_type("struct", receiver)
+    Symbol* this_symbol = new Symbol()
+    this_symbol.name = "this"
+    this_symbol.kind = "parameter"
+    this_symbol.type_info = receiver_type
+    this_symbol.scope_id = scope.id
+    scope.symbols["this"] = this_symbol
+
+    StructInfo* info = lookup_struct(analyzer, namespace, receiver)
+    if info != null {
+        string[] field_names = info.fields.keys()
+        for int64 field_index = 0; field_index < field_names.length; field_index += 1 {
+            string field_name = field_names[field_index]
+            Symbol* field = info.fields[field_name]
+            Symbol* symbol = new Symbol()
+            symbol.name = field_name
+            symbol.kind = "field"
+            symbol.type_info = field.type_info
+            symbol.declaration = field.declaration
+            symbol.scope_id = scope.id
+            scope.symbols[field_name] = symbol
+        }
+        string[] method_names = info.methods.keys()
+        for int64 method_index = 0; method_index < method_names.length; method_index += 1 {
+            string method_name = method_names[method_index]
+            Symbol* method = info.methods[method_name]
+            Symbol* symbol = new Symbol()
+            symbol.name = method_name
+            symbol.kind = "method"
+            symbol.type_info = method.type_info
+            symbol.declaration = method.declaration
+            symbol.scope_id = scope.id
+            scope.symbols[method_name] = symbol
+        }
+    }
+}
+
+void analyze_function(SemanticAnalyzer* analyzer, Namespace* namespace, string path, Scope* parent, FunctionDecl* function, string receiver) { // translated Go receiver method
+    string previous_receiver = analyzer.current_receiver
+    analyzer.current_receiver = receiver
+    Scope* scope = new_scope(analyzer, parent.id, "function")
+    if receiver != "" {
+        seed_receiver_scope(analyzer, namespace, scope, receiver)
+    }
+    for int64 parameter_index = 0; parameter_index < function.Parameters.length; parameter_index += 1 {
+        Parameter* parameter = function.Parameters[parameter_index]
+        declare_local(analyzer, path, scope, node_from_parameter(parameter), parameter.Name, "parameter", parameter_type(analyzer, namespace, path, parameter))
+    }
+    SemanticType* return_type = resolve_type_ref(analyzer, namespace, function.ReturnType, Map<string, SemanticType*>(), path)
+    analyze_block(analyzer, namespace, path, scope, function.Body, return_type)
+    analyzer.current_receiver = previous_receiver
+}
+
+void analyze_block(SemanticAnalyzer* analyzer, Namespace* namespace, string path, Scope* parent, BlockStmt* block, SemanticType* return_type) { // translated Go receiver method
+    if block == null {
+        return
+    }
+    Scope* scope = new_scope(analyzer, parent.id, "block")
+    for int64 statement_index = 0; statement_index < block.Statements.length; statement_index += 1 {
+        analyze_stmt(analyzer, namespace, path, scope, block.Statements[statement_index], return_type)
+    }
+}
+
+void analyze_stmt(SemanticAnalyzer* analyzer, Namespace* namespace, string path, Scope* scope, Stmt statement, SemanticType* return_type) { // translated Go receiver method
+    VarDeclStmt* var_decl = bootstrap_as_var_decl_stmt(statement)
+    if var_decl != null {
+        SemanticType* target = resolve_type_ref(analyzer, namespace, var_decl.Type, Map<string, SemanticType*>(), path)
+        bool is_auto = var_decl.Type != null && var_decl.Type.Name == "auto" && var_decl.Type.Callable == null
+        if expr_present(var_decl.Initializer) {
+            SemanticType* expected_type = target
+            if is_auto {
+                expected_type = null
+            }
+            SemanticType* value = infer_expr(analyzer, namespace, path, scope, var_decl.Initializer, expected_type)
+            if is_auto {
+                target = clone_type(value)
+            } else if !types_compatible(target, value) {
+                add_error(analyzer, path, node_from_var_decl_stmt(var_decl), "cannot initialize '"+var_decl.Name+"' of type "+type_name(target)+" with "+type_name(value))
+            }
+        } else if is_auto {
+            add_error(analyzer, path, node_from_var_decl_stmt(var_decl), "auto declaration '"+var_decl.Name+"' requires an initializer")
+        }
+        declare_local(analyzer, path, scope, node_from_var_decl_stmt(var_decl), var_decl.Name, "local", target)
+        BootstrapIntegerResult integer_value = static_integer_value(var_decl.Initializer)
+        if integer_value.ok {
+            analyzer.integer_constants[scope.id][var_decl.Name] = integer_value.value
+        } else {
+            Map<string, int64> constants = analyzer.integer_constants[scope.id]
+            constants.remove(var_decl.Name)
+            analyzer.integer_constants[scope.id] = constants
+        }
+        return
+    }
+
+    ReturnStmt* return_stmt = bootstrap_as_return_stmt(statement)
+    if return_stmt != null {
+        SemanticType* value = make_semantic_type("void", "void")
+        if expr_present(return_stmt.Value) {
+            value = infer_expr(analyzer, namespace, path, scope, return_stmt.Value, return_type)
+        }
+        if !types_compatible(return_type, value) {
+            add_error(analyzer, path, node_from_return_stmt(return_stmt), "return type mismatch: expected "+type_name(return_type)+", got "+type_name(value))
+        }
+        return
+    }
+
+    ExprStmt* expr_stmt = bootstrap_as_expr_stmt(statement)
+    if expr_stmt != null {
+        infer_expr(analyzer, namespace, path, scope, expr_stmt.Expression, null)
+        return
+    }
+
+    IfStmt* if_stmt = bootstrap_as_if_stmt(statement)
+    if if_stmt != null {
+        infer_expr(analyzer, namespace, path, scope, if_stmt.Condition, make_semantic_type("bool", "bool"))
+        analyze_nested_stmt(analyzer, namespace, path, scope, if_stmt.Then, return_type)
+        if stmt_present(if_stmt.Else) {
+            analyze_nested_stmt(analyzer, namespace, path, scope, if_stmt.Else, return_type)
+        }
+        return
+    }
+
+    SwitchStmt* switch_stmt = bootstrap_as_switch_stmt(statement)
+    if switch_stmt != null {
+        analyzer.breakable_depth += 1
+        SemanticType* switch_type = infer_expr(analyzer, namespace, path, scope, switch_stmt.Value, null)
+        for int64 case_index = 0; case_index < switch_stmt.Cases.length; case_index += 1 {
+            SwitchCase* switch_case = switch_stmt.Cases[case_index]
+            if expr_present(switch_case.Value) {
+                SemanticType* case_type = infer_expr(analyzer, namespace, path, scope, switch_case.Value, switch_type)
+                if !types_compatible(switch_type, case_type) {
+                    add_error(analyzer, path, node_from_switch_case(switch_case), "switch case type does not match switch expression")
+                }
+            }
+            Scope* case_scope = new_scope(analyzer, scope.id, "switch_case")
+            for int64 case_statement_index = 0; case_statement_index < switch_case.Statements.length; case_statement_index += 1 {
+                analyze_stmt(analyzer, namespace, path, case_scope, switch_case.Statements[case_statement_index], return_type)
+            }
+        }
+        analyzer.breakable_depth -= 1
+        return
+    }
+
+    WhileStmt* while_stmt = bootstrap_as_while_stmt(statement)
+    if while_stmt != null {
+        infer_expr(analyzer, namespace, path, scope, while_stmt.Condition, make_semantic_type("bool", "bool"))
+        analyzer.breakable_depth += 1
+        analyzer.loop_depth += 1
+        BootstrapIntegerRangeResult range_result = derive_while_integer_range(analyzer, scope, while_stmt)
+        if range_result.ok {
+            Map<string, integer_range> range_map = Map<string, integer_range>()
+            range_map[range_result.name] = range_result.bounds
+            analyzer.integer_ranges = append_range_map_array(analyzer.integer_ranges, range_map)
+            analyze_nested_stmt(analyzer, namespace, path, scope, while_stmt.Body, return_type)
+            analyzer.integer_ranges = drop_last_range_map(analyzer.integer_ranges)
+            invalidate_integer_constant(analyzer, scope, range_result.name)
+        } else {
+            analyze_nested_stmt(analyzer, namespace, path, scope, while_stmt.Body, return_type)
+        }
+        analyzer.loop_depth -= 1
+        analyzer.breakable_depth -= 1
+        return
+    }
+
+    ForStmt* for_stmt = bootstrap_as_for_stmt(statement)
+    if for_stmt != null {
+        analyzer.breakable_depth += 1
+        analyzer.loop_depth += 1
+        Scope* loop_scope = new_scope(analyzer, scope.id, "for")
+        if stmt_present(for_stmt.Init) {
+            analyze_stmt(analyzer, namespace, path, loop_scope, for_stmt.Init, return_type)
+        }
+        if expr_present(for_stmt.Condition) {
+            infer_expr(analyzer, namespace, path, loop_scope, for_stmt.Condition, null)
+        }
+        BootstrapIntegerRangeResult range_result = derive_for_integer_range(analyzer, loop_scope, for_stmt)
+        if expr_present(for_stmt.Post) {
+            infer_expr(analyzer, namespace, path, loop_scope, for_stmt.Post, null)
+        }
+        if range_result.ok {
+            Map<string, integer_range> range_map = Map<string, integer_range>()
+            range_map[range_result.name] = range_result.bounds
+            analyzer.integer_ranges = append_range_map_array(analyzer.integer_ranges, range_map)
+            analyze_nested_stmt(analyzer, namespace, path, loop_scope, for_stmt.Body, return_type)
+            analyzer.integer_ranges = drop_last_range_map(analyzer.integer_ranges)
+        } else {
+            analyze_nested_stmt(analyzer, namespace, path, loop_scope, for_stmt.Body, return_type)
+        }
+        analyzer.loop_depth -= 1
+        analyzer.breakable_depth -= 1
+        return
+    }
+
+    BreakStmt* break_stmt = bootstrap_as_break_stmt(statement)
+    if break_stmt != null {
+        if analyzer.breakable_depth == 0 {
+            add_error(analyzer, path, node_from_break_stmt(break_stmt), "break is only valid inside a loop or switch")
+        }
+        return
+    }
+
+    ContinueStmt* continue_stmt = bootstrap_as_continue_stmt(statement)
+    if continue_stmt != null {
+        if analyzer.loop_depth == 0 {
+            add_error(analyzer, path, node_from_continue_stmt(continue_stmt), "continue is only valid inside a loop")
+        }
+        return
+    }
+
+    BlockStmt* block_stmt = bootstrap_as_block_stmt(statement)
+    if block_stmt != null {
+        analyze_block(analyzer, namespace, path, scope, block_stmt, return_type)
+    }
+}
+
+void analyze_nested_stmt(SemanticAnalyzer* analyzer, Namespace* namespace, string path, Scope* scope, Stmt statement, SemanticType* return_type) { // translated Go receiver method
+    BlockStmt* block = bootstrap_as_block_stmt(statement)
+    if block != null {
+        analyze_block(analyzer, namespace, path, scope, block, return_type)
+    } else {
+        analyze_stmt(analyzer, namespace, path, scope, statement, return_type)
+    }
+}
+
+SemanticType* infer_expr(SemanticAnalyzer* analyzer, Namespace* namespace, string path, Scope* scope, Expr expression, SemanticType* expected) { // translated Go receiver method
+    if !expr_present(expression) {
+        return make_semantic_type("unknown", "")
+    }
+    SemanticType* result = make_semantic_type("unknown", "")
+
+    IdentifierExpr* identifier = bootstrap_as_identifier_expr(expression)
+    if identifier != null {
+        Symbol* symbol = scope_lookup(analyzer, scope, identifier.Name)
+        if symbol == null {
+            symbol = lookup_namespace_symbol(analyzer, namespace, identifier.Name)
+        }
+        if symbol != null {
+            result = symbol.type_info
+        } else if analyzer.error_type_ids.contains_key("builtin::"+identifier.Name) {
+            result = make_semantic_type("error_type", "ErrorType")
+        } else {
+            add_error(analyzer, path, node_from_identifier_expr(identifier), "unknown identifier '"+identifier.Name+"'")
+        }
+        analyzer.expression_types[expression] = result
+        return result
+    }
+
+    LiteralExpr* literal = bootstrap_as_literal_expr(expression)
+    if literal != null {
+        if literal.Kind == "integer" {
+            result = make_semantic_literal_type("integer", "int64")
+        } else if literal.Kind == "float" {
+            result = make_semantic_literal_type("float", "float64")
+        } else if literal.Kind == "string" || literal.Kind == "interpolated_string" {
+            result = make_semantic_type("string", "string")
+        } else if literal.Kind == "character" {
+            result = make_semantic_type("char", "char")
+        } else if literal.Kind == "bool" {
+            result = make_semantic_type("bool", "bool")
+        } else if literal.Kind == "null" {
+            result = make_semantic_type("null", "null")
+        }
+        analyzer.expression_types[expression] = result
+        return result
+    }
+
+    UnaryExpr* unary = bootstrap_as_unary_expr(expression)
+    if unary != null {
+        SemanticType* operand = infer_expr(analyzer, namespace, path, scope, unary.Operand, expected)
+        if unary.Operator == "++" || unary.Operator == "--" {
+            if !is_assignable_expression(unary.Operand) {
+                add_error(analyzer, path, node_from_unary_expr(unary), unary.Operator+" requires an assignable target")
+            }
+            if expression_is_const_target(analyzer, unary.Operand) {
+                add_error(analyzer, path, node_from_unary_expr(unary), "cannot modify a const value")
+            }
+            if !is_numeric_type(operand) {
+                add_error(analyzer, path, node_from_unary_expr(unary), unary.Operator+" requires a numeric target")
+            }
+            IdentifierExpr* operand_identifier = bootstrap_as_identifier_expr(unary.Operand)
+            if operand_identifier != null {
+                invalidate_integer_constant(analyzer, scope, operand_identifier.Name)
+            }
+        }
+        result = clone_type(operand)
+        if result == null {
+            result = make_semantic_type("unknown", "")
+        }
+        if unary.Operator == "&" {
+            result.pointer_depth += 1
+            result.kind = "pointer"
+        } else if unary.Operator == "*" {
+            if result.pointer_depth > 0 {
+                result.pointer_depth -= 1
+            }
+            if result.pointer_depth == 0 {
+                result.kind = named_type_kind(result.name)
+            }
+        }
+        analyzer.expression_types[expression] = result
+        return result
+    }
+
+    BinaryExpr* binary = bootstrap_as_binary_expr(expression)
+    if binary != null {
+        SemanticType* left = infer_expr(analyzer, namespace, path, scope, binary.Left, null)
+        SemanticType* right = infer_expr(analyzer, namespace, path, scope, binary.Right, left)
+        if comparison_or_boolean_operator(binary.Operator) {
+            result = make_semantic_type("bool", "bool")
+        } else if is_numeric_type(left) && is_numeric_type(right) {
+            if left.untyped_literal {
+                result = right
+            } else {
+                result = left
+            }
+        } else if binary.Operator == "+" && left.name == "string" && right.name == "string" {
+            result = left
+        } else {
+            result = left
+        }
+        analyzer.expression_types[expression] = result
+        return result
+    }
+
+    AssignExpr* assignment = bootstrap_as_assign_expr(expression)
+    if assignment != null {
+        SemanticType* target = infer_expr(analyzer, namespace, path, scope, assignment.Target, null)
+        SemanticType* value = infer_expr(analyzer, namespace, path, scope, assignment.Value, target)
+        if !is_assignable_expression(assignment.Target) {
+            add_error(analyzer, path, node_from_expr(assignment.Target), "assignment target is not assignable")
+        }
+        if expression_is_const_target(analyzer, assignment.Target) {
+            add_error(analyzer, path, node_from_expr(assignment.Target), "cannot assign through a const value")
+        }
+        IdentifierExpr* target_identifier = bootstrap_as_identifier_expr(assignment.Target)
+        if target_identifier != null {
+            invalidate_integer_constant(analyzer, scope, target_identifier.Name)
+        }
+        if !types_compatible(target, value) {
+            add_error(analyzer, path, node_from_assign_expr(assignment), "assignment type mismatch: "+type_name(target)+" <- "+type_name(value))
+        }
+        result = target
+        analyzer.expression_types[expression] = result
+        return result
+    }
+
+    MemberExpr* member = bootstrap_as_member_expr(expression)
+    if member != null {
+        SemanticType* object = infer_expr(analyzer, namespace, path, scope, member.Object, null)
+        if object.kind == "namespace" {
+            Namespace* candidate = find_namespace_by_name(analyzer.namespaces, object.namespace_name)
+            if candidate != null {
+                Symbol* symbol = candidate.symbols[member.Name]
+                if symbol != null {
+                    result = symbol.type_info
+                }
+            }
+        } else if object.name == "Error" {
+            if member.Name == "error" {
+                result = make_semantic_type("bool", "bool")
+            } else if member.Name == "error_type" {
+                result = make_semantic_type("error_type", "ErrorType")
+            } else if member.Name == "error_message" {
+                result = make_semantic_type("string", "string")
+            } else {
+                add_error(analyzer, path, node_from_member_expr(member), "Error has no member '"+member.Name+"'")
+            }
+        } else if object.name == "string" && member.Name == "length" {
+            result = make_semantic_type("integer", "int64")
+        } else if semantic_is_array_type(object) && member.Name == "length" {
+            result = make_semantic_type("integer", "int64")
+        } else if semantic_is_array_type(object) {
+            add_error(analyzer, path, node_from_member_expr(member), "raw arrays expose only .length")
+            result = make_semantic_type("unknown", "")
+        } else {
+            StructInfo* info = lookup_struct(analyzer, namespace, object.name)
+            if info != null {
+                Map<string, SemanticType*> substitutions = build_substitutions(info.generic_parameters, object.generic_args)
+                Symbol* field = info.fields[member.Name]
+                Symbol* method = info.methods[member.Name]
+                if field != null {
+                    if symbol_is_private(analyzer, field) && analyzer.current_receiver != info.name {
+                        add_error(analyzer, path, node_from_member_expr(member), "private field '"+member.Name+"' is only accessible from struct '"+info.name+"'")
+                    }
+                    result = substitute_type(field.type_info, substitutions)
+                } else if method != null {
+                    if symbol_is_private(analyzer, method) && analyzer.current_receiver != info.name {
+                        add_error(analyzer, path, node_from_member_expr(member), "private method '"+member.Name+"' is only accessible from struct '"+info.name+"'")
+                    }
+                    result = substitute_type(method.type_info, substitutions)
+                }
+            }
+        }
+        analyzer.expression_types[expression] = result
+        return result
+    }
+
+    CallExpr* call = bootstrap_as_call_expr(expression)
+    if call != null {
+        IdentifierExpr* callee_identifier = bootstrap_as_identifier_expr(call.Callee)
+        if callee_identifier != null && callee_identifier.Name == "catch" {
+            result = infer_catch_call(analyzer, namespace, path, scope, call)
+        } else if callee_identifier != null && callee_identifier.Name == "raise" {
+            result = infer_raise_call(analyzer, namespace, path, scope, call)
+        } else if callee_identifier != null && callee_identifier.Name == "free" {
+            result = infer_free_call(analyzer, namespace, path, scope, call)
+        } else {
+            result = infer_regular_call(analyzer, namespace, path, scope, call, expected)
+        }
+        analyzer.expression_types[expression] = result
+        return result
+    }
+
+    GenericSpecializationExpr* specialization = bootstrap_as_generic_specialization_expr(expression)
+    if specialization != null {
+        SemanticType* target = infer_expr(analyzer, namespace, path, scope, specialization.Target, null)
+        SemanticType*[] args
+        for int64 argument_index = 0; argument_index < specialization.TypeArguments.length; argument_index += 1 {
+            args = append_semantic_type(args, resolve_type_ref(analyzer, namespace, specialization.TypeArguments[argument_index], Map<string, SemanticType*>(), path))
+        }
+        result = clone_type(target)
+        result.generic_args = args
+        string base = type_name(target)
+        IdentifierExpr* target_identifier = bootstrap_as_identifier_expr(specialization.Target)
+        if target_identifier != null {
+            base = target_identifier.Name
+        }
+        record_specialization(analyzer, base, args, specialization.SourceSpan, path)
+        analyzer.expression_types[expression] = result
+        return result
+    }
+
+    IndexExpr* index_expr = bootstrap_as_index_expr(expression)
+    if index_expr != null {
+        result = infer_index_expr(analyzer, namespace, path, scope, index_expr)
+        analyzer.expression_types[expression] = result
+        return result
+    }
+
+    ArrayExpr* array_expr = bootstrap_as_array_expr(expression)
+    if array_expr != null {
+        result = infer_array_expr(analyzer, namespace, path, scope, array_expr)
+        analyzer.expression_types[expression] = result
+        return result
+    }
+
+    KeyValueExpr* key_value = bootstrap_as_key_value_expr(expression)
+    if key_value != null {
+        infer_expr(analyzer, namespace, path, scope, key_value.Key, null)
+        infer_expr(analyzer, namespace, path, scope, key_value.Value, null)
+        analyzer.expression_types[expression] = result
+        return result
+    }
+
+    LambdaExpr* lambda = bootstrap_as_lambda_expr(expression)
+    if lambda != null {
+        result = infer_lambda_expr(analyzer, namespace, path, scope, lambda, expected)
+        analyzer.expression_types[expression] = result
+        return result
+    }
+
+    NewExpr* new_expr = bootstrap_as_new_expr(expression)
+    if new_expr != null {
+        result = clone_type(infer_expr(analyzer, namespace, path, scope, new_expr.Value, null))
+        if result == null {
+            result = make_semantic_type("unknown", "")
+        }
+        result.pointer_depth += 1
+        result.kind = "pointer"
+        analyzer.expression_types[expression] = result
+        return result
+    }
+
+    CastExpr* cast_expr = bootstrap_as_cast_expr(expression)
+    if cast_expr != null {
+        infer_expr(analyzer, namespace, path, scope, cast_expr.Value, null)
+        result = resolve_type_ref(analyzer, namespace, cast_expr.Type, Map<string, SemanticType*>(), path)
+    }
+
+    analyzer.expression_types[expression] = result
+    return result
+}
+
+
+SemanticType* infer_catch_call(SemanticAnalyzer* analyzer, Namespace* namespace, string path, Scope* scope, CallExpr* call) {
+    if call.Arguments.length != 1 {
+        add_error(analyzer, path, node_from_call_expr(call), `catch expects exactly one callable argument, got ${call.Arguments.length}`)
+    } else {
+        SemanticCallable* expected_signature = new SemanticCallable()
+        expected_signature.return_type = make_semantic_type("void", "void")
+        SemanticType* expected_callback = make_semantic_type("callable", "")
+        expected_callback.callable = expected_signature
+        analyzer.catch_depth += 1
+        SemanticType* actual = infer_expr(analyzer, namespace, path, scope, call.Arguments[0], expected_callback)
+        analyzer.catch_depth -= 1
+        if actual == null || actual.callable == null || actual.callable.parameters.length != 0 || actual.callable.return_type == null || actual.callable.return_type.kind != "void" {
+            add_error(analyzer, path, node_from_expr(call.Arguments[0]), "catch requires a void() callable")
+        }
+    }
+    return make_semantic_type("struct", "Error")
+}
+
+SemanticType* infer_raise_call(SemanticAnalyzer* analyzer, Namespace* namespace, string path, Scope* scope, CallExpr* call) {
+    if call.Arguments.length != 2 {
+        add_error(analyzer, path, node_from_call_expr(call), `raise expects ErrorType and string arguments, got ${call.Arguments.length}`)
+    } else {
+        SemanticType* error_type = infer_expr(analyzer, namespace, path, scope, call.Arguments[0], make_semantic_type("error_type", "ErrorType"))
+        SemanticType* message_type = infer_expr(analyzer, namespace, path, scope, call.Arguments[1], make_semantic_type("string", "string"))
+        if error_type == null || error_type.kind != "error_type" { add_error(analyzer, path, node_from_expr(call.Arguments[0]), "raise first argument must be a declared ErrorType") }
+        if message_type == null || message_type.kind != "string" { add_error(analyzer, path, node_from_expr(call.Arguments[1]), "raise second argument must be a string") }
+    }
+    return make_semantic_type("void", "void")
+}
+
+SemanticType* infer_free_call(SemanticAnalyzer* analyzer, Namespace* namespace, string path, Scope* scope, CallExpr* call) {
+    if call.Arguments.length != 1 {
+        add_error(analyzer, path, node_from_call_expr(call), `free expects exactly one argument, got ${call.Arguments.length}`)
+    } else {
+        SemanticType* argument = infer_expr(analyzer, namespace, path, scope, call.Arguments[0], null)
+        if argument != null && argument.kind != "null" && !(argument.pointer_depth > 0 || argument.kind == "pointer") { add_error(analyzer, path, node_from_expr(call.Arguments[0]), "free requires a raw pointer or null") }
+    }
+    return make_semantic_type("void", "void")
+}
+
+SemanticType* infer_regular_call(SemanticAnalyzer* analyzer, Namespace* namespace, string path, Scope* scope, CallExpr* call, SemanticType* expected) {
+    SemanticType* callee = infer_expr(analyzer, namespace, path, scope, call.Callee, null)
+    if callee != null && callee.callable != null {
+        SemanticCallable* callable = callee.callable
+        int64 fixed_count = callable.parameters.length
+        if callable.variadic && fixed_count > 0 { fixed_count -= 1 }
+        int64 index = 0
+        while index < call.Arguments.length {
+            SemanticType* expected_arg = null
+            bool heterogeneous = false
+            if index < fixed_count { expected_arg = callable.parameters[index] }
+            else if callable.variadic && callable.parameters.length > 0 { expected_arg = callable.parameters[callable.parameters.length-1]; heterogeneous = callable.heterogeneous_variadic }
+            else if index < callable.parameters.length { expected_arg = callable.parameters[index] }
+            SemanticType* actual = infer_expr(analyzer, namespace, path, scope, call.Arguments[index], expected_arg)
+            if expected_arg != null && !heterogeneous && !types_compatible(expected_arg, actual) {
+                if expected_arg.kind != "string" || !can_convert_to_string(analyzer, namespace, actual) { add_error(analyzer, path, node_from_expr(call.Arguments[index]), "argument type mismatch: expected "+type_name(expected_arg)+", got "+type_name(actual)) }
+            }
+            index += 1
+        }
+        if call.Arguments.length < callable.required_parameters { add_error(analyzer, path, node_from_call_expr(call), `call expects at least ${callable.required_parameters} argument(s), got ${call.Arguments.length}`) }
+        else if !callable.variadic && call.Arguments.length > callable.parameters.length { add_error(analyzer, path, node_from_call_expr(call), `call expects at most ${callable.parameters.length} argument(s), got ${call.Arguments.length}`) }
+        return callable.return_type
+    }
+    IdentifierExpr* identifier = bootstrap_as_identifier_expr(call.Callee)
+    if identifier != null {
+        StructInfo* info = lookup_struct(analyzer, namespace, identifier.Name)
+        if info != null {
+            if expected != null && expected.name == info.name { return clone_type(expected) }
+            return make_semantic_type("struct", info.name)
+        }
+    }
+    return make_semantic_type("unknown", "")
+}
+
+SemanticType* infer_index_expr(SemanticAnalyzer* analyzer, Namespace* namespace, string path, Scope* scope, IndexExpr* item) {
+    SemanticType* object = infer_expr(analyzer, namespace, path, scope, item.Object, null)
+    SemanticType* index_type = infer_expr(analyzer, namespace, path, scope, item.Index, null)
+    if object != null && object.array_dimensions.length > 0 {
+        SemanticArrayDimension dimension = object.array_dimensions[0]
+        string safety = "runtime"
+        if !dimension.dynamic && dimension.size != "" {
+            BootstrapIntegerResult length_result = parse_integer_literal(dimension.size)
+            if length_result.ok {
+                BootstrapIntegerRangeResult bounds = static_index_range(analyzer, scope, item.Index)
+                if bounds.ok {
+                    if bounds.bounds.minimum < 0 || bounds.bounds.maximum >= length_result.value {
+                        IdentifierExpr* identifier = bootstrap_as_identifier_expr(item.Index)
+                        if identifier != null { add_error(analyzer, path, node_from_index_expr(item), `iterating index value '${identifier.Name}' exceeds the length of known array; max array-length: ${length_result.value}, max-iterator invocation: ${bounds.bounds.maximum}, first invalid index: ${length_result.value}`) }
+                        else if bounds.bounds.minimum == bounds.bounds.maximum { add_error(analyzer, path, node_from_index_expr(item), `fixed array index ${bounds.bounds.maximum} is out of bounds; array length is ${length_result.value} and valid indices are 0..${length_result.value-1}`) }
+                        else { add_error(analyzer, path, node_from_index_expr(item), `index expression can exceed fixed array bounds; array length is ${length_result.value}, computed index range is ${bounds.bounds.minimum}..${bounds.bounds.maximum}`) }
+                    } else { safety = "proven_safe" }
+                }
+            }
+        }
+        analyzer.index_safety[item] = safety
+        SemanticType* result = clone_type(object)
+        int64 count = result.array_dimensions.length
+        int64 i = 1
+        SemanticArrayDimension[] remaining
+        if count > 1 { remaining = array<SemanticArrayDimension>(count-1); while i < count { remaining[i-1] = result.array_dimensions[i]; i += 1 } }
+        result.array_dimensions = remaining
+        if result.array_dimensions.length == 0 { result.kind = named_type_kind(result.name); if result.kind == "unknown" { result.kind = "struct" } }
+        return result
+    }
+    if object != null && object.generic_args.length > 0 && (object.name == "List" || object.name == "Set") { return object.generic_args[0] }
+    if object != null && object.array_dimensions.length==0 && object.pointer_depth==0 && object.kind!="pointer" && object.name == "Map" && object.generic_args.length == 2 {
+        if !types_compatible(object.generic_args[0], index_type) { add_error(analyzer, path, node_from_index_expr(item), "map index type mismatch") }
+        return clone_type(object.generic_args[1])
+    }
+    return make_semantic_type("unknown", "")
+}
+
+SemanticType* infer_array_expr(SemanticAnalyzer* analyzer, Namespace* namespace, string path, Scope* scope, ArrayExpr* item) {
+    SemanticType* result
+    if item.Elements.length == 0 {
+        result = make_semantic_type("array", "unknown")
+        SemanticArrayDimension[] dimensions = array<SemanticArrayDimension>(1); dimensions[0].dynamic = true; result.array_dimensions = dimensions
+        return result
+    }
+    SemanticType* element = infer_expr(analyzer, namespace, path, scope, item.Elements[0], null)
+    int64 i = 1
+    while i < item.Elements.length { infer_expr(analyzer, namespace, path, scope, item.Elements[i], element); i += 1 }
+    result = clone_type(element)
+    SemanticArrayDimension[] dimensions = array<SemanticArrayDimension>(result.array_dimensions.length+1); dimensions[0].dynamic=true; i=0; while i<result.array_dimensions.length { dimensions[i+1]=result.array_dimensions[i]; i+=1 }
+    result.array_dimensions=dimensions; result.kind="array"
+    return result
+}
+
+SemanticType* infer_lambda_expr(SemanticAnalyzer* analyzer, Namespace* namespace, string path, Scope* scope, LambdaExpr* item, SemanticType* expected) {
+    Scope* lambda_scope = new_scope(analyzer, scope.id, "lambda")
+    SemanticCallable* expected_callable = null
+    if expected != null { expected_callable = expected.callable }
+    if expected_callable != null && expected_callable.parameters.length != item.Parameters.length { add_error(analyzer, path, node_from_expr(wrap_lambda_expr(item)), "lambda parameter count does not match receiving callable type") }
+    SemanticType*[] parameters
+    int64 i=0
+    while i<item.Parameters.length {
+        Parameter* parameter=item.Parameters[i]; SemanticType* parameter_type_value=null
+        if parameter.Type != null { parameter_type_value=resolve_type_ref(analyzer, namespace, parameter.Type, Map<string, SemanticType*>(), path) }
+        else if expected_callable != null && i<expected_callable.parameters.length { parameter_type_value=clone_type(expected_callable.parameters[i]) }
+        else { parameter_type_value=make_semantic_type("unknown", ""); add_error(analyzer, path, node_from_parameter(parameter), "lambda parameter '"+parameter.Name+"' requires a type or a receiving callable signature") }
+        parameters=append_semantic_type(parameters,parameter_type_value); declare_local(analyzer,path,lambda_scope,node_from_parameter(parameter),parameter.Name,"parameter",parameter_type_value); i+=1
+    }
+    SemanticType* return_type=null
+    if item.ReturnType != null { return_type=resolve_type_ref(analyzer,namespace,item.ReturnType,Map<string, SemanticType*>(),path) }
+    else if expected_callable != null { return_type=clone_type(expected_callable.return_type) }
+    else { return_type=infer_lambda_return_type(analyzer,namespace,path,lambda_scope,item.Body) }
+    if return_type==null {return_type=make_semantic_type("void","void")}
+    analyze_block(analyzer,namespace,path,lambda_scope,item.Body,return_type)
+    SemanticCallable* callable=new SemanticCallable(); callable.return_type=return_type; callable.parameters=parameters; callable.required_parameters=parameters.length
+    SemanticType* result=make_semantic_type("callable",""); result.callable=callable
+    if expected_callable != null && !callables_compatible(expected_callable,result.callable) { add_error(analyzer,path,node_from_expr(wrap_lambda_expr(item)),"lambda type "+type_name(result)+" does not match receiving callable type "+type_name(expected)) }
+    return result
+}
+
+bool can_convert_to_string(SemanticAnalyzer* analyzer, Namespace* namespace, SemanticType* actual) { // translated Go receiver method
+    if actual == null {
+        return false
+    }
+    if actual.kind == "string" || actual.kind == "char" || actual.kind == "bool" || actual.kind == "integer" || actual.kind == "float" || actual.kind == "enum" || actual.kind == "error_type" || actual.kind == "pointer" || actual.kind == "null" {
+        return true
+    }
+    if actual.kind == "struct" {
+        StructInfo* info = lookup_struct(analyzer, namespace, actual.name)
+        if info != null {
+            Symbol* method = info.methods["to_string"]
+            if method != null && method.type_info != null && method.type_info.callable != null {
+                SemanticCallable* callable = method.type_info.callable
+                return callable.parameters.length == 0 && callable.return_type != null && callable.return_type.kind == "string"
+            }
+        }
+    }
+    return false
+}
+
+bool symbol_is_private(SemanticAnalyzer* analyzer, Symbol* symbol) { // translated Go receiver method
+    if symbol == null {
+        return false
+    }
+    FieldDecl* field = node_as_field_decl(symbol.declaration)
+    if field != null {
+        return field.Visibility == "private"
+    }
+    MethodDecl* method = node_as_method_decl(symbol.declaration)
+    if method != null {
+        return method.Function.Visibility == "private"
+    }
+    FunctionDecl* function = node_as_function_decl(symbol.declaration)
+    if function != null {
+        return function.Visibility == "private"
+    }
+    return false
+}
+
+// infer_lambda_return_type determines the callable return type when no receiving
+// signature or explicit lambda return type is available. The recursive walk is
+// represented as a bootstrap helper during syntax normalization; semantic repair
+// will bind it to the same statement traversal as the frozen Go implementation.
+SemanticType* merge_lambda_return(SemanticAnalyzer* analyzer, Namespace* namespace, string path, Scope* scope, Stmt statement, SemanticType* inferred) {
+    ReturnStmt* returned = bootstrap_as_return_stmt(statement)
+    if returned != null {
+        SemanticType* candidate = make_semantic_type("void", "void")
+        if expr_present(returned.Value) { candidate = infer_expr(analyzer, namespace, path, scope, returned.Value, null) }
+        if inferred == null { return clone_type(candidate) }
+        if !types_compatible(inferred, candidate) || !types_compatible(candidate, inferred) { add_error(analyzer, path, node_from_return_stmt(returned), "lambda return expressions do not resolve to a compatible type") }
+        return inferred
+    }
+    BlockStmt* nested_block = bootstrap_as_block_stmt(statement)
+    if nested_block != null {
+        int64 i=0; while i<nested_block.Statements.length { inferred=merge_lambda_return(analyzer,namespace,path,scope,nested_block.Statements[i],inferred); i+=1 }; return inferred
+    }
+    IfStmt* conditional = bootstrap_as_if_stmt(statement)
+    if conditional != null {
+        inferred=merge_lambda_return(analyzer,namespace,path,scope,conditional.Then,inferred)
+        if stmt_present(conditional.Else) { inferred=merge_lambda_return(analyzer,namespace,path,scope,conditional.Else,inferred) }
+        return inferred
+    }
+    SwitchStmt* switched = bootstrap_as_switch_stmt(statement)
+    if switched != null {
+        int64 c=0
+        while c<switched.Cases.length { int64 i=0; while i<switched.Cases[c].Statements.length { inferred=merge_lambda_return(analyzer,namespace,path,scope,switched.Cases[c].Statements[i],inferred); i+=1 }; c+=1 }
+    }
+    return inferred
+}
+
+SemanticType* infer_lambda_return_type(SemanticAnalyzer* analyzer, Namespace* namespace, string path, Scope* scope, BlockStmt* block) {
+    SemanticType* inferred = null
+    if block != null { int64 i=0; while i<block.Statements.length { inferred=merge_lambda_return(analyzer,namespace,path,scope,block.Statements[i],inferred); i+=1 } }
+    if inferred == null { return make_semantic_type("void", "void") }
+    return inferred
+}
+
+BootstrapIntegerResult lookup_integer_constant(SemanticAnalyzer* analyzer, Scope* scope, string name) { // translated Go receiver method
+    Scope* current = scope
+    while current != null {
+        Map<string, int64> values = analyzer.integer_constants[current.id]
+        if values != null && values.contains_key(name) {
+            return integer_result(values[name], true)
+        }
+        if current.parent_id < 0 {
+            break
+        }
+        current = analyzer.scopes[current.parent_id]
+    }
+    return integer_result(0, false)
+}
+
+void invalidate_integer_constant(SemanticAnalyzer* analyzer, Scope* scope, string name) { // translated Go receiver method
+    Scope* current = scope
+    while current != null {
+        Map<string, int64> constants = analyzer.integer_constants[current.id]
+        if constants.contains_key(name) {
+            constants.remove(name)
+            analyzer.integer_constants[current.id] = constants
+            return
+        }
+        if current.parent_id < 0 {
+            return
+        }
+        current = analyzer.scopes[current.parent_id]
+    }
+}
+
+BootstrapIntegerResult loop_step_for_identifier(Stmt statement, string name) {
+    BlockStmt* block = bootstrap_as_block_stmt(statement)
+    if block == null {
+        return integer_result(0, false)
+    }
+    for int64 statement_index = 0; statement_index < block.Statements.length; statement_index += 1 {
+        ExprStmt* expression_statement = bootstrap_as_expr_stmt(block.Statements[statement_index])
+        if expression_statement == null {
+            continue
+        }
+        UnaryExpr* unary = bootstrap_as_unary_expr(expression_statement.Expression)
+        if unary != null {
+            IdentifierExpr* identifier = bootstrap_as_identifier_expr(unary.Operand)
+            if identifier != null && identifier.Name == name {
+                if unary.Operator == "++" {
+                    return integer_result(1, true)
+                }
+                if unary.Operator == "--" {
+                    return integer_result(-1, true)
+                }
+            }
+        }
+        AssignExpr* assignment = bootstrap_as_assign_expr(expression_statement.Expression)
+        if assignment != null {
+            IdentifierExpr* identifier = bootstrap_as_identifier_expr(assignment.Target)
+            if identifier == null || identifier.Name != name {
+                continue
+            }
+            BootstrapIntegerResult value = static_integer_value(assignment.Value)
+            if !value.ok {
+                continue
+            }
+            if assignment.Operator == "+=" {
+                return value
+            }
+            if assignment.Operator == "-=" {
+                return integer_result(-value.value, true)
+            }
+        }
+    }
+    return integer_result(0, false)
+}
+
+BootstrapIntegerRangeResult derive_while_integer_range(SemanticAnalyzer* analyzer, Scope* scope, WhileStmt* loop) { // translated Go receiver method
+    if loop == null || !expr_present(loop.Condition) || !stmt_present(loop.Body) {
+        return range_result("", empty_integer_range(), false)
+    }
+    BinaryExpr* condition = bootstrap_as_binary_expr(loop.Condition)
+    if condition == null {
+        return range_result("", empty_integer_range(), false)
+    }
+    IdentifierExpr* identifier = bootstrap_as_identifier_expr(condition.Left)
+    if identifier == null {
+        return range_result("", empty_integer_range(), false)
+    }
+    BootstrapIntegerResult start_result = lookup_integer_constant(analyzer, scope, identifier.Name)
+    BootstrapIntegerResult limit_result = scoped_static_integer_value(analyzer, scope, condition.Right)
+    BootstrapIntegerResult step_result = loop_step_for_identifier(loop.Body, identifier.Name)
+    if !start_result.ok || !limit_result.ok || !step_result.ok || step_result.value == 0 {
+        return range_result("", empty_integer_range(), false)
+    }
+    return compute_loop_integer_range(identifier.Name, start_result.value, limit_result.value, step_result.value, condition.Operator)
+}
+
+BootstrapIntegerRangeResult derive_for_integer_range(SemanticAnalyzer* analyzer, Scope* scope, ForStmt* loop) { // translated Go receiver method
+    if loop == null || !stmt_present(loop.Init) || !expr_present(loop.Condition) || !expr_present(loop.Post) {
+        return range_result("", empty_integer_range(), false)
+    }
+    VarDeclStmt* init = bootstrap_as_var_decl_stmt(loop.Init)
+    BinaryExpr* condition = bootstrap_as_binary_expr(loop.Condition)
+    UnaryExpr* post = bootstrap_as_unary_expr(loop.Post)
+    if init == null || condition == null || post == null || !expr_present(init.Initializer) || post.Prefix {
+        return range_result("", empty_integer_range(), false)
+    }
+    IdentifierExpr* identifier = bootstrap_as_identifier_expr(condition.Left)
+    IdentifierExpr* post_identifier = bootstrap_as_identifier_expr(post.Operand)
+    if identifier == null || post_identifier == null || identifier.Name != init.Name || post_identifier.Name != init.Name {
+        return range_result("", empty_integer_range(), false)
+    }
+    BootstrapIntegerResult start_result = scoped_static_integer_value(analyzer, scope, init.Initializer)
+    BootstrapIntegerResult limit_result = scoped_static_integer_value(analyzer, scope, condition.Right)
+    if !start_result.ok || !limit_result.ok {
+        return range_result("", empty_integer_range(), false)
+    }
+    int64 step = 0
+    if post.Operator == "++" {
+        step = 1
+    } else if post.Operator == "--" {
+        step = -1
+    }
+    return compute_loop_integer_range(init.Name, start_result.value, limit_result.value, step, condition.Operator)
+}
+
+BootstrapIntegerRangeResult static_index_range(SemanticAnalyzer* analyzer, Scope* scope, Expr expression) { // translated Go receiver method
+    IdentifierExpr* identifier = bootstrap_as_identifier_expr(expression)
+    if identifier != null {
+        for int64 index = analyzer.integer_ranges.length-1; index >= 0; index -= 1 {
+            if analyzer.integer_ranges[index].contains_key(identifier.Name) {
+                return range_result(identifier.Name, analyzer.integer_ranges[index][identifier.Name], true)
+            }
+        }
+        BootstrapIntegerResult constant = lookup_integer_constant(analyzer, scope, identifier.Name)
+        if constant.ok {
+            return range_result("", make_integer_range(constant.value, constant.value), true)
+        }
+    }
+    BinaryExpr* binary = bootstrap_as_binary_expr(expression)
+    if binary != null {
+        BootstrapIntegerRangeResult left = static_index_range(analyzer, scope, binary.Left)
+        BootstrapIntegerRangeResult right = static_index_range(analyzer, scope, binary.Right)
+        if left.ok && right.ok {
+            return combine_integer_ranges(binary.Operator, left.bounds, right.bounds)
+        }
+    }
+    BootstrapIntegerResult value = scoped_static_integer_value(analyzer, scope, expression)
+    if value.ok {
+        return range_result("", make_integer_range(value.value, value.value), true)
+    }
+    return range_result("", empty_integer_range(), false)
+}
+
+BootstrapIntegerResult scoped_static_integer_value(SemanticAnalyzer* analyzer, Scope* scope, Expr expression) { // translated Go receiver method
+    BootstrapIntegerResult direct = static_integer_value(expression)
+    if direct.ok {
+        return direct
+    }
+    IdentifierExpr* identifier = bootstrap_as_identifier_expr(expression)
+    if identifier != null {
+        return lookup_integer_constant(analyzer, scope, identifier.Name)
+    }
+    return integer_result(0, false)
+}
+
+BootstrapIntegerResult static_integer_value(Expr expression) {
+    LiteralExpr* literal = bootstrap_as_literal_expr(expression)
+    if literal != null && literal.Kind == "integer" {
+        return parse_integer_literal(literal.Raw)
+    }
+    UnaryExpr* unary = bootstrap_as_unary_expr(expression)
+    if unary != null && unary.Operator == "-" {
+        BootstrapIntegerResult value = static_integer_value(unary.Operand)
+        if value.ok {
+            return integer_result(-value.value, true)
+        }
+    }
+    return integer_result(0, false)
+}
+
+bool is_assignable_expr(Expr expression) {
+    return bootstrap_as_identifier_expr(expression) != null || bootstrap_as_member_expr(expression) != null || bootstrap_as_index_expr(expression) != null
+}
+
+Map<string, SemanticType*> build_substitutions(string[] names, SemanticType*[] args) {
+    Map<string, SemanticType*> result = Map<string, SemanticType*>()
+    for int64 index = 0; index < names.length; index += 1 {
+        if index < args.length {
+            result[names[index]] = args[index]
+        }
+    }
+    return result
+}
+
+SemanticType* substitute_type(SemanticType* input, Map<string, SemanticType*> substitutions) {
+    if input == null {
+        return null
+    }
+    SemanticType* replacement = substitutions[input.name]
+    if replacement != null {
+        SemanticType* result = clone_type(replacement)
+        result.pointer_depth += input.pointer_depth
+        result.array_dimensions = append_dimension_arrays(result.array_dimensions, input.array_dimensions)
+        result.is_const = result.is_const || input.is_const
+        if result.array_dimensions.length > 0 {
+            result.kind = "array"
+        } else if result.pointer_depth > 0 {
+            result.kind = "pointer"
+        }
+        return result
+    }
+    SemanticType* result = clone_type(input)
+    for int64 index = 0; index < result.generic_args.length; index += 1 {
+        result.generic_args[index] = substitute_type(result.generic_args[index], substitutions)
+    }
+    if result.callable != null {
+        result.callable.return_type = substitute_type(result.callable.return_type, substitutions)
+        for int64 index = 0; index < result.callable.parameters.length; index += 1 {
+            result.callable.parameters[index] = substitute_type(result.callable.parameters[index], substitutions)
+        }
+    }
+    return result
+}
+
+// record_specialization stores deterministic metadata for a resolved generic type.
+void record_specialization(SemanticAnalyzer* analyzer, string base_name, SemanticType*[] args, Span source_span, string path) { // translated Go receiver method
+    string key = path + ":" + `${source_span.Start.Offset}` + ":" + base_name + ":" + specialization_name(base_name, args)
+    if analyzer.specialization_keys[key] {
+        return
+    }
+    analyzer.specialization_keys[key] = true
+    GenericSpecialization specialization
+    specialization.base_name = base_name
+    specialization.concrete_name = specialization_name(base_name, args)
+    specialization.type_arguments = args
+    specialization.source_span = source_span
+    specialization.source_path = path
+    analyzer.specializations = append_specialization_array(analyzer.specializations, specialization)
+}
+
+bool is_assignable_expression(Expr expression) {
+    if bootstrap_as_identifier_expr(expression) != null || bootstrap_as_member_expr(expression) != null || bootstrap_as_index_expr(expression) != null {
+        return true
+    }
+    UnaryExpr* unary = bootstrap_as_unary_expr(expression)
+    return unary != null && unary.Operator == "*"
+}
+
+bool expression_is_const_target(SemanticAnalyzer* analyzer, Expr expression) {
+    if !expr_present(expression) {
+        return false
+    }
+    SemanticType* resolved = analyzer.expression_types[expression]
+    if resolved != null && resolved.is_const {
+        return true
+    }
+    MemberExpr* member = bootstrap_as_member_expr(expression)
+    if member != null {
+        SemanticType* object = analyzer.expression_types[member.Object]
+        return object != null && object.is_const
+    }
+    IndexExpr* index_expr = bootstrap_as_index_expr(expression)
+    if index_expr != null {
+        SemanticType* object = analyzer.expression_types[index_expr.Object]
+        return object != null && object.is_const
+    }
+    UnaryExpr* unary = bootstrap_as_unary_expr(expression)
+    if unary != null && unary.Operator == "*" {
+        SemanticType* pointer = analyzer.expression_types[unary.Operand]
+        return pointer != null && pointer.is_const
+    }
+    return false
+}

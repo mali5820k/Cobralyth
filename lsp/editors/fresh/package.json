@@ -1,0 +1,14 @@
+{
+  "$schema": "https://raw.githubusercontent.com/sinelaw/fresh/main/crates/fresh-editor/plugins/schemas/package.schema.json",
+  "name": "clyth",
+  "version": "0.1.0",
+  "description": "Clyth language support",
+  "type": "language",
+  "author": "Clyth Project",
+  "license": "MIT",
+  "fresh": {
+    "grammar": { "file": "grammars/Clyth.sublime-syntax", "extensions": ["clyth"] },
+    "language": { "commentPrefix": "//", "blockCommentStart": "/*", "blockCommentEnd": "*/", "tabSize": 4, "autoIndent": true },
+    "lsp": { "command": "clyth-lsp", "args": [], "autoStart": true }
+  }
+}

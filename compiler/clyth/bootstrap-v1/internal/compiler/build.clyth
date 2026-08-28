@@ -1,0 +1,611 @@
+// AUTO-TRANSLATED BOOTSTRAP SEED FROM FROZEN GO V1.0.0 IMPLEMENTATION.
+// Source: compiler/go/internal/compiler/build.go
+// This file preserves implementation logic for the Go -> Clyth bootstrap port.
+
+// package compiler
+
+// Go imports:
+// "encoding/json"
+// "errors"
+// "fmt"
+// "io"
+// "os"
+// "path/filepath"
+// "strings"
+// "github.com/mali5820k/clyth-bootstrap/internal/frontend/ast"
+
+import "semantic_analyzer.clyth"
+import "llvm_lowering.clyth"
+import "toolchain.clyth"
+import "../frontend/ast/ast.clyth"
+import "../frontend/parser/parser.clyth"
+import file-io
+import collections
+import string
+
+struct BuildOptions {
+	string Input
+	string Output
+	bool EmitASTJSON
+	bool EmitLLVMIR
+	bool EmitSymbolsJSON
+	string Target
+	string Zig
+	string LLC
+	string LLD
+	string MuslSysroot
+	bool Mecc
+	bool Verbose
+}
+struct BootstrapBuildArgsResult { BuildOptions options string error_message bool ok }
+struct BootstrapProgramMapResult { Map<string, Program*> units string error_message bool ok }
+
+
+
+BootstrapBuildArgsResult ParseBuildArgs(string[] args) {
+    BuildOptions options = BuildOptions()
+    // Stage-1 value aggregates currently zero pointer-backed string fields.
+    // Materialize the CLI option strings explicitly so empty-option checks use
+    // valid Core string descriptors instead of dereferencing null defaults.
+    options.Input = ""
+    options.Output = ""
+    options.Target = ""
+    options.Zig = ""
+    options.LLC = ""
+    options.LLD = ""
+    options.MuslSysroot = ""
+    for int64 index = 0; index < args.length; index += 1 {
+        string argument = args[index]
+        if argument == "-o" {
+            if index+1 >= args.length {
+                return bootstrap_build_args_error(options, "-o requires an output path")
+            }
+            index += 1
+            options.Output = args[index]
+        } else if argument == "--emit-ast-json" {
+            options.EmitASTJSON = true
+        } else if argument == "--emit-llvm-ir" {
+            options.EmitLLVMIR = true
+        } else if argument == "--emit-symbols-json" {
+            options.EmitSymbolsJSON = true
+        } else if argument == "--verbose" {
+            options.Verbose = true
+        } else if argument == "--mecc=true" {
+            options.Mecc = true
+        } else if argument == "--mecc=false" {
+            options.Mecc = false
+        } else if bootstrap_is_build_value_option(argument) {
+            if index+1 >= args.length {
+                return bootstrap_build_args_error(options, argument+" requires a value")
+            }
+            index += 1
+            string value = args[index]
+            if argument == "--target" {
+                options.Target = value
+            } else if argument == "--zig" {
+                options.Zig = value
+            } else if argument == "--llc" {
+                options.LLC = value
+            } else if argument == "--lld" {
+                options.LLD = value
+            } else if argument == "--musl-sysroot" {
+                options.MuslSysroot = value
+            } else if argument == "--mecc" {
+                if value == "true" {
+                    options.Mecc = true
+                } else if value == "false" {
+                    options.Mecc = false
+                } else {
+                    return bootstrap_build_args_error(options, "--mecc requires true or false")
+                }
+            }
+        } else {
+            if bootstrap_has_prefix(argument, "-") {
+                return bootstrap_build_args_error(options, "unknown build option "+argument)
+            }
+            if options.Input != "" {
+                return bootstrap_build_args_error(options, "build accepts exactly one input path")
+            }
+            options.Input = argument
+        }
+    }
+
+    if options.Input == "" {
+        BootstrapToolResult cwd_result = bootstrap_current_working_directory()
+        if !cwd_result.ok {
+            return bootstrap_build_args_error(options, cwd_result.error_message)
+        }
+        string current = cwd_result.value
+        while true {
+            string manifest_path = path_join2(current, "clyth_project.json")
+            BootstrapProjectManifestResult manifest = bootstrap_read_project_manifest(manifest_path)
+            if manifest.ok {
+                if manifest.entry == "" {
+                    return bootstrap_build_args_error(options, "clyth_project.json requires entry")
+                }
+                options.Input = path_join2(current, manifest.entry)
+                break
+            }
+            string parent = path_dirname_copy(current)
+            if parent == current {
+                return bootstrap_build_args_error(options, "usage: clyth build [file] [--emit-ast-json] [-o output]; no clyth_project.json found")
+            }
+            current = parent
+        }
+    }
+
+    int64 modes = 0
+    if options.EmitASTJSON { modes += 1 }
+    if options.EmitLLVMIR { modes += 1 }
+    if options.EmitSymbolsJSON { modes += 1 }
+    if modes > 1 {
+        return bootstrap_build_args_error(options, "select only one emit mode")
+    }
+    return bootstrap_build_args_success(options)
+}
+
+string RunBuild(string[] args, Writer output, Writer error_output) {
+    BootstrapBuildArgsResult parsed = ParseBuildArgs(args)
+    if !parsed.ok {
+        return parsed.error_message
+    }
+    BuildOptions options = parsed.options
+
+    if bootstrap_path_is_dir(options.Input) {
+        BootstrapProjectManifestResult manifest = bootstrap_read_project_manifest(path_join2(options.Input, "clyth_project.json"))
+        if !manifest.ok {
+            return "directory build requires clyth_project.json: "+manifest.error_message
+        }
+        if manifest.entry == "" {
+            return "clyth_project.json requires entry"
+        }
+        options.Input = path_join2(options.Input, manifest.entry)
+    }
+    if path_extension_copy(options.Input) != ".clyth" {
+        return "input is not a .clyth source file: "+options.Input
+    }
+
+    BootstrapParseFileResult parsed_file = bootstrap_parse_file_result(options.Input)
+    if !parsed_file.ok {
+        return parsed_file.error_message
+    }
+    if parsed_file.frontend_errors.length > 0 {
+        bootstrap_print_frontend_errors(error_output, parsed_file.frontend_errors)
+        return "frontend failed with errors"
+    }
+    Program* program = parsed_file.program
+    if options.Verbose { bootstrap_writer_println(error_output, "stage2-trace: root parse complete") }
+
+    if options.EmitASTJSON {
+        BootstrapBytesResult ast_json = bootstrap_ast_json(program)
+        if !ast_json.ok { return ast_json.error_message }
+        return bootstrap_emit_bytes(output, options.Output, ast_json.data, true)
+    }
+
+    if options.Verbose { bootstrap_writer_println(error_output, "stage2-trace: starting root semantic analysis") }
+    SemanticOptions semantic_options = SemanticOptions()
+    semantic_options.mecc_enabled = options.Mecc
+    AnalyzeFileResult analyzed = analyze_file_with_options(options.Input, program, semantic_options)
+    if analyzed.error_message != "" {
+        return analyzed.error_message
+    }
+    if analyzed.errors.length > 0 {
+        bootstrap_print_semantic_errors(error_output, analyzed.errors)
+        return "semantic analysis failed with errors"
+    }
+    AnalysisResult* result = analyzed.result
+    if options.Verbose { bootstrap_writer_println(error_output, "stage2-trace: root semantic analysis complete") }
+    print_compiler_diagnostics(result, options.Verbose, error_output)
+
+    if options.EmitSymbolsJSON {
+        BootstrapBytesResult symbols = bootstrap_symbols_json(result)
+        if !symbols.ok { return symbols.error_message }
+        return bootstrap_emit_bytes(output, options.Output, symbols.data, true)
+    }
+
+    string target = llvm_triple_for_target(options.Target)
+    if options.Verbose { bootstrap_writer_println(error_output, "stage2-trace: starting root LLVM lowering") }
+    BootstrapBytesResult lowered = bootstrap_lower_llvm_ir(program, result, target)
+    if !lowered.ok {
+        return lowered.error_message
+    }
+    if options.Verbose { bootstrap_writer_println(error_output, "stage2-trace: root LLVM lowering complete") }
+    if options.EmitLLVMIR {
+        return bootstrap_emit_bytes(output, options.Output, lowered.data, false)
+    }
+
+    ToolchainOptions toolchain_options = ToolchainOptions()
+    toolchain_options.Target = options.Target
+    toolchain_options.Zig = options.Zig
+    toolchain_options.LLC = options.LLC
+    toolchain_options.LLD = options.LLD
+    toolchain_options.MuslSysroot = options.MuslSysroot
+    BootstrapToolchainResult toolchain_result = resolve_toolchain(toolchain_options, false)
+    if !toolchain_result.ok {
+        return toolchain_result.error_message
+    }
+    ResolvedToolchain* toolchain = toolchain_result.value
+    if options.Verbose { bootstrap_writer_println(error_output, "stage2-trace: toolchain resolved") }
+
+    string output_path = options.Output
+    if output_path == "" {
+        string base = bootstrap_trim_suffix(path_basename_copy(options.Input), path_extension_copy(options.Input))
+        output_path = path_join2(path_dirname_copy(options.Input), base)
+    }
+    BootstrapToolResult temp_result = bootstrap_make_temp_dir("clyth-build-")
+    if !temp_result.ok {
+        return temp_result.error_message
+    }
+    string temporary_dir = temp_result.value
+    bool keep_temp = bootstrap_getenv("CLYTH_KEEP_TEMP") != ""
+    if keep_temp {
+        bootstrap_writer_println(error_output, "temporary build directory: "+temporary_dir)
+    }
+
+    string repository_root = find_repository_root(options.Input)
+    if options.Verbose { bootstrap_writer_println(error_output, "stage2-trace: collecting translation units") }
+    BootstrapProgramMapResult units_result = collect_build_translation_units(options.Input, program, repository_root, result.specializations)
+    if !units_result.ok {
+        if !keep_temp { bootstrap_remove_all(temporary_dir) }
+        return units_result.error_message
+    }
+    Map<string, Program*> units = units_result.units
+    if options.Verbose { bootstrap_writer_println(error_output, "stage2-trace: translation units collected") }
+    string[] unit_paths = units.keys()
+    sort_strings(unit_paths)
+    string[] object_paths = bootstrap_empty_array()
+    bool mecc_runtime_required = options.Mecc
+
+    for int64 unit_index = 0; unit_index < unit_paths.length; unit_index += 1 {
+        string unit_path = unit_paths[unit_index]
+        Program* unit_program = units[unit_path]
+        if options.Verbose { bootstrap_writer_println(error_output, "stage2-trace: unit analyze: "+unit_path) }
+        AnalyzeFileResult unit_analysis = analyze_file_with_options(unit_path, unit_program, semantic_options)
+        if unit_analysis.error_message != "" {
+            if !keep_temp { bootstrap_remove_all(temporary_dir) }
+            return unit_analysis.error_message
+        }
+        if unit_analysis.errors.length != 0 {
+            if !keep_temp { bootstrap_remove_all(temporary_dir) }
+            return "semantic analysis failed for import "+unit_path
+        }
+        // Imported generic units can be specialized with concrete aggregate
+        // types declared by the root translation unit. Preserve those external
+        // namespace/struct layouts for lowering so generic aggregate parameters
+        // are cloned with their concrete shape instead of as opaque pointers.
+        string[] external_namespace_keys = result.namespaces.keys()
+        for int64 external_namespace_index = 0; external_namespace_index < external_namespace_keys.length; external_namespace_index += 1 {
+            string external_namespace_key = external_namespace_keys[external_namespace_index]
+            if unit_analysis.result.namespaces[external_namespace_key] == null {
+                unit_analysis.result.namespaces[external_namespace_key] = result.namespaces[external_namespace_key]
+            }
+        }
+        if bootstrap_analysis_requires_mecc(unit_analysis.result) {
+            mecc_runtime_required = true
+        }
+        if options.Verbose { bootstrap_writer_println(error_output, "stage2-trace: unit lower: "+unit_path) }
+        BootstrapBytesResult unit_ir = bootstrap_lower_llvm_ir_with_specializations(unit_program, unit_analysis.result, toolchain.LLVMTriple, result.specializations)
+        if !unit_ir.ok {
+            if !keep_temp { bootstrap_remove_all(temporary_dir) }
+            return unit_ir.error_message
+        }
+        string ir_path = path_join2(temporary_dir, bootstrap_unit_filename(unit_index, ".ll"))
+        string object_path = path_join2(temporary_dir, bootstrap_unit_filename(unit_index, ".o"))
+        string write_error = bootstrap_write_bytes(ir_path, unit_ir.data)
+        if write_error != "" {
+            if !keep_temp { bootstrap_remove_all(temporary_dir) }
+            return write_error
+        }
+        if options.Verbose { bootstrap_writer_println(error_output, "stage2-trace: unit compile: "+unit_path) }
+        string compile_error = compile_llvm_object(toolchain, ir_path, object_path)
+        if compile_error != "" {
+            if !keep_temp { bootstrap_remove_all(temporary_dir) }
+            return unit_path+": "+compile_error
+        }
+        object_paths = bootstrap_append(object_paths, object_path)
+    }
+
+    string[] extra_archives = bootstrap_empty_array()
+    if options.Verbose { bootstrap_writer_println(error_output, "stage2-trace: building compiler runtime") }
+    BootstrapArchiveResult compiler_runtime = build_compiler_runtime(toolchain, temporary_dir)
+    if !compiler_runtime.ok {
+        if !keep_temp { bootstrap_remove_all(temporary_dir) }
+        return compiler_runtime.error_message
+    }
+    if compiler_runtime.value != "" {
+        extra_archives = bootstrap_append(extra_archives, compiler_runtime.value)
+    }
+    if mecc_runtime_required {
+        BootstrapArchiveResult mecc_runtime = build_mecc_runtime(toolchain, temporary_dir)
+        if !mecc_runtime.ok {
+            if !keep_temp { bootstrap_remove_all(temporary_dir) }
+            return mecc_runtime.error_message
+        }
+        if mecc_runtime.value != "" {
+            extra_archives = bootstrap_append(extra_archives, mecc_runtime.value)
+        }
+    }
+
+    string[] modules = collect_module_imports(units)
+    for int64 module_index = 0; module_index < modules.length; module_index += 1 {
+        BootstrapArchiveResult archive = build_runtime_module_archive(toolchain, repository_root, modules[module_index], temporary_dir)
+        if !archive.ok {
+            if !keep_temp { bootstrap_remove_all(temporary_dir) }
+            return archive.error_message
+        }
+        if archive.value != "" {
+            extra_archives = bootstrap_append(extra_archives, archive.value)
+        }
+    }
+    if options.Verbose { bootstrap_writer_println(error_output, "stage2-trace: linking Stage-2") }
+    string link_error = link_static_musl(toolchain, object_paths, output_path, extra_archives)
+    if !keep_temp { bootstrap_remove_all(temporary_dir) }
+    return link_error
+}
+
+void print_compiler_diagnostics(AnalysisResult* result, bool verbose, Writer output) {
+    if result == null {
+        return
+    }
+    for int64 diagnostic_index = 0; diagnostic_index < result.compiler_diagnostics.length; diagnostic_index += 1 {
+        CompilerDiagnostic diagnostic = result.compiler_diagnostics[diagnostic_index]
+        if diagnostic.level == "info" || diagnostic.level == "warning" {
+            bootstrap_print_compiler_diagnostic(output, diagnostic)
+        }
+    }
+    if !verbose {
+        return
+    }
+    for int64 action_index = 0; action_index < result.lifetime_actions.length; action_index += 1 {
+        LifetimeAction action = result.lifetime_actions[action_index]
+        AllocationInfo* info = result.allocations[action.allocation]
+        bootstrap_print_lifetime_action(output, action, info)
+    }
+}
+
+BootstrapProgramMapResult collect_local_translation_units(string root_path, Program* root_program) {
+    Map<string, Program*> units = Map<string, Program*>()
+    string error_message = visit_local_translation_unit(&units, root_path, root_program)
+    if error_message != "" {
+        return bootstrap_program_map_error(error_message)
+    }
+    return bootstrap_program_map_success(units)
+}
+
+string visit_local_translation_unit(Map<string, Program*>* units, string path, Program* program) {
+    BootstrapToolResult absolute_result = bootstrap_abs_path(path)
+    if !absolute_result.ok {
+        return absolute_result.error_message
+    }
+    string absolute = absolute_result.value
+    if units[0][absolute] != null {
+        return ""
+    }
+    units[0][absolute] = program
+    for int64 declaration_index = 0; declaration_index < program.Declarations.length; declaration_index += 1 {
+        ImportDecl* import_decl = bootstrap_as_import_decl(program.Declarations[declaration_index])
+        if import_decl == null || import_decl.Kind != "file" {
+            continue
+        }
+        string child = import_decl.Target
+        if !bootstrap_path_is_absolute(child) {
+            child = path_join2(path_dirname_copy(absolute), child)
+        }
+        BootstrapParseFileResult child_result = bootstrap_parse_file_result(child)
+        if !child_result.ok {
+            return child_result.error_message
+        }
+        if child_result.frontend_errors.length != 0 {
+            return "import has frontend errors: "+child
+        }
+        string nested_error = visit_local_translation_unit(units, child, child_result.program)
+        if nested_error != "" {
+            return nested_error
+        }
+    }
+    return ""
+}
+
+bool module_source_is_requested(Program* program, int64 source_count, GenericSpecialization[] requested_specializations) {
+    if source_count <= 1 {
+        return true
+    }
+    Map<string, bool> requested = Map<string, bool>()
+    for int64 specialization_index = 0; specialization_index < requested_specializations.length; specialization_index += 1 {
+        GenericSpecialization specialization = requested_specializations[specialization_index]
+        if specialization_is_concrete(specialization) {
+            requested[specialization.base_name] = true
+        }
+    }
+    for int64 declaration_index = 0; declaration_index < program.Declarations.length; declaration_index += 1 {
+        StructDecl* struct_decl = bootstrap_as_struct_decl(program.Declarations[declaration_index])
+        if struct_decl != null && requested[struct_decl.Name] {
+            return true
+        }
+    }
+    return false
+}
+
+BootstrapProgramMapResult collect_build_translation_units(string root_path, Program* root_program, string repository_root, GenericSpecialization[] requested_specializations) {
+    BootstrapProgramMapResult local_result = collect_local_translation_units(root_path, root_program)
+    if !local_result.ok {
+        return local_result
+    }
+    Map<string, Program*> units = local_result.units
+    Map<string, bool> visited_modules = Map<string, bool>()
+    while true {
+        bool changed = false
+        string[] module_names = collect_module_imports(units)
+        for int64 module_index = 0; module_index < module_names.length; module_index += 1 {
+            string module_name = module_names[module_index]
+            if visited_modules[module_name] {
+                continue
+            }
+            visited_modules[module_name] = true
+            string module_dir = bootstrap_find_module_directory(repository_root, module_name)
+            if module_dir == "" {
+                continue
+            }
+            string[] source_files = bootstrap_glob_values(path_join3(module_dir, "src", "*.clyth"))
+            sort_strings(source_files)
+            for int64 source_index = 0; source_index < source_files.length; source_index += 1 {
+                BootstrapToolResult absolute_result = bootstrap_abs_path(source_files[source_index])
+                if !absolute_result.ok {
+                    return bootstrap_program_map_error(absolute_result.error_message)
+                }
+                string absolute = absolute_result.value
+                if units[absolute] != null {
+                    continue
+                }
+                BootstrapParseFileResult module_result = bootstrap_parse_file_result(absolute)
+                if !module_result.ok {
+                    return bootstrap_program_map_error(module_result.error_message)
+                }
+                if module_result.frontend_errors.length != 0 {
+                    return bootstrap_program_map_error("module source has frontend errors: "+absolute)
+                }
+                if !module_source_is_requested(module_result.program, source_files.length, requested_specializations) {
+                    continue
+                }
+                BootstrapProgramMapResult nested = collect_local_translation_units(absolute, module_result.program)
+                if !nested.ok {
+                    return nested
+                }
+                string[] local_paths = nested.units.keys()
+                for int64 local_index = 0; local_index < local_paths.length; local_index += 1 {
+                    string local_path = local_paths[local_index]
+                    if units[local_path] == null {
+                        units[local_path] = nested.units[local_path]
+                        changed = true
+                    }
+                }
+            }
+        }
+        if !changed {
+            break
+        }
+    }
+    return bootstrap_program_map_success(units)
+}
+
+string[] collect_module_imports(Map<string, Program*> units) {
+    Map<string, bool> seen = Map<string, bool>()
+    string[] unit_paths = units.keys()
+    for int64 unit_index = 0; unit_index < unit_paths.length; unit_index += 1 {
+        Program* program = units[unit_paths[unit_index]]
+        for int64 declaration_index = 0; declaration_index < program.Declarations.length; declaration_index += 1 {
+            ImportDecl* import_decl = bootstrap_as_import_decl(program.Declarations[declaration_index])
+            if import_decl != null && import_decl.Kind == "module" {
+                seen[import_decl.Target] = true
+            }
+        }
+    }
+    string[] result = seen.keys()
+    sort_strings(result)
+    return result
+}
+
+struct BootstrapProjectManifestResult { string entry string error_message bool ok }
+struct BootstrapBytesResult { string data string error_message bool ok }
+struct BootstrapParseFileResult { Program* program string[] frontend_errors string error_message bool ok }
+
+BootstrapBuildArgsResult bootstrap_build_args_error(BuildOptions options, string message) { BootstrapBuildArgsResult r; r.options=options; r.error_message=message; r.ok=false; return r }
+BootstrapBuildArgsResult bootstrap_build_args_success(BuildOptions options) { BootstrapBuildArgsResult r; r.options=options; r.ok=true; return r }
+bool bootstrap_is_build_value_option(string value) { return value=="--target" || value=="--zig" || value=="--llc" || value=="--lld" || value=="--musl-sysroot" || value=="--mecc" }
+bool bootstrap_has_prefix(string value, string prefix) { return bootstrap_string_starts_with(value, prefix) != 0 }
+BootstrapToolResult bootstrap_current_working_directory() { string value=current_working_directory_copy(); if value=="" {return bootstrap_tool_error("cannot determine current working directory")}; return bootstrap_tool_success(value) }
+BootstrapToolResult bootstrap_make_temp_dir(string prefix) { string value=make_temp_directory_copy(prefix); if value=="" {return bootstrap_tool_error("cannot create temporary directory")}; return bootstrap_tool_success(value) }
+string bootstrap_trim_suffix(string value, string suffix) { if suffix=="" || bootstrap_string_ends_with(value,suffix)==0 {return value}; return bootstrap_string_slice(value,0,value.length-suffix.length) }
+bool bootstrap_path_is_absolute(string path) { return path.length>0 && path[0]=='/' }
+string bootstrap_remove_all(string path) { if delete_path_recursive(path)==0 {return ""}; return "failed to remove path: "+path }
+string bootstrap_write_bytes(string path, string data) { if overwrite_file(path,data)==0{return ""}; return "failed to write: "+path }
+string bootstrap_emit_bytes(Writer output, string path, string data, bool newline) { string payload=data; if newline {payload=payload+"\n"}; if path!="" {return bootstrap_write_bytes(path,payload)}; print(payload); return "" }
+void bootstrap_writer_println(Writer output, string text) { println(text) }
+void bootstrap_print_frontend_errors(Writer output, string[] errors) { int64 i=0; while i<errors.length { println(errors[i]); i+=1 } }
+void bootstrap_print_semantic_errors(Writer output, SemanticError[] errors) { int64 i=0; while i<errors.length { println(SemanticErrorString(errors[i])); i+=1 } }
+void bootstrap_print_compiler_diagnostic(Writer output, CompilerDiagnostic diagnostic) { println(diagnostic.code+": "+diagnostic.message) }
+void bootstrap_print_lifetime_action(Writer output, LifetimeAction action, AllocationInfo* info) { if info!=null { println("lifetime allocation "+`${action.allocation}`) } }
+
+BootstrapBytesResult bootstrap_lower_llvm_ir(Program* program, AnalysisResult* result, string target) { BootstrapLLVMResult raw=lower_llvm_ir(program,result,target); BootstrapBytesResult out; out.data=raw.ir; out.error_message=raw.error_message; out.ok=raw.ok; return out }
+BootstrapBytesResult bootstrap_lower_llvm_ir_with_specializations(Program* program, AnalysisResult* result, string target, GenericSpecialization[] specs) { BootstrapLLVMResult raw=lower_llvm_ir_with_specializations(program,result,target,specs); BootstrapBytesResult out; out.data=raw.ir; out.error_message=raw.error_message; out.ok=raw.ok; return out }
+bool bootstrap_analysis_requires_mecc(AnalysisResult* result) { if result==null{return false}; int64 i=0; while i<result.allocations.length { AllocationInfo* info=result.allocations[i]; if info!=null && info.mecc{return true}; i+=1}; return false }
+BootstrapProgramMapResult bootstrap_program_map_error(string message) { BootstrapProgramMapResult r; r.error_message=message; r.ok=false; return r }
+BootstrapProgramMapResult bootstrap_program_map_success(Map<string, Program*> units) { BootstrapProgramMapResult r; r.units=units; r.ok=true; return r }
+string bootstrap_unit_filename(int64 index, string suffix) { return "unit-"+`${index}`+suffix }
+
+BootstrapParseFileResult bootstrap_parse_file_result(string path) {
+    BootstrapParseFileResult out
+    if !bootstrap_path_is_file(path) { out.error_message="source file does not exist: "+path; out.ok=false; return out }
+    string source=read_text(path)
+    ParseResult parsed=Parse(source)
+    int64 total=parsed.lexErrors.length+parsed.parseErrors.length
+    out.frontend_errors=array<string>(total)
+    int64 n=0; int64 i=0
+    while i<parsed.lexErrors.length { out.frontend_errors[n]=ErrorString(parsed.lexErrors[i]); n+=1; i+=1 }
+    i=0; while i<parsed.parseErrors.length { out.frontend_errors[n]=ParserErrorString(parsed.parseErrors[i]); n+=1; i+=1 }
+    out.program=parsed.program; out.ok=true; return out
+}
+BootstrapBytesResult bootstrap_ast_json(Program* program) { BootstrapBytesResult r; r.error_message="Stage-1 AST JSON serializer is not ported yet"; r.ok=false; return r }
+BootstrapBytesResult bootstrap_symbols_json(AnalysisResult* result) { BootstrapBytesResult r; r.error_message="Stage-1 symbols JSON serializer is not ported yet"; r.ok=false; return r }
+
+string bootstrap_manifest_entry_value(string text) {
+    string key = "\"entry\""
+    int64 i = 0
+    while i + key.length <= text.length {
+        if bootstrap_string_slice(text, i, key.length) == key {
+            i += key.length
+            while i < text.length {
+                string ch = bootstrap_string_slice(text, i, 1)
+                if ch != " " && ch != "\n" && ch != "\r" && ch != "\t" { break }
+                i += 1
+            }
+            if i >= text.length || bootstrap_string_slice(text, i, 1) != ":" { return "" }
+            i += 1
+            while i < text.length {
+                string ch = bootstrap_string_slice(text, i, 1)
+                if ch != " " && ch != "\n" && ch != "\r" && ch != "\t" { break }
+                i += 1
+            }
+            if i >= text.length || bootstrap_string_slice(text, i, 1) != "\"" { return "" }
+            i += 1
+            string out = ""
+            while i < text.length {
+                string ch = bootstrap_string_slice(text, i, 1)
+                if ch == "\"" { return out }
+                if ch == "\\" {
+                    i += 1
+                    if i >= text.length { return "" }
+                    ch = bootstrap_string_slice(text, i, 1)
+                    if ch == "n" { out = out + "\n" }
+                    else if ch == "r" { out = out + "\r" }
+                    else if ch == "t" { out = out + "\t" }
+                    else if ch == "\"" { out = out + "\"" }
+                    else if ch == "\\" { out = out + "\\" }
+                    else if ch == "/" { out = out + "/" }
+                    else { return "" }
+                } else {
+                    out = out + ch
+                }
+                i += 1
+            }
+            return ""
+        }
+        i += 1
+    }
+    return ""
+}
+BootstrapProjectManifestResult bootstrap_read_project_manifest(string path) {
+    BootstrapProjectManifestResult r
+    if !bootstrap_path_is_file(path) {r.error_message="manifest does not exist: "+path;r.ok=false;return r}
+    string text=read_text(path)
+    r.entry=bootstrap_manifest_entry_value(text)
+    if r.entry=="" {r.error_message="project manifest is missing a non-empty string entry: "+path;r.ok=false;return r}
+    r.ok=true; return r
+}
+string bootstrap_find_module_directory(string repository_root,string module_name) {
+    string runtime_path=path_join4(repository_root,"module-src","runtime",module_name)
+    if bootstrap_path_is_dir(runtime_path){return runtime_path}
+    string core_path=path_join4(repository_root,"module-src","core",module_name)
+    if bootstrap_path_is_dir(core_path){return core_path}
+    return ""
+}

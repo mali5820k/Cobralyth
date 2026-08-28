@@ -1,0 +1,1108 @@
+// AUTO-TRANSLATED BOOTSTRAP SEED FROM FROZEN GO V1.0.0 IMPLEMENTATION.
+// Source: compiler/go/internal/compiler/lifetime.go
+// This file preserves implementation logic for the Go -> Clyth bootstrap port.
+
+// package compiler
+
+// Go imports:
+// "fmt"
+// "sort"
+// "github.com/mali5820k/clyth-bootstrap/internal/frontend/ast"
+// "github.com/mali5820k/clyth-bootstrap/internal/frontend/token"
+
+// lifetime_binding models one lexical variable binding. Pointer aliases remain
+// ordinary aliases; allocation identity is tracked separately from the binding.
+struct lifetime_binding {
+	string name
+	int64 depth
+	SemanticType* type_info
+	int64 allocation
+	Map<int64, bool> aggregate_allocs
+	Map<string, int64> aggregate_fields
+	Map<int64, bool> container_allocs
+	string origin
+}
+
+struct lifetime_allocation_state {
+	bool live
+	bool owned_here
+	int64 created_depth
+	Map<string, bool> external_domains
+	MeccPolicy policy
+	string origin
+}
+
+struct lifetime_flow {
+	Map<string, lifetime_binding*[]> bindings
+	Map<int64, lifetime_allocation_state*> allocations
+	int64 depth
+	MeccPolicy policy
+	bool terminated
+}
+
+struct lifetime_context {
+	SemanticAnalyzer* analyzer
+	AnalysisResult* result
+	SemanticOptions options
+	Namespace* namespace
+	string path
+	Map<NewExpr*, int64> allocation_ids
+	Map<Expr, int64> external_ids
+	int64 next_allocation
+	int64 next_external
+	Map<string, bool> action_keys
+	Map<string, bool> diagnostic_keys
+}
+
+void analyze_lifetimes(SemanticAnalyzer* analyzer, AnalysisResult* result, SemanticOptions options) {
+	context = &lifetime_context{
+		analyzer: analyzer, result: result, options: options,
+		allocation_ids: bootstrap_empty_map(), external_ids: bootstrap_empty_map(),
+		next_allocation: 1, next_external: -1,
+		action_keys: bootstrap_empty_map(), diagnostic_keys: bootstrap_empty_map(),
+	}
+
+	paths = bootstrap_array_with_capacity(bootstrap_len(analyzer.programs))
+	__range_keys_1 = (analyzer.programs).keys()
+	for int64 __range_index_1 = 0; __range_index_1 < bootstrap_len(__range_keys_1); __range_index_1 += 1 {
+		path = __range_keys_1[__range_index_1]
+		paths = bootstrap_append(paths, path)
+	}
+	sort.Strings(paths)
+	__range_values_2 = bootstrap_values(paths)
+	for int64 __range_index_2 = 0; __range_index_2 < bootstrap_len(__range_values_2); __range_index_2 += 1 {
+		path = __range_values_2[__range_index_2]
+		program = analyzer.programs[path]
+		namespace = analyzer.path_namespaces[path]
+		if program == null || namespace == null {
+			continue
+		}
+		context.namespace = namespace
+		context.path = path
+		context.analyze_program(program)
+	}
+
+	if result.mecc_macros_present && !options.mecc_enabled {
+		result.compiler_diagnostics = append(result.compiler_diagnostics, CompilerDiagnostic{
+			level: diagnostic_info, code: "MECC_CONFIG_IGNORED",
+			message:     "Project contains MECC macros - ignoring since MECC is disabled in this build",
+			source_path: result.root_path,
+		})
+	}
+}
+
+void analyze_program(lifetime_context* context, Program* program) { // translated Go receiver method
+	file_policy = MeccPolicy{}
+	__range_values_3 = bootstrap_values(program.Declarations)
+	for int64 __range_index_3 = 0; __range_index_3 < bootstrap_len(__range_values_3); __range_index_3 += 1 {
+		declaration = __range_values_3[__range_index_3]
+		switch item = declaration.(type) { // TODO lower switch to if/else
+		case *ast.MeccConfigDirectiveDecl:
+			context.result.mecc_macros_present = true
+			if !context.validate_mecc_property(item.Property, item) {
+				continue
+			}
+			if context.options.mecc_enabled {
+				file_policy.compacting = item.Value
+			}
+			context.result.mecc_policy_by_node[item] = file_policy
+		case *ast.FunctionDecl:
+			if item.Body != null {
+				context.analyze_function(item, item.Parameters, item.Body, file_policy)
+			}
+		case *ast.StructDecl:
+			__range_values_4 = bootstrap_values(item.Members)
+			for int64 __range_index_4 = 0; __range_index_4 < bootstrap_len(__range_values_4); __range_index_4 += 1 {
+				member = __range_values_4[__range_index_4]
+				switch typed = member.(type) { // TODO lower switch to if/else
+				case *ast.MethodDecl:
+					if typed.Body != null {
+						context.analyze_function(&typed.FunctionDecl, typed.Parameters, typed.Body, file_policy)
+					}
+				case *ast.ConstructorMember:
+					context.analyze_function(null, typed.Parameters, typed.Body, file_policy)
+				case *ast.DestructorMember:
+					context.analyze_function(null, null, typed.Body, file_policy)
+				}
+			}
+		case *ast.MethodBlockDecl:
+			__range_values_5 = bootstrap_values(item.Members)
+			for int64 __range_index_5 = 0; __range_index_5 < bootstrap_len(__range_values_5); __range_index_5 += 1 {
+				member = __range_values_5[__range_index_5]
+				switch typed = member.(type) { // TODO lower switch to if/else
+				case *ast.MethodDecl:
+					context.analyze_function(&typed.FunctionDecl, typed.Parameters, typed.Body, file_policy)
+				case *ast.ConstructorMember:
+					context.analyze_function(null, typed.Parameters, typed.Body, file_policy)
+				case *ast.DestructorMember:
+					context.analyze_function(null, null, typed.Body, file_policy)
+				}
+			}
+		}
+	}
+}
+
+bool validate_mecc_property(lifetime_context* context, string property, Node node) { // translated Go receiver method
+	if property == "compacting" {
+		return true
+	}
+	context.analyzer.add_error(context.path, node, "unknown #MECC_config property '"+property+"'")
+	return false
+}
+
+lifetime_flow* new_lifetime_flow(MeccPolicy policy) {
+	return &lifetime_flow{
+		bindings: bootstrap_empty_map(), allocations: bootstrap_empty_map(),
+		policy: policy,
+	}
+}
+
+lifetime_flow* clone(lifetime_flow* flow) { // translated Go receiver method
+	cloned = &lifetime_flow{
+		bindings: bootstrap_empty_map(), allocations: bootstrap_empty_map(),
+		depth: flow.depth, policy: flow.policy, terminated: flow.terminated,
+	}
+	__range_keys_6 = (flow.bindings).keys()
+	for int64 __range_index_6 = 0; __range_index_6 < bootstrap_len(__range_keys_6); __range_index_6 += 1 {
+		name = __range_keys_6[__range_index_6]
+		stack = (flow.bindings)[name]
+		copy_stack = bootstrap_array_with_length(bootstrap_len(stack))
+		__range_keys_7 = (stack).keys()
+		for int64 __range_index_7 = 0; __range_index_7 < bootstrap_len(__range_keys_7); __range_index_7 += 1 {
+			index = __range_keys_7[__range_index_7]
+			binding = (stack)[index]
+			copy_binding = *binding
+			copy_binding.aggregate_allocs = bootstrap_empty_map()
+			__range_keys_8 = (binding.aggregate_allocs).keys()
+			for int64 __range_index_8 = 0; __range_index_8 < bootstrap_len(__range_keys_8); __range_index_8 += 1 {
+				id = __range_keys_8[__range_index_8]
+				present = (binding.aggregate_allocs)[id]
+				copy_binding.aggregate_allocs[id] = present
+			}
+			copy_binding.aggregate_fields = bootstrap_empty_map()
+			__range_keys_9 = (binding.aggregate_fields).keys()
+			for int64 __range_index_9 = 0; __range_index_9 < bootstrap_len(__range_keys_9); __range_index_9 += 1 {
+				name = __range_keys_9[__range_index_9]
+				id = (binding.aggregate_fields)[name]
+				copy_binding.aggregate_fields[name] = id
+			}
+			copy_binding.container_allocs = bootstrap_empty_map()
+			__range_keys_10 = (binding.container_allocs).keys()
+			for int64 __range_index_10 = 0; __range_index_10 < bootstrap_len(__range_keys_10); __range_index_10 += 1 {
+				id = __range_keys_10[__range_index_10]
+				present = (binding.container_allocs)[id]
+				copy_binding.container_allocs[id] = present
+			}
+			copy_stack[index] = &copy_binding
+		}
+		cloned.bindings[name] = copy_stack
+	}
+	__range_keys_11 = (flow.allocations).keys()
+	for int64 __range_index_11 = 0; __range_index_11 < bootstrap_len(__range_keys_11); __range_index_11 += 1 {
+		id = __range_keys_11[__range_index_11]
+		allocation = (flow.allocations)[id]
+		copy_allocation = *allocation
+		copy_allocation.external_domains = bootstrap_empty_map()
+		__range_keys_12 = (allocation.external_domains).keys()
+		for int64 __range_index_12 = 0; __range_index_12 < bootstrap_len(__range_keys_12); __range_index_12 += 1 {
+			domain = __range_keys_12[__range_index_12]
+			present = (allocation.external_domains)[domain]
+			copy_allocation.external_domains[domain] = present
+		}
+		cloned.allocations[id] = &copy_allocation
+	}
+	return cloned
+}
+
+lifetime_binding* current_binding(lifetime_flow* flow, string name) { // translated Go receiver method
+	stack = flow.bindings[name]
+	if bootstrap_len(stack) == 0 {
+		return null
+	}
+	return stack[bootstrap_len(stack)-1]
+}
+
+void push_binding(lifetime_flow* flow, lifetime_binding* binding) { // translated Go receiver method
+	if binding.aggregate_allocs == null {
+		binding.aggregate_allocs = bootstrap_empty_map()
+	}
+	if binding.aggregate_fields == null {
+		binding.aggregate_fields = bootstrap_empty_map()
+	}
+	if binding.container_allocs == null {
+		binding.container_allocs = bootstrap_empty_map()
+	}
+	flow.bindings[binding.name] = bootstrap_append(flow.bindings[binding.name], binding)
+}
+
+void pop_depth(lifetime_flow* flow, int64 depth) { // translated Go receiver method
+	__range_keys_13 = (flow.bindings).keys()
+	for int64 __range_index_13 = 0; __range_index_13 < bootstrap_len(__range_keys_13); __range_index_13 += 1 {
+		name = __range_keys_13[__range_index_13]
+		stack = (flow.bindings)[name]
+		for bootstrap_len(stack) > 0 && stack[bootstrap_len(stack)-1].depth >= depth {
+			stack = stack[:bootstrap_len(stack)-1]
+		}
+		if bootstrap_len(stack) == 0 {
+			delete(flow.bindings, name)
+		} else {
+			flow.bindings[name] = stack
+		}
+	}
+}
+
+void analyze_function(lifetime_context* context, FunctionDecl* function, Parameter*[] parameters, BlockStmt* body, MeccPolicy policy) { // translated Go receiver method
+	flow = new_lifetime_flow(policy)
+	__range_values_14 = bootstrap_values(parameters)
+	for int64 __range_index_14 = 0; __range_index_14 < bootstrap_len(__range_values_14); __range_index_14 += 1 {
+		parameter = __range_values_14[__range_index_14]
+		if parameter == null || parameter.Name == "" {
+			continue
+		}
+		type_info = context.analyzer.resolve_type_ref(context.namespace, parameter.Type, null, context.path)
+		binding = &lifetime_binding{name: parameter.Name, depth: 0, type_info: type_info, aggregate_allocs: bootstrap_empty_map(), aggregate_fields: bootstrap_empty_map(), container_allocs: bootstrap_empty_map(), origin: "parameter"}
+		if semantic_is_pointer(type_info) {
+			id = context.next_external
+			context.next_external--
+			binding.allocation = id
+			flow.allocations[id] = &lifetime_allocation_state{live: true, owned_here: false, created_depth: -1, external_domains: map[string]bool{"caller": true}, origin: "parameter"}
+		}
+		flow.push_binding(binding)
+	}
+
+	states = context.analyze_block([]*lifetime_flow{flow}, body, false)
+	__range_values_15 = bootstrap_values(states)
+	for int64 __range_index_15 = 0; __range_index_15 < bootstrap_len(__range_values_15); __range_index_15 += 1 {
+		state = __range_values_15[__range_index_15]
+		if state.terminated {
+			continue
+		}
+		context.finalize_function_state(state, body)
+	}
+	_ = function
+}
+
+lifetime_flow*[] analyze_block(lifetime_context* context, lifetime_flow*[] states, BlockStmt* block, bool nested) { // translated Go receiver method
+	if block == null {
+		return states
+	}
+	result_states = bootstrap_array_with_capacity(bootstrap_len(states))
+	__range_values_16 = bootstrap_values(states)
+	for int64 __range_index_16 = 0; __range_index_16 < bootstrap_len(__range_values_16); __range_index_16 += 1 {
+		initial = __range_values_16[__range_index_16]
+		if initial.terminated {
+			result_states = bootstrap_append(result_states, initial)
+			continue
+		}
+		state = initial.clone()
+		if nested {
+			state.depth++
+		}
+		entry_depth = state.depth
+		active = []*lifetime_flow{state}
+		__range_values_17 = bootstrap_values(block.Statements)
+		for int64 __range_index_17 = 0; __range_index_17 < bootstrap_len(__range_values_17); __range_index_17 += 1 {
+			statement = __range_values_17[__range_index_17]
+			next = []*lifetime_flow{}
+			__range_values_18 = bootstrap_values(active)
+			for int64 __range_index_18 = 0; __range_index_18 < bootstrap_len(__range_values_18); __range_index_18 += 1 {
+				current = __range_values_18[__range_index_18]
+				if current.terminated {
+					next = bootstrap_append(next, current)
+					continue
+				}
+				next = bootstrap_append(next, context.analyze_statement(current, statement)...)
+			}
+			active = context.limit_states(next)
+		}
+		__range_values_19 = bootstrap_values(active)
+		for int64 __range_index_19 = 0; __range_index_19 < bootstrap_len(__range_values_19); __range_index_19 += 1 {
+			current = __range_values_19[__range_index_19]
+			if !current.terminated {
+				context.cleanup_depth(current, entry_depth, block)
+			}
+			if nested {
+				current.pop_depth(entry_depth)
+				current.depth--
+			}
+			result_states = bootstrap_append(result_states, current)
+		}
+	}
+	return context.limit_states(result_states)
+}
+
+lifetime_flow*[] limit_states(lifetime_context* context, lifetime_flow*[] states) { // translated Go receiver method
+// const max_states = 64
+	if bootstrap_len(states) <= max_states {
+		return states
+	}
+	// Lifetime analysis is intentionally path-sensitive.  For extremely branchy
+	// source we cap state growth but preserve the first concrete paths rather than
+	// inventing semantics-changing repairs.  A future CFG lattice can merge these.
+	return states[:max_states]
+}
+
+lifetime_flow*[] analyze_statement(lifetime_context* context, lifetime_flow* flow, Stmt statement) { // translated Go receiver method
+	switch item = statement.(type) { // TODO lower switch to if/else
+	case *ast.MeccConfigDirectiveStmt:
+		context.result.mecc_macros_present = true
+		if context.validate_mecc_property(item.Property, item) && context.options.mecc_enabled {
+			flow.policy.compacting = item.Value
+		}
+		context.result.mecc_policy_by_node[item] = flow.policy
+		return []*lifetime_flow{flow}
+	case *ast.VarDeclStmt:
+		type_info = context.analyzer.resolve_type_ref(context.namespace, item.Type, null, context.path)
+		if item.Type != null && item.Type.Name == "auto" && item.Initializer != null {
+			type_info = clone_type(context.result.expression_types[item.Initializer])
+		}
+		binding = &lifetime_binding{name: item.Name, depth: flow.depth, type_info: type_info, aggregate_allocs: bootstrap_empty_map(), aggregate_fields: bootstrap_empty_map(), container_allocs: bootstrap_empty_map(), origin: "local"}
+		if item.Initializer != null {
+			id = context.eval_pointer_value(flow, item.Initializer, true)
+			if id != 0 && semantic_is_pointer(type_info) {
+				binding.allocation = id
+			}
+			if source_name, ok = identifier_name(item.Initializer); ok {
+				if source = flow.current_binding(source_name); source != null {
+					__range_keys_20 = (source.aggregate_allocs).keys()
+					for int64 __range_index_20 = 0; __range_index_20 < bootstrap_len(__range_keys_20); __range_index_20 += 1 {
+						allocation = __range_keys_20[__range_index_20]
+						binding.aggregate_allocs[allocation] = true
+					}
+					__range_keys_21 = (source.aggregate_fields).keys()
+					for int64 __range_index_21 = 0; __range_index_21 < bootstrap_len(__range_keys_21); __range_index_21 += 1 {
+						field = __range_keys_21[__range_index_21]
+						allocation = (source.aggregate_fields)[field]
+						binding.aggregate_fields[field] = allocation
+					}
+					__range_keys_22 = (source.container_allocs).keys()
+					for int64 __range_index_22 = 0; __range_index_22 < bootstrap_len(__range_keys_22); __range_index_22 += 1 {
+						allocation = __range_keys_22[__range_index_22]
+						binding.container_allocs[allocation] = true
+					}
+				}
+			}
+		}
+		flow.push_binding(binding)
+		return []*lifetime_flow{flow}
+	case *ast.ExprStmt:
+		context.eval_expr(flow, item.Expression, true)
+		return []*lifetime_flow{flow}
+	case *ast.ReturnStmt:
+		returned = bootstrap_empty_map()
+		if item.Value != null {
+			id = context.eval_pointer_value(flow, item.Value, true)
+			if id != 0 {
+				returned[id] = true
+				context.mark_external(flow, id, "return")
+			}
+			if name, ok = identifier_name(item.Value); ok {
+				if binding = flow.current_binding(name); binding != null {
+					__range_keys_23 = (binding.aggregate_allocs).keys()
+					for int64 __range_index_23 = 0; __range_index_23 < bootstrap_len(__range_keys_23); __range_index_23 += 1 {
+						allocation = __range_keys_23[__range_index_23]
+						returned[allocation] = true
+						context.mark_external(flow, allocation, "return:"+name)
+					}
+				}
+			}
+		}
+		context.cleanup_before_return(flow, returned, item)
+		context.finalize_escape_state(flow)
+		flow.terminated = true
+		return []*lifetime_flow{flow}
+	case *ast.IfStmt:
+		context.eval_expr(flow, item.Condition, true)
+		then_flow = flow.clone()
+		else_flow = flow.clone()
+		then_states = context.analyze_nested_statement(then_flow, item.Then)
+		else_states = []*lifetime_flow{else_flow}
+		if item.Else != null {
+			else_states = context.analyze_nested_statement(else_flow, item.Else)
+		}
+		return bootstrap_append(then_states, else_states...)
+	case *ast.WhileStmt:
+		context.eval_expr(flow, item.Condition, true)
+		zero = flow.clone()
+		one = flow.clone()
+		body_states = context.analyze_nested_statement(one, item.Body)
+		return bootstrap_append([]*lifetime_flow{zero}, body_states...)
+	case *ast.ForStmt:
+		loop_flow = flow.clone()
+		if item.Init != null {
+			states = context.analyze_statement(loop_flow, item.Init)
+			if bootstrap_len(states) > 0 {
+				loop_flow = states[0]
+			}
+		}
+		if item.Condition != null {
+			context.eval_expr(loop_flow, item.Condition, true)
+		}
+		zero = loop_flow.clone()
+		one = loop_flow.clone()
+		body_states = context.analyze_nested_statement(one, item.Body)
+		__range_values_24 = bootstrap_values(body_states)
+		for int64 __range_index_24 = 0; __range_index_24 < bootstrap_len(__range_values_24); __range_index_24 += 1 {
+			state = __range_values_24[__range_index_24]
+			if item.Post != null && !state.terminated {
+				context.eval_expr(state, item.Post, true)
+			}
+		}
+		return bootstrap_append([]*lifetime_flow{zero}, body_states...)
+	case *ast.SwitchStmt:
+		context.eval_expr(flow, item.Value, true)
+		states = []*lifetime_flow{}
+		__range_values_25 = bootstrap_values(item.Cases)
+		for int64 __range_index_25 = 0; __range_index_25 < bootstrap_len(__range_values_25); __range_index_25 += 1 {
+			switch_case = __range_values_25[__range_index_25]
+			branch = flow.clone()
+			if switch_case.Value != null {
+				context.eval_expr(branch, switch_case.Value, true)
+			}
+			__range_values_26 = bootstrap_values(switch_case.Statements)
+			for int64 __range_index_26 = 0; __range_index_26 < bootstrap_len(__range_values_26); __range_index_26 += 1 {
+				nested = __range_values_26[__range_index_26]
+				branch_states = context.analyze_statement(branch, nested)
+				if bootstrap_len(branch_states) == 0 {
+					break
+				}
+				branch = branch_states[0]
+			}
+			states = bootstrap_append(states, branch)
+		}
+		if bootstrap_len(states) == 0 {
+			states = bootstrap_append(states, flow)
+		}
+		return states
+	case *ast.BlockStmt:
+		return context.analyze_block([]*lifetime_flow{flow}, item, true)
+	default:
+		return []*lifetime_flow{flow}
+	}
+}
+
+lifetime_flow*[] analyze_nested_statement(lifetime_context* context, lifetime_flow* flow, Stmt statement) { // translated Go receiver method
+	if block, ok = statement.(*ast.BlockStmt); ok {
+		return context.analyze_block([]*lifetime_flow{flow}, block, true)
+	}
+	return context.analyze_statement(flow, statement)
+}
+
+bool semantic_is_pointer(SemanticType* type_info) {
+	return type_info != null && (type_info.pointer_depth > 0 || type_info.kind == type_pointer)
+}
+
+BootstrapTuple identifier_name(Expr expression) {
+	identifier, ok = expression.(*ast.IdentifierExpr)
+	if !ok {
+		return "", false
+	}
+	return identifier.Name, true
+}
+
+void eval_expr(lifetime_context* context, lifetime_flow* flow, Expr expression, bool read) { // translated Go receiver method
+	if expression == null {
+		return
+	}
+	switch item = expression.(type) { // TODO lower switch to if/else
+	case *ast.IdentifierExpr:
+		if read {
+			context.check_binding_use(flow, item.Name, item)
+		}
+	case *ast.UnaryExpr:
+		context.eval_expr(flow, item.Operand, read)
+	case *ast.BinaryExpr:
+		context.eval_expr(flow, item.Left, true)
+		context.eval_expr(flow, item.Right, true)
+	case *ast.AssignExpr:
+		context.eval_assignment(flow, item)
+	case *ast.CallExpr:
+		if context.is_free_call(item) {
+			context.eval_free(flow, item)
+			return
+		}
+		if identifier, ok = item.Callee.(*ast.IdentifierExpr); ok && identifier.Name == "catch" && bootstrap_len(item.Arguments) == 1 {
+			if lambda, ok = item.Arguments[0].(*ast.LambdaExpr); ok {
+				// catch bodies execute synchronously in the current lifetime domain.
+				// Analyze the body as a nested lexical region so allocations receive
+				// the same deterministic cleanup planning as ordinary blocks.
+				states = context.analyze_block([]*lifetime_flow{flow}, lambda.Body, true)
+				if bootstrap_len(states) == 1 {
+					*flow = *states[0]
+				}
+				return
+			}
+		}
+		context.eval_expr(flow, item.Callee, true)
+		__range_values_27 = bootstrap_values(item.Arguments)
+		for int64 __range_index_27 = 0; __range_index_27 < bootstrap_len(__range_values_27); __range_index_27 += 1 {
+			argument = __range_values_27[__range_index_27]
+			context.eval_expr(flow, argument, true)
+		}
+		context.record_container_call(flow, item)
+	case *ast.MemberExpr:
+		if semantic_is_pointer(context.result.expression_types[item.Object]) {
+			context.eval_pointer_value(flow, item.Object, true)
+		} else {
+			context.eval_expr(flow, item.Object, true)
+		}
+	case *ast.IndexExpr:
+		context.eval_expr(flow, item.Object, true)
+		context.eval_expr(flow, item.Index, true)
+	case *ast.ArrayExpr:
+		__range_values_28 = bootstrap_values(item.Elements)
+		for int64 __range_index_28 = 0; __range_index_28 < bootstrap_len(__range_values_28); __range_index_28 += 1 {
+			element = __range_values_28[__range_index_28]
+			context.eval_expr(flow, element, true)
+		}
+	case *ast.KeyValueExpr:
+		context.eval_expr(flow, item.Key, true)
+		context.eval_expr(flow, item.Value, true)
+	case *ast.LambdaExpr:
+		// Lambda capture lifetime is intentionally conservative for V1.0.0: any
+		// pointer identifiers read by the lambda are treated as escaping if the
+		// lambda itself later escapes. Full capture summaries are future work.
+		_ = item
+	case *ast.NewExpr:
+		context.eval_pointer_value(flow, item, read)
+	case *ast.CastExpr:
+		context.eval_expr(flow, item.Value, read)
+	case *ast.GenericSpecializationExpr:
+		context.eval_expr(flow, item.Target, read)
+	}
+}
+
+int64 eval_pointer_value(lifetime_context* context, lifetime_flow* flow, Expr expression, bool read) { // translated Go receiver method
+	if expression == null {
+		return 0
+	}
+	switch item = expression.(type) { // TODO lower switch to if/else
+	case *ast.NewExpr:
+		id = context.allocation_id(item)
+		if flow.allocations[id] == null {
+			type_info = clone_type(context.result.expression_types[item])
+			flow.allocations[id] = &lifetime_allocation_state{
+				live: true, owned_here: true, created_depth: flow.depth,
+				external_domains: bootstrap_empty_map(), policy: flow.policy, origin: "new",
+			}
+			context.result.allocations[id] = &AllocationInfo{
+				id: id, new_expr: item, source_path: context.path, source_span: item.Span(),
+				type_info: type_info, policy: flow.policy,
+			}
+			context.result.allocation_by_new[item] = id
+			context.result.mecc_policy_by_node[item] = flow.policy
+		}
+		context.eval_expr(flow, item.Value, true)
+		context.result.expression_allocations[expression] = id
+		return id
+	case *ast.IdentifierExpr:
+		binding = flow.current_binding(item.Name)
+		if binding == null {
+			return 0
+		}
+		if read {
+			context.check_binding_use(flow, item.Name, item)
+		}
+		if binding.allocation != 0 {
+			context.result.expression_allocations[expression] = binding.allocation
+		}
+		return binding.allocation
+	case *ast.LiteralExpr:
+		if item.Kind == ast.LiteralNull {
+			return 0
+		}
+	case *ast.CastExpr:
+		return context.eval_pointer_value(flow, item.Value, read)
+	case *ast.MemberExpr:
+		context.eval_expr(flow, item.Object, read)
+		if base_name, ok = identifier_name(item.Object); ok {
+			if binding = flow.current_binding(base_name); binding != null {
+				if id = binding.aggregate_fields[item.Name]; id != 0 {
+					if read {
+						if allocation = flow.allocations[id]; allocation != null && !allocation.live {
+							context.add_lifetime_error(item, "provable use after free through '"+base_name+"."+item.Name+"'")
+						}
+					}
+					context.result.expression_allocations[expression] = id
+					return id
+				}
+			}
+		}
+		semantic = context.result.expression_types[expression]
+		if semantic_is_pointer(semantic) {
+			id = context.external_allocation_id(flow, expression)
+			context.result.expression_allocations[expression] = id
+			return id
+		}
+	case *ast.IndexExpr, *ast.CallExpr:
+		context.eval_expr(flow, expression, read)
+		semantic = context.result.expression_types[expression]
+		if semantic_is_pointer(semantic) {
+			id = context.external_allocation_id(flow, expression)
+			context.result.expression_allocations[expression] = id
+			return id
+		}
+	}
+	context.eval_expr(flow, expression, read)
+	return 0
+}
+
+int64 allocation_id(lifetime_context* context, NewExpr* expression) { // translated Go receiver method
+	if id = context.allocation_ids[expression]; id != 0 {
+		return id
+	}
+	id = context.next_allocation
+	context.next_allocation++
+	context.allocation_ids[expression] = id
+	return id
+}
+
+int64 external_allocation_id(lifetime_context* context, lifetime_flow* flow, Expr expression) { // translated Go receiver method
+	if id = context.external_ids[expression]; id != 0 {
+		if flow.allocations[id] == null {
+			flow.allocations[id] = &lifetime_allocation_state{live: true, external_domains: map[string]bool{"external": true}, origin: "external"}
+		}
+		return id
+	}
+	id = context.next_external
+	context.next_external--
+	context.external_ids[expression] = id
+	flow.allocations[id] = &lifetime_allocation_state{live: true, external_domains: map[string]bool{"external": true}, origin: "external"}
+	return id
+}
+
+void check_binding_use(lifetime_context* context, lifetime_flow* flow, string name, Node node) { // translated Go receiver method
+	binding = flow.current_binding(name)
+	if binding == null || binding.allocation == 0 {
+		return
+	}
+	allocation = flow.allocations[binding.allocation]
+	if allocation != null && !allocation.live {
+		context.add_lifetime_error(node, "provable use after free through '"+name+"'")
+	}
+}
+
+void eval_assignment(lifetime_context* context, lifetime_flow* flow, AssignExpr* assignment) { // translated Go receiver method
+	if identifier, ok = assignment.Target.(*ast.IdentifierExpr); ok {
+		binding = flow.current_binding(identifier.Name)
+		if binding != null {
+			old_allocation = binding.allocation
+			old_aggregate_ids = bootstrap_empty_map()
+			__range_keys_29 = (binding.aggregate_allocs).keys()
+			for int64 __range_index_29 = 0; __range_index_29 < bootstrap_len(__range_keys_29); __range_index_29 += 1 {
+				id = __range_keys_29[__range_index_29]
+				old_aggregate_ids[id] = true
+			}
+			new_allocation = context.eval_pointer_value(flow, assignment.Value, true)
+			if semantic_is_pointer(binding.type_info) {
+				binding.allocation = new_allocation
+			}
+			// Aggregate value assignment replaces the destination's previous
+			// reference set. Pointer/scalar assignments leave aggregate metadata
+			// alone because it describes a different value category.
+			if !semantic_is_pointer(binding.type_info) {
+				binding.aggregate_allocs = bootstrap_empty_map()
+				binding.aggregate_fields = bootstrap_empty_map()
+				binding.container_allocs = bootstrap_empty_map()
+				if source_name, ok = identifier_name(assignment.Value); ok {
+					if source = flow.current_binding(source_name); source != null {
+						__range_keys_30 = (source.aggregate_allocs).keys()
+						for int64 __range_index_30 = 0; __range_index_30 < bootstrap_len(__range_keys_30); __range_index_30 += 1 {
+							id = __range_keys_30[__range_index_30]
+							binding.aggregate_allocs[id] = true
+						}
+						__range_keys_31 = (source.aggregate_fields).keys()
+						for int64 __range_index_31 = 0; __range_index_31 < bootstrap_len(__range_keys_31); __range_index_31 += 1 {
+							field = __range_keys_31[__range_index_31]
+							id = (source.aggregate_fields)[field]
+							binding.aggregate_fields[field] = id
+						}
+						__range_keys_32 = (source.container_allocs).keys()
+						for int64 __range_index_32 = 0; __range_index_32 < bootstrap_len(__range_keys_32); __range_index_32 += 1 {
+							id = __range_keys_32[__range_index_32]
+							binding.container_allocs[id] = true
+						}
+					}
+				}
+				__range_keys_33 = (old_aggregate_ids).keys()
+				for int64 __range_index_33 = 0; __range_index_33 < bootstrap_len(__range_keys_33); __range_index_33 += 1 {
+					id = __range_keys_33[__range_index_33]
+					if !binding.aggregate_allocs[id] {
+						context.maybe_cleanup_after_detach(flow, id, assignment)
+					}
+				}
+			}
+			if old_allocation > 0 && old_allocation != new_allocation {
+				context.maybe_cleanup_after_detach(flow, old_allocation, assignment)
+			}
+			return
+		}
+		// Assignment to an unresolved identifier is a global/static domain.
+		id = context.eval_pointer_value(flow, assignment.Value, true)
+		if id != 0 {
+			context.mark_external(flow, id, "global:"+identifier.Name)
+		}
+		return
+	}
+
+	if member, ok = assignment.Target.(*ast.MemberExpr); ok {
+		id = context.eval_pointer_value(flow, assignment.Value, true)
+		context.eval_expr(flow, member.Object, true)
+		if base_name, ok = identifier_name(member.Object); ok {
+			binding = flow.current_binding(base_name)
+			if binding != null {
+				if binding.origin == "parameter" || semantic_is_pointer(binding.type_info) && binding.allocation < 0 {
+					if id != 0 {
+						context.mark_external(flow, id, "caller:"+base_name+"."+member.Name)
+					}
+				} else {
+					previous = binding.aggregate_fields[member.Name]
+					if previous != 0 && previous != id {
+						delete(binding.aggregate_fields, member.Name)
+					}
+					if id != 0 {
+						binding.aggregate_allocs[id] = true
+						binding.aggregate_fields[member.Name] = id
+					}
+					if previous != 0 && previous != id && !binding_has_aggregate_reference(binding, previous) {
+						delete(binding.aggregate_allocs, previous)
+						context.maybe_cleanup_after_detach(flow, previous, assignment)
+					}
+				}
+				return
+			}
+			if id != 0 {
+				context.mark_external(flow, id, "global:"+base_name+"."+member.Name)
+			}
+			return
+		}
+		if id != 0 {
+			context.mark_external(flow, id, "aggregate:unknown")
+		}
+		return
+	}
+	context.eval_expr(flow, assignment.Target, true)
+	context.eval_expr(flow, assignment.Value, true)
+}
+
+void maybe_cleanup_after_detach(lifetime_context* context, lifetime_flow* flow, int64 allocation_id, Node node) { // translated Go receiver method
+	allocation = flow.allocations[allocation_id]
+	if allocation == null || !allocation.live || !allocation.owned_here || bootstrap_len(allocation.external_domains) != 0 {
+		return
+	}
+	if context.has_local_reference(flow, allocation_id) {
+		return
+	}
+	context.add_action(lifetime_cleanup, allocation_id, node, "previous allocation has no remaining live alias or escape", allocation.policy)
+	allocation.live = false
+	if info = context.result.allocations[allocation_id]; info != null {
+		info.destruction_reason = "reassignment after final local reference"
+	}
+}
+
+bool has_local_reference(lifetime_context* context, lifetime_flow* flow, int64 allocation_id) { // translated Go receiver method
+	__range_values_34 = bootstrap_values(flow.bindings)
+	for int64 __range_index_34 = 0; __range_index_34 < bootstrap_len(__range_values_34); __range_index_34 += 1 {
+		stack = __range_values_34[__range_index_34]
+		__range_values_35 = bootstrap_values(stack)
+		for int64 __range_index_35 = 0; __range_index_35 < bootstrap_len(__range_values_35); __range_index_35 += 1 {
+			binding = __range_values_35[__range_index_35]
+			if binding.allocation == allocation_id || binding.aggregate_allocs[allocation_id] {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+bool is_free_call(lifetime_context* context, CallExpr* call) { // translated Go receiver method
+	identifier, ok = call.Callee.(*ast.IdentifierExpr)
+	return ok && identifier.Name == "free"
+}
+
+void eval_free(lifetime_context* context, lifetime_flow* flow, CallExpr* call) { // translated Go receiver method
+	if bootstrap_len(call.Arguments) != 1 {
+		context.add_lifetime_error(call, fmt.Sprintf("free expects exactly one argument, got %d", bootstrap_len(call.Arguments)))
+		__range_values_36 = bootstrap_values(call.Arguments)
+		for int64 __range_index_36 = 0; __range_index_36 < bootstrap_len(__range_values_36); __range_index_36 += 1 {
+			argument = __range_values_36[__range_index_36]
+			context.eval_expr(flow, argument, true)
+		}
+		return
+	}
+	argument = call.Arguments[0]
+	if literal, ok = argument.(*ast.LiteralExpr); ok && literal.Kind == ast.LiteralNull {
+		return
+	}
+	if unary, ok = argument.(*ast.UnaryExpr); ok && unary.Operator == "&" {
+		if identifier, ok = unary.Operand.(*ast.IdentifierExpr); ok {
+			if binding = flow.current_binding(identifier.Name); binding != null && !semantic_is_pointer(binding.type_info) {
+				context.add_lifetime_error(call, "cannot free stack allocation '&"+identifier.Name+"'")
+				return
+			}
+		}
+	}
+	argument_type = context.result.expression_types[argument]
+	if argument_type != null && argument_type.is_const {
+		context.add_lifetime_error(call, "cannot destroy allocation through const pointer access path")
+		return
+	}
+	id = context.eval_pointer_value(flow, argument, false)
+	if id == 0 {
+		if argument_type != null && !semantic_is_pointer(argument_type) && argument_type.kind != type_null {
+			context.add_lifetime_error(call, "free requires a raw pointer or null")
+		}
+		return
+	}
+	allocation = flow.allocations[id]
+	if allocation == null {
+		return
+	}
+	if !allocation.live {
+		context.add_lifetime_error(call, "double free of the same allocation")
+		return
+	}
+	allocation.live = false
+	context.add_action(lifetime_explicit_free, id, call, "explicit programmer destruction suppresses compiler cleanup", allocation.policy)
+	if info = context.result.allocations[id]; info != null {
+		info.explicitly_freed = true
+		info.destruction_reason = "explicit free"
+	}
+	if context.free_leaves_container_reference(flow, id, argument) {
+		context.add_diagnostic(diagnostic_warning, "LIFETIME_STALE_CONTAINER_REF", call,
+			"allocation was freed while a container/aggregate reference may remain; the compiler leaves that reference untouched")
+	}
+}
+
+bool free_leaves_container_reference(lifetime_context* context, lifetime_flow* flow, int64 allocation_id, Expr argument) { // translated Go receiver method
+	if _, ok = argument.(*ast.MemberExpr); ok {
+		return true
+	}
+	__range_values_37 = bootstrap_values(flow.bindings)
+	for int64 __range_index_37 = 0; __range_index_37 < bootstrap_len(__range_values_37); __range_index_37 += 1 {
+		stack = __range_values_37[__range_index_37]
+		__range_values_38 = bootstrap_values(stack)
+		for int64 __range_index_38 = 0; __range_index_38 < bootstrap_len(__range_values_38); __range_index_38 += 1 {
+			binding = __range_values_38[__range_index_38]
+			if binding.aggregate_allocs[allocation_id] {
+				return true
+			}
+		}
+	}
+	if call, ok = argument.(*ast.CallExpr); ok {
+		if member, ok = call.Callee.(*ast.MemberExpr); ok && member.Name == "get" {
+			return true
+		}
+	}
+	return false
+}
+
+void record_container_call(lifetime_context* context, lifetime_flow* flow, CallExpr* call) { // translated Go receiver method
+	member, ok = call.Callee.(*ast.MemberExpr)
+	if !ok {
+		return
+	}
+	if member.Name != "append" && member.Name != "insert" && member.Name != "put" {
+		return
+	}
+	base_name, base_is_identifier = identifier_name(member.Object)
+	__range_values_39 = bootstrap_values(call.Arguments)
+	for int64 __range_index_39 = 0; __range_index_39 < bootstrap_len(__range_values_39); __range_index_39 += 1 {
+		argument = __range_values_39[__range_index_39]
+		id = context.eval_pointer_value(flow, argument, false)
+		if id == 0 {
+			continue
+		}
+		if base_is_identifier {
+			if binding = flow.current_binding(base_name); binding != null {
+				if binding.origin == "parameter" || semantic_is_pointer(binding.type_info) && binding.allocation < 0 {
+					context.mark_external(flow, id, "caller-container:"+base_name)
+				} else {
+					binding.aggregate_allocs[id] = true
+					binding.container_allocs[id] = true
+				}
+				continue
+			}
+			context.mark_external(flow, id, "global-container:"+base_name)
+		}
+	}
+}
+
+bool binding_has_aggregate_reference(lifetime_binding* binding, int64 allocation_id) {
+	if binding == null || allocation_id == 0 {
+		return false
+	}
+	if binding.container_allocs[allocation_id] {
+		return true
+	}
+	__range_values_40 = bootstrap_values(binding.aggregate_fields)
+	for int64 __range_index_40 = 0; __range_index_40 < bootstrap_len(__range_values_40); __range_index_40 += 1 {
+		id = __range_values_40[__range_index_40]
+		if id == allocation_id {
+			return true
+		}
+	}
+	return false
+}
+
+void mark_external(lifetime_context* context, lifetime_flow* flow, int64 allocation_id, string domain) { // translated Go receiver method
+	allocation = flow.allocations[allocation_id]
+	if allocation == null {
+		return
+	}
+	allocation.external_domains[domain] = true
+	if info = context.result.allocations[allocation_id]; info != null {
+		info.escaped = true
+	}
+}
+
+void cleanup_depth(lifetime_context* context, lifetime_flow* flow, int64 depth, Node node) { // translated Go receiver method
+	candidate_ids = bootstrap_array()
+	__range_keys_41 = (flow.allocations).keys()
+	for int64 __range_index_41 = 0; __range_index_41 < bootstrap_len(__range_keys_41); __range_index_41 += 1 {
+		id = __range_keys_41[__range_index_41]
+		allocation = (flow.allocations)[id]
+		if id <= 0 || allocation == null || !allocation.live || !allocation.owned_here || allocation.created_depth < depth || bootstrap_len(allocation.external_domains) != 0 {
+			continue
+		}
+		// Ignore references that disappear with this lexical region. Any reference
+		// in an outer binding keeps the allocation alive beyond this block.
+		outer_reference = false
+		__range_values_42 = bootstrap_values(flow.bindings)
+		for int64 __range_index_42 = 0; __range_index_42 < bootstrap_len(__range_values_42); __range_index_42 += 1 {
+			stack = __range_values_42[__range_index_42]
+			__range_values_43 = bootstrap_values(stack)
+			for int64 __range_index_43 = 0; __range_index_43 < bootstrap_len(__range_values_43); __range_index_43 += 1 {
+				binding = __range_values_43[__range_index_43]
+				if binding.depth < depth && (binding.allocation == id || binding.aggregate_allocs[id]) {
+					outer_reference = true
+				}
+			}
+		}
+		if !outer_reference {
+			candidate_ids = bootstrap_append(candidate_ids, id)
+		}
+	}
+	sort.Ints(candidate_ids)
+	__range_values_44 = bootstrap_values(candidate_ids)
+	for int64 __range_index_44 = 0; __range_index_44 < bootstrap_len(__range_values_44); __range_index_44 += 1 {
+		id = __range_values_44[__range_index_44]
+		allocation = flow.allocations[id]
+		context.add_action(lifetime_cleanup, id, node, "allocation does not escape lexical scope", allocation.policy)
+		allocation.live = false
+		if info = context.result.allocations[id]; info != null && info.destruction_reason == "" {
+			info.destruction_reason = "lexical scope exit"
+		}
+	}
+}
+
+void cleanup_before_return(lifetime_context* context, lifetime_flow* flow, Map<int64, bool> returned, Node node) { // translated Go receiver method
+	ids = bootstrap_array()
+	__range_keys_45 = (flow.allocations).keys()
+	for int64 __range_index_45 = 0; __range_index_45 < bootstrap_len(__range_keys_45); __range_index_45 += 1 {
+		id = __range_keys_45[__range_index_45]
+		allocation = (flow.allocations)[id]
+		if id <= 0 || allocation == null || !allocation.live || !allocation.owned_here || returned[id] || bootstrap_len(allocation.external_domains) != 0 {
+			continue
+		}
+		ids = bootstrap_append(ids, id)
+	}
+	sort.Ints(ids)
+	__range_values_46 = bootstrap_values(ids)
+	for int64 __range_index_46 = 0; __range_index_46 < bootstrap_len(__range_values_46); __range_index_46 += 1 {
+		id = __range_values_46[__range_index_46]
+		allocation = flow.allocations[id]
+		context.add_action(lifetime_cleanup, id, node, "function exits while allocation remains locally reachable only", allocation.policy)
+		allocation.live = false
+		if info = context.result.allocations[id]; info != null && info.destruction_reason == "" {
+			info.destruction_reason = "function return"
+		}
+	}
+}
+
+void finalize_function_state(lifetime_context* context, lifetime_flow* flow, Node node) { // translated Go receiver method
+	context.finalize_escape_state(flow)
+	ids = bootstrap_array()
+	__range_keys_47 = (flow.allocations).keys()
+	for int64 __range_index_47 = 0; __range_index_47 < bootstrap_len(__range_keys_47); __range_index_47 += 1 {
+		id = __range_keys_47[__range_index_47]
+		allocation = (flow.allocations)[id]
+		if id > 0 && allocation != null && allocation.live && allocation.owned_here && bootstrap_len(allocation.external_domains) == 0 {
+			ids = bootstrap_append(ids, id)
+		}
+	}
+	sort.Ints(ids)
+	__range_values_48 = bootstrap_values(ids)
+	for int64 __range_index_48 = 0; __range_index_48 < bootstrap_len(__range_values_48); __range_index_48 += 1 {
+		id = __range_values_48[__range_index_48]
+		allocation = flow.allocations[id]
+		context.add_action(lifetime_cleanup, id, node, "allocation does not escape function lifetime domain", allocation.policy)
+		allocation.live = false
+		if info = context.result.allocations[id]; info != null && info.destruction_reason == "" {
+			info.destruction_reason = "function exit"
+		}
+	}
+}
+
+void finalize_escape_state(lifetime_context* context, lifetime_flow* flow) { // translated Go receiver method
+	__range_keys_49 = (flow.allocations).keys()
+	for int64 __range_index_49 = 0; __range_index_49 < bootstrap_len(__range_keys_49); __range_index_49 += 1 {
+		id = __range_keys_49[__range_index_49]
+		allocation = (flow.allocations)[id]
+		if id <= 0 || allocation == null || !allocation.live || !allocation.owned_here {
+			continue
+		}
+		if bootstrap_len(allocation.external_domains) <= 1 {
+			continue
+		}
+		domains = bootstrap_array_with_capacity(bootstrap_len(allocation.external_domains))
+		__range_keys_50 = (allocation.external_domains).keys()
+		for int64 __range_index_50 = 0; __range_index_50 < bootstrap_len(__range_keys_50); __range_index_50 += 1 {
+			domain = __range_keys_50[__range_index_50]
+			domains = bootstrap_append(domains, domain)
+		}
+		sort.Strings(domains)
+		reason = "allocation escapes into multiple simultaneous lifetime domains: " + fmt.Sprint(domains)
+		if context.options.mecc_enabled {
+			if info = context.result.allocations[id]; info != null {
+				info.mecc = true
+				info.escaped = true
+				info.destruction_reason = "MECC estate reclamation"
+			}
+			context.add_action(lifetime_mecc, id, context.result.allocations[id].new_expr, reason, allocation.policy)
+			context.add_diagnostic(diagnostic_info, "MECC001", context.result.allocations[id].new_expr,
+				reason+fmt.Sprintf("; MECC estate management selected (compacting=%t)", allocation.policy.compacting))
+		} else if info = context.result.allocations[id]; info != null {
+			context.analyzer.add_error(context.path, info.new_expr, reason+"; build with --mecc=true to permit runtime estate management or provide an explicit deterministic lifetime path")
+		}
+	}
+}
+
+void add_action(lifetime_context* context, LifetimeActionKind kind, int64 allocation, Node node, string reason, MeccPolicy policy) { // translated Go receiver method
+	if node == null {
+		return
+	}
+	key = fmt.Sprintf("%s:%d:%d:%d", kind, allocation, node.Span().Start.Offset, node.Span().End.Offset)
+	if context.action_keys[key] {
+		return
+	}
+	context.action_keys[key] = true
+	context.result.lifetime_actions = bootstrap_append(context.result.lifetime_actions, LifetimeAction{kind: kind, allocation: allocation, node: node, reason: reason, policy: policy})
+}
+
+void add_lifetime_error(lifetime_context* context, Node node, string message) { // translated Go receiver method
+	context.analyzer.add_error(context.path, node, message)
+}
+
+void add_diagnostic(lifetime_context* context, DiagnosticLevel level, string code, Node node, string message) { // translated Go receiver method
+	span = token.Span{}
+	if node != null {
+		span = node.Span()
+	}
+	key = fmt.Sprintf("%s:%s:%s:%d", level, code, context.path, span.Start.Offset)
+	if context.diagnostic_keys[key] {
+		return
+	}
+	context.diagnostic_keys[key] = true
+	context.result.compiler_diagnostics = bootstrap_append(context.result.compiler_diagnostics, CompilerDiagnostic{level: level, code: code, message: message, source_path: context.path, source_span: span})
+}

@@ -1,0 +1,6 @@
+# name|repository|commit|version|license
+rapidhash|https://github.com/Nicoshev/rapidhash.git|516ba6f041dd6cde632f163988b5938f6f8dc2f9|v4 snapshot|MIT
+yyjson|https://github.com/ibireme/yyjson.git|9ddba001a4ea88e93b46932e5c5b87b222e19a5f|0.10.0|MIT
+# Protocol-only dependencies: fetched on demand when their runtime modules are built.
+llhttp|https://github.com/nodejs/llhttp.git|0e815792b167a9bd8ace259b95b7da953776c288|v9.4.3|MIT
+wslay|https://github.com/tatsuhiro-t/wslay.git|c9a84aa6df8512584c77c8cd15be9536b89c35aa|v1.1.1|MIT

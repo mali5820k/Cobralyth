@@ -1,0 +1,93 @@
+// Clyth Runtime Module: file-io
+// License: MIT
+// Thin POSIX/musl-backed file and filesystem operations.
+
+extern C string absolute_path(string path)
+extern C string path_dirname_copy(string path)
+extern C string glob_text(string pattern)
+extern C string directory_entries_text(string path)
+extern C string path_join2(string a, string b)
+extern C string path_join3(string a, string b, string c)
+extern C string path_join4(string a, string b, string c, string d)
+extern C string path_join5(string a, string b, string c, string d, string e)
+extern C string path_basename_copy(string path)
+extern C string path_extension_copy(string path)
+extern C string current_working_directory_copy()
+extern C string environment_value_copy(string name)
+extern C string make_temp_directory_copy(string prefix)
+
+
+extern C int32 path_exists(string path)
+extern C int32 file_exists(string path)
+extern C int32 directory_exists(string path)
+extern C int32 is_file(string path)
+extern C int32 is_directory(string path)
+extern C int32 is_symlink(string path)
+
+extern C int32 create_file(string path)
+extern C int32 create_directory(string path)
+extern C int32 create_directories(string path)
+extern C int32 delete_file(string path)
+extern C int32 delete_directory(string path)
+extern C int32 delete_path_recursive(string path)
+extern C int32 delete_symlink(string path)
+extern C int32 copy_file(string source_path, string destination_path)
+extern C int32 copy_directory(string source_path, string destination_path)
+extern C int32 copy_path(string source_path, string destination_path)
+extern C int32 rename_file(string old_path, string new_path)
+extern C int32 rename_directory(string old_path, string new_path)
+extern C int32 move_file(string source_path, string destination_path)
+extern C int32 move_directory(string source_path, string destination_path)
+extern C int32 create_symlink(string target_path, string link_path)
+extern C int32 create_hardlink(string target_path, string link_path)
+
+extern C int64 file_size(string path)
+extern C int64 directory_size(string path)
+extern C int64 directory_num_files(string path)
+extern C int8 permission_owner(string path)
+extern C int8 permission_group(string path)
+extern C int8 permission_other(string path)
+extern C int32 set_permissions(string path, int8 owner, int8 group, int8 other)
+extern C int32 chown_path(string path, int32 owner_uid, int32 group_gid)
+
+struct Permissions {
+    int8 owner,
+    int8 group,
+    int8 other,
+}
+
+Permissions get_permissions(string path) {
+    Permissions value = Permissions()
+    value.owner = permission_owner(path)
+    value.group = permission_group(path)
+    value.other = permission_other(path)
+    return value
+}
+
+extern C int32 write_text(string path, string content)
+extern C int32 overwrite_file(string path, string content)
+extern C int32 append_text(string path, string content)
+extern C int32 append_file(string path, string content)
+extern C int32 append_at_end(string path, string content)
+extern C int32 clear_file(string path)
+extern C int32 write_line(string path, string content)
+extern C int32 write_line_at(string path, int64 line_index, string content)
+extern C int32 append_line(string path, string content)
+extern C string read_text(string path)
+extern C string read_line(string path, int64 line_index)
+extern C int32 read_to_stdout(string path)
+extern C int32 read_line_to_stdout(string path, int64 line_index)
+extern C int32 list_files_to_stdout(string path)
+extern C int32 file_info_to_stdout(string path)
+extern C int32 directory_info_to_stdout(string path)
+extern C int32 dos2unix(string path)
+
+extern C int32 has_extension(string path, string extension)
+extern C int32 make_tarball(string source_path, string output_path, string compression, int32 level)
+extern C int32 extract_tarball(string archive_path, string output_directory)
+extern C int32 make_zip(string source_path, string output_path, int32 level)
+extern C int32 extract_zip(string archive_path, string output_directory)
+extern C int32 scp(string source_path, string destination)
+extern C int32 ssh(string server, string command)
+extern C int32 print(string text)
+extern C int32 println(string text)

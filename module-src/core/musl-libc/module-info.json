@@ -1,0 +1,11 @@
+{
+  "name": "musl-libc",
+  "version": "1.0.0",
+  "dependencies": [],
+  "licenses": {
+    "clyth": "licenses/clyth-wrapper-license.md"
+  },
+  "module-kind": "core",
+  "usage": "runtime",
+  "link-by-default": true
+}

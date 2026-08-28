@@ -1,0 +1,9 @@
+import collections
+import file-io
+struct N { int64 x }
+int32 main() {
+  Map<string, N*> m = Map<string, N*>()
+  N* n = m["x"]
+  if n == null { println("ok") }
+  return 0
+}

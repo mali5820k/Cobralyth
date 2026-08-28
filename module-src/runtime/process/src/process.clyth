@@ -1,0 +1,9 @@
+// Clyth Runtime Module: process
+// License: MIT
+// POSIX process helpers used by the compiler/toolchain and user programs.
+extern C int32 bash(string command)
+extern C string process_host_arch()
+extern C string process_look_path(string executable)
+extern C string process_shell_quote(string value)
+extern C string process_run_capture(string command)
+extern C int32 process_last_exit_status()

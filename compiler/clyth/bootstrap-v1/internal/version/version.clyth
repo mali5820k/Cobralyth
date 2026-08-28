@@ -1,0 +1,8 @@
+// AUTO-TRANSLATED BOOTSTRAP SEED FROM FROZEN GO V1.0.0 IMPLEMENTATION.
+// Source: compiler/go/internal/version/version.go
+// This file preserves implementation logic for the Go -> Clyth bootstrap port.
+
+// package version
+
+// Version is intentionally release-controlled. Repository layout is version agnostic.
+var Version = "dev"

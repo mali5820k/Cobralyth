@@ -1,0 +1,9 @@
+int32 read_global() {
+    return global_value
+}
+
+int32 global_value = 17
+
+int32 main() {
+    return read_global()
+}

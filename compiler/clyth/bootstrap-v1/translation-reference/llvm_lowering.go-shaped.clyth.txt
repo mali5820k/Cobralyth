@@ -1,0 +1,3407 @@
+// AUTO-TRANSLATED BOOTSTRAP SEED FROM FROZEN GO V1.0.0 IMPLEMENTATION.
+// Source: compiler/go/internal/compiler/llvm_lowering.go
+// This file preserves implementation logic for the Go -> Clyth bootstrap port.
+
+// package compiler
+
+// Go imports:
+// "fmt"
+// "strconv"
+// "strings"
+// "github.com/mali5820k/clyth-bootstrap/internal/frontend/ast"
+// "github.com/mali5820k/clyth-bootstrap/internal/frontend/parser"
+
+// IRValue is the SSA value returned by the textual LLVM lowering layer.
+// Aggregate Clyth values are deliberately represented by opaque LLVM pointers in
+// the bootstrap backend. This keeps native ABI details isolated while the frontend
+// and self-hosted compiler stabilize.
+struct IRValue {
+	string llvm_type
+	string value
+	SemanticType* type_info
+	fresh     bool // unique aggregate temporary; value-copy destinations may consume it directly
+}
+
+struct ir_local {
+	string address
+	SemanticType* type_info
+}
+
+struct value_cleanup {
+	string address
+	SemanticType* type_info
+}
+
+struct catch_context {
+	string error_value
+	string end_label
+	int64 block_depth
+}
+
+struct llvm_lowerer {
+	AnalysisResult* result
+	Program* program
+	string target
+	string[] strings
+	Map<string, string> declarations
+	Map<string, bool> defined
+	Map<string, StructInfo*> struct_info
+	Map<string, Map<string, int64>> enum_values
+	int64 register
+	int64 label
+	int64 lambda
+	string[] function_defs
+	string[] global_defs
+	Map<string, ir_local> globals
+	string[] current_lines
+	string current_block
+	Map<string, ir_local> locals
+	string[] break_labels
+	string[] continue_labels
+	int64[] break_cleanup_depths
+	int64[] continue_cleanup_depths
+	SemanticType* return_type
+	StructInfo* receiver
+	Map<string, SemanticType*> substitutions
+	GenericSpecialization[] external_specializations
+	string main_args_name
+	string main_argc_value
+	Map<Node, LifetimeAction[]> lifetime_actions
+	Map<int64, string> cleanup_slots
+	catch_context[] catch_stack
+	BlockStmt*[] block_stack
+	string[][] mecc_root_scopes
+	value_cleanup[][] value_cleanup_scopes
+}
+
+// lower_llvm_ir converts a semantically-resolved Clyth translation unit into
+// textual LLVM IR. The bootstrap backend favors a small, deterministic ABI:
+// primitive scalars retain their natural LLVM widths and Clyth aggregate values
+// are passed as opaque pointers.
+BootstrapTuple lower_llvm_ir(Program* program, AnalysisResult* result, string target) {
+	return lower_llvm_ir_with_specializations(program, result, target, null)
+}
+
+// lower_llvm_ir_with_specializations lowers a translation unit while honoring
+// concrete generic instantiations requested by another unit. This is what lets
+// a program instantiate List<int32> while the List template itself lives in a
+// separately compiled runtime-module source file.
+BootstrapTuple lower_llvm_ir_with_specializations(Program* program, AnalysisResult* result, string target, GenericSpecialization[] external_specializations) {
+	if target == "" {
+		target = "x86_64-unknown-linux-musl"
+	}
+	lowerer = &llvm_lowerer{
+		result: result, program: program, target: target,
+		declarations: bootstrap_empty_map(), defined: bootstrap_empty_map(),
+		struct_info: bootstrap_empty_map(), enum_values: bootstrap_empty_map(), globals: bootstrap_empty_map(),
+		external_specializations: external_specializations, substitutions: bootstrap_empty_map(),
+		lifetime_actions: bootstrap_empty_map(), cleanup_slots: bootstrap_empty_map(),
+	}
+	__range_values_1 = bootstrap_values(result.lifetime_actions)
+	for int64 __range_index_1 = 0; __range_index_1 < bootstrap_len(__range_values_1); __range_index_1 += 1 {
+		action = __range_values_1[__range_index_1]
+		lowerer.lifetime_actions[action.node] = bootstrap_append(lowerer.lifetime_actions[action.node], action)
+	}
+	lowerer.collect_types_and_defined_symbols()
+	lowerer.install_builtin_error_struct()
+	lowerer.emit_top_level()
+
+	output strings.Builder var
+	output.WriteString("; Clyth V1.0.0 bootstrap LLVM IR\n")
+	output.WriteString("target triple = \"")
+	output.WriteString(target)
+	output.WriteString("\"\n\n")
+
+	// new and constructor lowering share the ordinary native allocator. The
+	// final ownership pass is responsible for choosing matching destruction.
+	if !lowerer.defined["malloc"] {
+		lowerer.declarations["malloc"] = "declare ptr @malloc(i64)"
+	}
+	if !lowerer.defined["calloc"] {
+		lowerer.declarations["calloc"] = "declare ptr @calloc(i64, i64)"
+	}
+	if !lowerer.defined["strlen"] {
+		lowerer.declarations["strlen"] = "declare i64 @strlen(ptr)"
+	}
+	if !lowerer.defined["strcmp"] {
+		lowerer.declarations["strcmp"] = "declare i32 @strcmp(ptr, ptr)"
+	}
+	if !lowerer.defined["memcpy"] {
+		lowerer.declarations["memcpy"] = "declare ptr @memcpy(ptr, ptr, i64)"
+	}
+	if !lowerer.defined["snprintf"] {
+		lowerer.declarations["snprintf"] = "declare i32 @snprintf(ptr, i64, ptr, ...)"
+	}
+	if !lowerer.defined["free"] {
+		lowerer.declarations["free"] = "declare void @free(ptr)"
+	}
+	if !lowerer.defined["realloc"] {
+		lowerer.declarations["realloc"] = "declare ptr @realloc(ptr, i64)"
+	}
+	if !lowerer.defined["abort"] {
+		lowerer.declarations["abort"] = "declare void @abort() noreturn"
+	}
+	if result.mecc_enabled {
+		lowerer.declarations["clyth_mecc_adopt"] = "declare ptr @clyth_mecc_adopt(ptr, i1, ptr)"
+		lowerer.declarations["clyth_mecc_store"] = "declare void @clyth_mecc_store(ptr, ptr, ptr)"
+		lowerer.declarations["clyth_mecc_owner_release"] = "declare void @clyth_mecc_owner_release(ptr)"
+		lowerer.declarations["clyth_mecc_collapse"] = "declare void @clyth_mecc_collapse()"
+		lowerer.declarations["clyth_mecc_release"] = "declare void @clyth_mecc_release(ptr)"
+	}
+
+	__range_keys_2 = (lowerer.strings).keys()
+	for int64 __range_index_2 = 0; __range_index_2 < bootstrap_len(__range_keys_2); __range_index_2 += 1 {
+		index = __range_keys_2[__range_index_2]
+		text = (lowerer.strings)[index]
+		bytes = bootstrap_append([]byte(text), 0)
+		fmt.Fprintf(&output, "@.clyth.str.%d = private unnamed_addr constant [%d x i8] c\"%s\"\n", index, bootstrap_len(bytes), llvm_escape_bytes(bytes))
+	}
+	if bootstrap_len(lowerer.strings) > 0 {
+		output.WriteString("\n")
+	}
+	__range_values_3 = bootstrap_values(lowerer.global_defs)
+	for int64 __range_index_3 = 0; __range_index_3 < bootstrap_len(__range_values_3); __range_index_3 += 1 {
+		definition = __range_values_3[__range_index_3]
+		output.WriteString(definition)
+		output.WriteByte('\n')
+	}
+	if bootstrap_len(lowerer.global_defs) > 0 {
+		output.WriteByte('\n')
+	}
+
+	declaration_names = bootstrap_array_with_capacity(bootstrap_len(lowerer.declarations))
+	__range_keys_4 = (lowerer.declarations).keys()
+	for int64 __range_index_4 = 0; __range_index_4 < bootstrap_len(__range_keys_4); __range_index_4 += 1 {
+		name = __range_keys_4[__range_index_4]
+		if !lowerer.defined[name] {
+			declaration_names = bootstrap_append(declaration_names, name)
+		}
+	}
+	sort_strings(declaration_names)
+	__range_values_5 = bootstrap_values(declaration_names)
+	for int64 __range_index_5 = 0; __range_index_5 < bootstrap_len(__range_values_5); __range_index_5 += 1 {
+		name = __range_values_5[__range_index_5]
+		output.WriteString(lowerer.declarations[name])
+		output.WriteByte('\n')
+	}
+	if bootstrap_len(declaration_names) > 0 {
+		output.WriteByte('\n')
+	}
+	__range_values_6 = bootstrap_values(lowerer.function_defs)
+	for int64 __range_index_6 = 0; __range_index_6 < bootstrap_len(__range_values_6); __range_index_6 += 1 {
+		definition = __range_values_6[__range_index_6]
+		output.WriteString(definition)
+		if !strings.HasSuffix(definition, "\n") {
+			output.WriteByte('\n')
+		}
+		output.WriteByte('\n')
+	}
+	return []byte(output.String()), null
+}
+
+void sort_strings(string[] values) {
+	for i = 1; i < bootstrap_len(values); i++ {
+		for j = i; j > 0 && values[j] < values[j-1]; j-- {
+			values[j], values[j-1] = values[j-1], values[j]
+		}
+	}
+}
+
+string llvm_escape_bytes(uint8[] bytes) {
+	builder strings.Builder var
+	__range_values_7 = bootstrap_values(bytes)
+	for int64 __range_index_7 = 0; __range_index_7 < bootstrap_len(__range_values_7); __range_index_7 += 1 {
+		value = __range_values_7[__range_index_7]
+		if value >= 32 && value <= 126 && value != '"' && value != '\\' {
+			builder.WriteByte(value)
+		} else {
+			fmt.Fprintf(&builder, "\\%02X", value)
+		}
+	}
+	return builder.String()
+}
+
+GenericSpecialization[] requested_specializations(llvm_lowerer* lowerer, string base_name) { // translated Go receiver method
+	seen = bootstrap_empty_map()
+	result = bootstrap_array()
+	all = bootstrap_append(append(bootstrap_array(), lowerer.result.specializations...), lowerer.external_specializations...)
+	__range_values_8 = bootstrap_values(all)
+	for int64 __range_index_8 = 0; __range_index_8 < bootstrap_len(__range_values_8); __range_index_8 += 1 {
+		specialization = __range_values_8[__range_index_8]
+		if specialization.base_name != base_name || !specialization_is_concrete(specialization) {
+			continue
+		}
+		key = specialization_name(base_name, specialization.type_arguments)
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		result = bootstrap_append(result, specialization)
+	}
+	return result
+}
+
+void collect_concrete_generic_types(SemanticType* type_info, Map<string, GenericSpecialization> found) {
+	if type_info == null {
+		return
+	}
+	if bootstrap_len(type_info.generic_args) > 0 {
+		specialization = GenericSpecialization{base_name: type_info.name, concrete_name: specialization_name(type_info.name, type_info.generic_args), type_arguments: type_info.generic_args}
+		if specialization_is_concrete(specialization) {
+			found[specialization.concrete_name] = specialization
+		}
+	}
+	__range_values_9 = bootstrap_values(type_info.generic_args)
+	for int64 __range_index_9 = 0; __range_index_9 < bootstrap_len(__range_values_9); __range_index_9 += 1 {
+		argument = __range_values_9[__range_index_9]
+		collect_concrete_generic_types(argument, found)
+	}
+	if type_info.callable != null {
+		collect_concrete_generic_types(type_info.callable.return_type, found)
+		__range_values_10 = bootstrap_values(type_info.callable.parameters)
+		for int64 __range_index_10 = 0; __range_index_10 < bootstrap_len(__range_values_10); __range_index_10 += 1 {
+			parameter = __range_values_10[__range_index_10]
+			collect_concrete_generic_types(parameter, found)
+		}
+	}
+}
+
+void expand_nested_specializations(llvm_lowerer* lowerer) { // translated Go receiver method
+	found = bootstrap_empty_map()
+	__range_values_11 = bootstrap_values(bootstrap_append(append(bootstrap_array(), lowerer.result.specializations...), lowerer.external_specializations...))
+	for int64 __range_index_11 = 0; __range_index_11 < bootstrap_len(__range_values_11); __range_index_11 += 1 {
+		specialization = __range_values_11[__range_index_11]
+		if specialization_is_concrete(specialization) {
+			found[specialization.concrete_name] = specialization
+		}
+	}
+	changed = true
+	for changed {
+		changed = false
+		__range_values_12 = bootstrap_values(found)
+		for int64 __range_index_12 = 0; __range_index_12 < bootstrap_len(__range_values_12); __range_index_12 += 1 {
+			specialization = __range_values_12[__range_index_12]
+			template = lowerer.struct_info[specialization.base_name]
+			if template == null {
+				continue
+			}
+			concrete = specialized_struct_info(template, specialization.type_arguments)
+			__range_values_13 = bootstrap_values(concrete.fields)
+			for int64 __range_index_13 = 0; __range_index_13 < bootstrap_len(__range_values_13); __range_index_13 += 1 {
+				field = __range_values_13[__range_index_13]
+				before = bootstrap_len(found)
+				collect_concrete_generic_types(field.type_info, found)
+				if bootstrap_len(found) > before {
+					changed = true
+				}
+			}
+			__range_values_14 = bootstrap_values(concrete.methods)
+			for int64 __range_index_14 = 0; __range_index_14 < bootstrap_len(__range_values_14); __range_index_14 += 1 {
+				method = __range_values_14[__range_index_14]
+				before = bootstrap_len(found)
+				collect_concrete_generic_types(method.type_info, found)
+				if bootstrap_len(found) > before {
+					changed = true
+				}
+			}
+		}
+	}
+	__range_values_15 = bootstrap_values(found)
+	for int64 __range_index_15 = 0; __range_index_15 < bootstrap_len(__range_values_15); __range_index_15 += 1 {
+		specialization = __range_values_15[__range_index_15]
+		present = false
+		__range_values_16 = bootstrap_values(lowerer.external_specializations)
+		for int64 __range_index_16 = 0; __range_index_16 < bootstrap_len(__range_values_16); __range_index_16 += 1 {
+			existing = __range_values_16[__range_index_16]
+			if existing.concrete_name == specialization.concrete_name {
+				present = true
+				break
+			}
+		}
+		if !present {
+			lowerer.external_specializations = bootstrap_append(lowerer.external_specializations, specialization)
+		}
+	}
+}
+
+void collect_types_and_defined_symbols(llvm_lowerer* lowerer) { // translated Go receiver method
+	// Imported structs participate in field/method lowering even when their bodies
+	// are linked from a separate source/module object.
+	__range_values_17 = bootstrap_values(lowerer.result.namespaces)
+	for int64 __range_index_17 = 0; __range_index_17 < bootstrap_len(__range_values_17); __range_index_17 += 1 {
+		namespace = __range_values_17[__range_index_17]
+		__range_keys_18 = (namespace.structs).keys()
+		for int64 __range_index_18 = 0; __range_index_18 < bootstrap_len(__range_keys_18); __range_index_18 += 1 {
+			name = __range_keys_18[__range_index_18]
+			info = (namespace.structs)[name]
+			if lowerer.struct_info[name] == null {
+				lowerer.struct_info[name] = info
+			}
+			__range_values_19 = bootstrap_values(lowerer.requested_specializations(name))
+			for int64 __range_index_19 = 0; __range_index_19 < bootstrap_len(__range_values_19); __range_index_19 += 1 {
+				specialization = __range_values_19[__range_index_19]
+				concrete = specialized_struct_info(info, specialization.type_arguments)
+				lowerer.struct_info[concrete.name] = concrete
+			}
+		}
+	}
+	lowerer.expand_nested_specializations()
+	__range_keys_20 = (lowerer.struct_info).keys()
+	for int64 __range_index_20 = 0; __range_index_20 < bootstrap_len(__range_keys_20); __range_index_20 += 1 {
+		name = __range_keys_20[__range_index_20]
+		info = (lowerer.struct_info)[name]
+		if bootstrap_len(info.generic_parameters) == 0 {
+			continue
+		}
+		__range_values_21 = bootstrap_values(lowerer.requested_specializations(name))
+		for int64 __range_index_21 = 0; __range_index_21 < bootstrap_len(__range_values_21); __range_index_21 += 1 {
+			specialization = __range_values_21[__range_index_21]
+			concrete = specialized_struct_info(info, specialization.type_arguments)
+			lowerer.struct_info[concrete.name] = concrete
+		}
+	}
+	__range_values_22 = bootstrap_values(lowerer.program.Declarations)
+	for int64 __range_index_22 = 0; __range_index_22 < bootstrap_len(__range_values_22); __range_index_22 += 1 {
+		declaration = __range_values_22[__range_index_22]
+		switch item = declaration.(type) { // TODO lower switch to if/else
+		case *ast.StructDecl:
+			info = lowerer.result.root_namespace.structs[item.Name]
+			if info != null {
+				lowerer.struct_info[item.Name] = info
+			}
+			if bootstrap_len(item.GenericParameters) == 0 {
+				__range_values_23 = bootstrap_values(item.Members)
+				for int64 __range_index_23 = 0; __range_index_23 < bootstrap_len(__range_values_23); __range_index_23 += 1 {
+					member = __range_values_23[__range_index_23]
+					switch member_item = member.(type) { // TODO lower switch to if/else
+					case *ast.MethodDecl:
+						lowerer.defined[llvm_method_name(item.Name, member_item.Name)] = true
+					case *ast.ConstructorMember:
+						lowerer.defined[llvm_constructor_name(item.Name)] = true
+					case *ast.DestructorMember:
+						lowerer.defined[llvm_destructor_name(item.Name)] = true
+					}
+				}
+			} else if info != null {
+				__range_values_24 = bootstrap_values(lowerer.requested_specializations(item.Name))
+				for int64 __range_index_24 = 0; __range_index_24 < bootstrap_len(__range_values_24); __range_index_24 += 1 {
+					specialization = __range_values_24[__range_index_24]
+					concrete = specialized_struct_info(info, specialization.type_arguments)
+					lowerer.struct_info[concrete.name] = concrete
+					__range_values_25 = bootstrap_values(item.Members)
+					for int64 __range_index_25 = 0; __range_index_25 < bootstrap_len(__range_values_25); __range_index_25 += 1 {
+						member = __range_values_25[__range_index_25]
+						switch member_item = member.(type) { // TODO lower switch to if/else
+						case *ast.MethodDecl:
+							lowerer.defined[llvm_method_name(concrete.name, member_item.Name)] = true
+						case *ast.ConstructorMember:
+							lowerer.defined[llvm_constructor_name(concrete.name)] = true
+						}
+					}
+				}
+			}
+		case *ast.MethodBlockDecl:
+			receiver_name = item.Receiver.Name
+			if info = lowerer.result.root_namespace.structs[receiver_name]; info != null {
+				lowerer.struct_info[receiver_name] = info
+			}
+			__range_values_26 = bootstrap_values(item.Members)
+			for int64 __range_index_26 = 0; __range_index_26 < bootstrap_len(__range_values_26); __range_index_26 += 1 {
+				member = __range_values_26[__range_index_26]
+				if method, ok = member.(*ast.MethodDecl); ok {
+					lowerer.defined[llvm_method_name(receiver_name, method.Name)] = true
+				}
+			}
+		case *ast.FunctionDecl:
+			lowerer.defined[llvm_function_name(item)] = item.Body != null && !item.Extern
+			if item.Extern {
+				lowerer.declarations[item.Name] = lowerer.function_declaration(item)
+			}
+		case *ast.GlobalVarDecl:
+			sem = lowerer.resolve_ref(item.Type)
+			name = sanitize_llvm_name(item.Name)
+			lowerer.globals[item.Name] = ir_local{address: "@" + name, type_info: sem}
+			initial = lowerer.constant_initializer(item.Initializer, sem)
+			lowerer.global_defs = bootstrap_append(lowerer.global_defs, fmt.Sprintf("@%s = global %s %s", name, lowerer.llvm_type(sem), initial))
+		case *ast.EnumDecl:
+			values = bootstrap_empty_map()
+			next = int64(0)
+			__range_values_27 = bootstrap_values(item.Members)
+			for int64 __range_index_27 = 0; __range_index_27 < bootstrap_len(__range_values_27); __range_index_27 += 1 {
+				member = __range_values_27[__range_index_27]
+				if literal, ok = member.Value.(*ast.LiteralExpr); ok && literal.Kind == ast.LiteralInteger {
+					if parsed, err = strconv.ParseInt(strings.TrimSpace(literal.Raw), 0, 64); err == null {
+						next = parsed
+					}
+				}
+				values[member.Name] = next
+				next += 1
+			}
+			lowerer.enum_values[item.Name] = values
+		}
+	}
+}
+
+void install_builtin_error_struct(llvm_lowerer* lowerer) { // translated Go receiver method
+	if lowerer.struct_info["Error"] != null {
+		return
+	}
+	info = &StructInfo{name: "Error", fields: bootstrap_empty_map(), methods: bootstrap_empty_map(), field_order: bootstrap_array("error", "error_type", "error_message")}
+	info.fields["error"] = &Symbol{name: "error", kind: symbol_field, type_info: &SemanticType{kind: type_bool, name: "bool"}}
+	info.fields["error_type"] = &Symbol{name: "error_type", kind: symbol_field, type_info: &SemanticType{kind: type_error_type, name: "ErrorType"}}
+	info.fields["error_message"] = &Symbol{name: "error_message", kind: symbol_field, type_info: &SemanticType{kind: type_string, name: "string"}}
+	// A non-default synthetic signature prevents default_struct_value from
+	// expecting an Error__ctor symbol. Error values are created by catch().
+	info.constructors = []*SemanticCallable{{return_type: &SemanticType{kind: type_struct, name: "Error"}, parameters: []*SemanticType{{kind: type_bool, name: "bool"}}}}
+	lowerer.struct_info["Error"] = info
+}
+
+void emit_top_level(llvm_lowerer* lowerer) { // translated Go receiver method
+	__range_values_28 = bootstrap_values(lowerer.program.Declarations)
+	for int64 __range_index_28 = 0; __range_index_28 < bootstrap_len(__range_values_28); __range_index_28 += 1 {
+		declaration = __range_values_28[__range_index_28]
+		switch item = declaration.(type) { // TODO lower switch to if/else
+		case *ast.FunctionDecl:
+			if item.Body != null && !item.Extern {
+				lowerer.emit_function(item, null)
+			}
+		case *ast.StructDecl:
+			template = lowerer.struct_info[item.Name]
+			if bootstrap_len(item.GenericParameters) == 0 {
+				lowerer.emit_struct_declaration(item, template, null)
+				continue
+			}
+			__range_values_29 = bootstrap_values(lowerer.requested_specializations(item.Name))
+			for int64 __range_index_29 = 0; __range_index_29 < bootstrap_len(__range_values_29); __range_index_29 += 1 {
+				specialization = __range_values_29[__range_index_29]
+				concrete = lowerer.struct_info[specialization_name(item.Name, specialization.type_arguments)]
+				if concrete == null {
+					concrete = specialized_struct_info(template, specialization.type_arguments)
+					lowerer.struct_info[concrete.name] = concrete
+				}
+				subs = build_substitutions(template.generic_parameters, specialization.type_arguments)
+				lowerer.emit_struct_declaration(item, concrete, subs)
+			}
+		case *ast.MethodBlockDecl:
+			info = lowerer.struct_info[item.Receiver.Name]
+			__range_values_30 = bootstrap_values(item.Members)
+			for int64 __range_index_30 = 0; __range_index_30 < bootstrap_len(__range_values_30); __range_index_30 += 1 {
+				member = __range_values_30[__range_index_30]
+				if method, ok = member.(*ast.MethodDecl); ok {
+					lowerer.emit_function(&method.FunctionDecl, info)
+				}
+			}
+		}
+	}
+}
+
+void emit_struct_declaration(llvm_lowerer* lowerer, StructDecl* item, StructInfo* info, Map<string, SemanticType*> substitutions) { // translated Go receiver method
+	if info == null {
+		return
+	}
+	saved = lowerer.substitutions
+	if substitutions == null {
+		lowerer.substitutions = bootstrap_empty_map()
+	} else {
+		lowerer.substitutions = substitutions
+	}
+	bootstrap_defer(func() { lowerer.substitutions = saved }() // TODO lower defer to explicit cleanup/MECC scope)
+	has_constructor = false
+	__range_values_31 = bootstrap_values(item.Members)
+	for int64 __range_index_31 = 0; __range_index_31 < bootstrap_len(__range_values_31); __range_index_31 += 1 {
+		member = __range_values_31[__range_index_31]
+		switch member_item = member.(type) { // TODO lower switch to if/else
+		case *ast.MethodDecl:
+			lowerer.emit_function(&member_item.FunctionDecl, info)
+		case *ast.ConstructorMember:
+			has_constructor = true
+			lowerer.emit_constructor(info.name, &member_item.ConstructorDecl, info)
+		case *ast.DestructorMember:
+			lowerer.emit_destructor(info.name, &member_item.DestructorDecl, info)
+		}
+	}
+	if !has_constructor {
+		lowerer.emit_default_constructor(info.name)
+	}
+}
+
+string llvm_function_name(FunctionDecl* function) {
+	if function.Receiver != "" {
+		return llvm_method_name(function.Receiver, function.Name)
+	}
+	return sanitize_llvm_name(function.Name)
+}
+
+string llvm_method_name(string receiver, string method) {
+	return sanitize_llvm_name(receiver + "__" + method)
+}
+
+string llvm_constructor_name(string name) {
+string llvm_destructor_name(string name) {
+
+string sanitize_llvm_name(string name) {
+	builder strings.Builder var
+	__range_values_32 = bootstrap_values(name)
+	for int64 __range_index_32 = 0; __range_index_32 < bootstrap_len(__range_values_32); __range_index_32 += 1 {
+		r = __range_values_32[__range_index_32]
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '_' || r == '.' {
+			builder.WriteRune(r)
+		} else {
+			builder.WriteByte('_')
+		}
+	}
+	if builder.Len() == 0 {
+		return "anonymous"
+	}
+	return builder.String()
+}
+
+SemanticType* variadic_parameter_type(llvm_lowerer* lowerer, Parameter* parameter) { // translated Go receiver method
+	if parameter == null || parameter.Type == null {
+		return &SemanticType{kind: type_unknown}
+	}
+	if parameter.Type.Name == "auto" {
+		return &SemanticType{kind: type_array, name: "auto_variadic", array_dimensions: []SemanticArrayDimension{{dynamic: true}}}
+	}
+	element = lowerer.resolve_ref(parameter.Type)
+	array = clone_type(element)
+	array.kind = type_array
+	array.array_dimensions = []SemanticArrayDimension{{dynamic: true}}
+	return array
+}
+
+string function_declaration(llvm_lowerer* lowerer, FunctionDecl* function) { // translated Go receiver method
+	return_type = lowerer.llvm_type_from_ref(function.ReturnType)
+	parameters = bootstrap_array_with_capacity(bootstrap_len(function.Parameters)+1)
+	if function.Receiver != "" {
+		parameters = bootstrap_append(parameters, "ptr")
+	}
+	variadic = false
+	__range_values_33 = bootstrap_values(function.Parameters)
+	for int64 __range_index_33 = 0; __range_index_33 < bootstrap_len(__range_values_33); __range_index_33 += 1 {
+		parameter = __range_values_33[__range_index_33]
+		if parameter.Variadic {
+			if parameter.Type != null {
+				parameters = bootstrap_append(parameters, "ptr")
+			} else {
+				variadic = true
+			}
+			continue
+		}
+		parameters = bootstrap_append(parameters, lowerer.llvm_type_from_ref(parameter.Type))
+	}
+	if variadic {
+		parameters = bootstrap_append(parameters, "...")
+	}
+	return fmt.Sprintf("declare %s @%s(%s)", return_type, llvm_function_name(function), strings.Join(parameters, ", "))
+}
+
+string llvm_type_from_ref(llvm_lowerer* lowerer, TypeRef* ref) { // translated Go receiver method
+	return lowerer.llvm_type(lowerer.resolve_ref(ref))
+}
+
+string llvm_type(llvm_lowerer* lowerer, SemanticType* type_info) { // translated Go receiver method
+	if type_info == null {
+		return "ptr"
+	}
+	if type_info.pointer_depth > 0 || bootstrap_len(type_info.array_dimensions) > 0 || type_info.callable != null {
+		return "ptr"
+	}
+	switch type_info.kind { // TODO lower switch to if/else
+	case type_void:
+		return "void"
+	case type_bool:
+		return "i1"
+	case type_string, type_struct, type_protocol, type_namespace, type_pointer, type_array, type_callable, type_null:
+		return "ptr"
+	case type_char:
+		return "i8"
+	case type_float:
+		if type_info.name == "float32" {
+			return "float"
+		}
+		return "double"
+	case type_enum, type_error_type:
+		return "i32"
+	case type_integer:
+		switch type_info.name { // TODO lower switch to if/else
+		case "int8", "uint8":
+			return "i8"
+		case "int16", "uint16":
+			return "i16"
+		case "int32", "uint32":
+			return "i32"
+		default:
+			return "i64"
+		}
+	}
+	switch type_info.name { // TODO lower switch to if/else
+	case "void":
+		return "void"
+	case "bool":
+		return "i1"
+	case "char":
+		return "i8"
+	case "int8", "uint8":
+		return "i8"
+	case "int16", "uint16":
+		return "i16"
+	case "int32", "uint32":
+		return "i32"
+	case "int64", "uint64", "uintptr":
+		return "i64"
+	case "float32":
+		return "float"
+	case "float64":
+		return "double"
+	}
+	return "ptr"
+}
+
+string next_register(llvm_lowerer* lowerer) { // translated Go receiver method
+	lowerer.register++
+	return fmt.Sprintf("%%v%d", lowerer.register)
+}
+string next_label(llvm_lowerer* lowerer, string prefix) { // translated Go receiver method
+	lowerer.label++
+	return fmt.Sprintf("%s.%d", prefix, lowerer.label)
+}
+void line(llvm_lowerer* lowerer, string format, string[] args) { // translated Go receiver method
+	lowerer.current_lines = bootstrap_append(lowerer.current_lines, "  "+fmt.Sprintf(format, args...))
+}
+void raw_line(llvm_lowerer* lowerer, string text) { // translated Go receiver method
+	lowerer.current_lines = bootstrap_append(lowerer.current_lines, text)
+	if strings.HasSuffix(text, ":") {
+		lowerer.current_block = strings.TrimSuffix(text, ":")
+	}
+}
+
+void emit_function(llvm_lowerer* lowerer, FunctionDecl* function, StructInfo* receiver) { // translated Go receiver method
+	lowerer.register, lowerer.label = 0, 0
+	lowerer.current_lines = null
+	lowerer.locals = bootstrap_empty_map()
+	lowerer.break_labels, lowerer.continue_labels = null, null
+	lowerer.break_cleanup_depths, lowerer.continue_cleanup_depths = null, null
+	lowerer.receiver = receiver
+	return_sem = lowerer.resolve_ref(function.ReturnType)
+	lowerer.return_type = return_sem
+
+	parameters = bootstrap_array()
+	lowerer.main_args_name, lowerer.main_argc_value = "", ""
+	main_argv = function.Name == "main" && function.Receiver == "" && bootstrap_len(function.Parameters) == 1 && function.Parameters[0].Type != null && function.Parameters[0].Type.Name == "string" && bootstrap_len(function.Parameters[0].Type.Arrays) > 0
+	if receiver != null || function.Receiver != "" {
+		parameters = bootstrap_append(parameters, "ptr %arg.this")
+	}
+	if main_argv {
+		parameters = bootstrap_append(parameters, "i32 %clyth.argc", "ptr %clyth.argv")
+		lowerer.main_args_name = function.Parameters[0].Name
+		lowerer.main_argc_value = "%clyth.argc"
+	} else {
+		__range_keys_34 = (function.Parameters).keys()
+		for int64 __range_index_34 = 0; __range_index_34 < bootstrap_len(__range_keys_34); __range_index_34 += 1 {
+			index = __range_keys_34[__range_index_34]
+			parameter = (function.Parameters)[index]
+			if parameter.Variadic {
+				if parameter.Type != null {
+					parameters = bootstrap_append(parameters, fmt.Sprintf("ptr %%arg.%d", index))
+				}
+				continue
+			}
+			parameters = bootstrap_append(parameters, fmt.Sprintf("%s %%arg.%d", lowerer.llvm_type_from_ref(parameter.Type), index))
+		}
+	}
+	function_name = llvm_function_name(function)
+	if receiver != null {
+		function_name = llvm_method_name(receiver.name, function.Name)
+	}
+	lowerer.raw_line(fmt.Sprintf("define %s @%s(%s) {", lowerer.llvm_type_from_ref(function.ReturnType), function_name, strings.Join(parameters, ", ")))
+	lowerer.raw_line("entry:")
+	lowerer.cleanup_slots = bootstrap_empty_map()
+	lowerer.mecc_root_scopes = null
+	lowerer.value_cleanup_scopes = null
+	lowerer.prepare_cleanup_slots(function.Body)
+	if receiver != null || function.Receiver != "" {
+		lowerer.locals["this"] = ir_local{address: "%arg.this", type_info: &SemanticType{kind: type_struct, name: receiver_name(receiver, function)}}
+	}
+	__range_keys_35 = (function.Parameters).keys()
+	for int64 __range_index_35 = 0; __range_index_35 < bootstrap_len(__range_keys_35); __range_index_35 += 1 {
+		index = __range_keys_35[__range_index_35]
+		parameter = (function.Parameters)[index]
+		if parameter.Variadic && parameter.Type == null {
+			continue
+		}
+		sem = lowerer.resolve_ref(parameter.Type)
+		if parameter.Variadic {
+			sem = lowerer.variadic_parameter_type(parameter)
+		}
+		ty = lowerer.llvm_type(sem)
+		address = lowerer.next_register()
+		lowerer.line("%s = alloca %s", address, ty)
+		if main_argv {
+			header = lowerer.next_register()
+			lowerer.line("%s = call ptr @malloc(i64 16)", header)
+			data_slot = lowerer.next_register()
+			lowerer.line("%s = getelementptr i8, ptr %s, i64 0", data_slot, header)
+			lowerer.line("store ptr %%clyth.argv, ptr %s", data_slot)
+			length_slot = lowerer.next_register()
+			lowerer.line("%s = getelementptr i8, ptr %s, i64 8", length_slot, header)
+			argc64 = lowerer.next_register()
+			lowerer.line("%s = sext i32 %%clyth.argc to i64", argc64)
+			lowerer.line("store i64 %s, ptr %s", argc64, length_slot)
+			lowerer.line("store ptr %s, ptr %s", header, address)
+		} else {
+			lowerer.line("store %s %%arg.%d, ptr %s", ty, index, address)
+		}
+		lowerer.locals[parameter.Name] = ir_local{address: address, type_info: sem}
+	}
+	terminated = lowerer.emit_block(function.Body)
+	if !terminated {
+		lowerer.emit_default_return(return_sem)
+	}
+	lowerer.raw_line("}")
+	lowerer.function_defs = bootstrap_append(lowerer.function_defs, strings.Join(lowerer.current_lines, "\n"))
+}
+
+string receiver_name(StructInfo* receiver, FunctionDecl* function) {
+	if receiver != null {
+		return receiver.name
+	}
+	return function.Receiver
+}
+
+void emit_constructor(llvm_lowerer* lowerer, string name, ConstructorDecl* constructor, StructInfo* info) { // translated Go receiver method
+	lowerer.register, lowerer.label = 0, 0
+	lowerer.current_lines = null
+	lowerer.locals = bootstrap_empty_map()
+	lowerer.break_labels, lowerer.continue_labels = null, null
+	lowerer.break_cleanup_depths, lowerer.continue_cleanup_depths = null, null
+	lowerer.receiver = info
+	lowerer.return_type = &SemanticType{kind: type_struct, name: name, pointer_depth: 1}
+	parameters = bootstrap_array()
+	__range_keys_36 = (constructor.Parameters).keys()
+	for int64 __range_index_36 = 0; __range_index_36 < bootstrap_len(__range_keys_36); __range_index_36 += 1 {
+		index = __range_keys_36[__range_index_36]
+		parameter = (constructor.Parameters)[index]
+		parameters = bootstrap_append(parameters, fmt.Sprintf("%s %%arg.%d", lowerer.llvm_type_from_ref(parameter.Type), index))
+	}
+	lowerer.raw_line(fmt.Sprintf("define ptr @%s(%s) {", llvm_constructor_name(name), strings.Join(parameters, ", ")))
+	lowerer.raw_line("entry:")
+	lowerer.cleanup_slots = bootstrap_empty_map()
+	lowerer.mecc_root_scopes = null
+	lowerer.value_cleanup_scopes = null
+	lowerer.prepare_cleanup_slots(constructor.Body)
+	object = lowerer.next_register()
+	lowerer.line("%s = call ptr @calloc(i64 1, i64 %d)", object, lowerer.struct_storage_size(info))
+	lowerer.initialize_struct_fields(object, info)
+	lowerer.locals["this"] = ir_local{address: object, type_info: &SemanticType{kind: type_struct, name: name}}
+	__range_keys_37 = (constructor.Parameters).keys()
+	for int64 __range_index_37 = 0; __range_index_37 < bootstrap_len(__range_keys_37); __range_index_37 += 1 {
+		index = __range_keys_37[__range_index_37]
+		parameter = (constructor.Parameters)[index]
+		sem = lowerer.resolve_ref(parameter.Type)
+		ty = lowerer.llvm_type(sem)
+		address = lowerer.next_register()
+		lowerer.line("%s = alloca %s", address, ty)
+		lowerer.line("store %s %%arg.%d, ptr %s", ty, index, address)
+		lowerer.locals[parameter.Name] = ir_local{address: address, type_info: sem}
+	}
+	lowerer.emit_block(constructor.Body)
+	lowerer.emit_mecc_clear_all_roots()
+	lowerer.line("ret ptr %s", object)
+	lowerer.raw_line("}")
+	lowerer.function_defs = bootstrap_append(lowerer.function_defs, strings.Join(lowerer.current_lines, "\n"))
+}
+
+void emit_destructor(llvm_lowerer* lowerer, string name, DestructorDecl* destructor, StructInfo* info) { // translated Go receiver method
+	lowerer.register, lowerer.label = 0, 0
+	lowerer.current_lines = null
+	lowerer.locals = bootstrap_empty_map()
+	lowerer.cleanup_slots = bootstrap_empty_map()
+	lowerer.mecc_root_scopes = null
+	lowerer.value_cleanup_scopes = null
+	lowerer.receiver = info
+	lowerer.return_type = &SemanticType{kind: type_void, name: "void"}
+	lowerer.raw_line(fmt.Sprintf("define void @%s(ptr %%arg.this) {", llvm_destructor_name(name)))
+	lowerer.raw_line("entry:")
+	lowerer.prepare_cleanup_slots(destructor.Body)
+	lowerer.locals["this"] = ir_local{address: "%arg.this", type_info: &SemanticType{kind: type_struct, name: name}}
+	terminated = lowerer.emit_block(destructor.Body)
+	if !terminated {
+		lowerer.emit_mecc_function_frontier()
+		lowerer.line("ret void")
+	}
+	lowerer.raw_line("}")
+	lowerer.function_defs = bootstrap_append(lowerer.function_defs, strings.Join(lowerer.current_lines, "\n"))
+}
+
+void emit_default_constructor(llvm_lowerer* lowerer, string name) { // translated Go receiver method
+	fn = llvm_constructor_name(name)
+	if lowerer.defined[fn] {
+		return
+	}
+	lowerer.defined[fn] = true
+	info = lowerer.struct_info[name]
+	lowerer.register, lowerer.label = 0, 0
+	lowerer.current_lines = null
+	lowerer.raw_line(fmt.Sprintf("define ptr @%s() {", fn))
+	lowerer.raw_line("entry:")
+	object = lowerer.next_register()
+	lowerer.line("%s = call ptr @calloc(i64 1, i64 %d)", object, lowerer.struct_storage_size(info))
+	lowerer.initialize_struct_fields(object, info)
+	lowerer.line("ret ptr %s", object)
+	lowerer.raw_line("}")
+	lowerer.function_defs = bootstrap_append(lowerer.function_defs, strings.Join(lowerer.current_lines, "\n"))
+}
+
+SemanticType* resolve_ref(llvm_lowerer* lowerer, TypeRef* ref) { // translated Go receiver method
+	if ref == null {
+		return &SemanticType{kind: type_unknown}
+	}
+	if replacement = lowerer.substitutions[ref.Name]; replacement != null {
+		result = clone_type(replacement)
+		result.pointer_depth += ref.PointerDepth
+		result.is_const = result.is_const || ref.Const
+		__range_values_38 = bootstrap_values(ref.Arrays)
+		for int64 __range_index_38 = 0; __range_index_38 < bootstrap_len(__range_values_38); __range_index_38 += 1 {
+			dimension = __range_values_38[__range_index_38]
+			result.array_dimensions = bootstrap_append(result.array_dimensions, SemanticArrayDimension{dynamic: dimension.Dynamic, size: array_dimension_size(dimension)})
+		}
+		if bootstrap_len(result.array_dimensions) > 0 {
+			result.kind = type_array
+		} else if result.pointer_depth > 0 {
+			result.kind = type_pointer
+		}
+		return result
+	}
+	result = &SemanticType{name: ref.Name, pointer_depth: ref.PointerDepth, is_const: ref.Const}
+	__range_values_39 = bootstrap_values(ref.GenericArgs)
+	for int64 __range_index_39 = 0; __range_index_39 < bootstrap_len(__range_values_39); __range_index_39 += 1 {
+		argument = __range_values_39[__range_index_39]
+		result.generic_args = bootstrap_append(result.generic_args, lowerer.resolve_ref(argument))
+	}
+	switch ref.Name { // TODO lower switch to if/else
+	case "void":
+		result.kind = type_void
+	case "bool":
+		result.kind = type_bool
+	case "char":
+		result.kind = type_char
+	case "int8", "int16", "int32", "int64", "uint8", "uint16", "uint32", "uint64", "uintptr":
+		result.kind = type_integer
+	case "float32", "float64":
+		result.kind = type_float
+	case "string":
+		result.kind = type_string
+	default:
+		if _, ok = lowerer.enum_values[ref.Name]; ok {
+			result.kind = type_enum
+		} else {
+			result.kind = type_struct
+		}
+	}
+	__range_values_40 = bootstrap_values(ref.Arrays)
+	for int64 __range_index_40 = 0; __range_index_40 < bootstrap_len(__range_values_40); __range_index_40 += 1 {
+		dimension = __range_values_40[__range_index_40]
+		result.array_dimensions = bootstrap_append(result.array_dimensions, SemanticArrayDimension{dynamic: dimension.Dynamic, size: array_dimension_size(dimension)})
+	}
+	if ref.PointerDepth > 0 {
+		result.kind = type_pointer
+	}
+	if bootstrap_len(ref.Arrays) > 0 {
+		result.kind = type_array
+	}
+	if ref.Callable != null {
+		result.kind = type_callable
+		callable = &SemanticCallable{return_type: lowerer.resolve_ref(ref.Callable.Return)}
+		__range_values_41 = bootstrap_values(ref.Callable.Parameters)
+		for int64 __range_index_41 = 0; __range_index_41 < bootstrap_len(__range_values_41); __range_index_41 += 1 {
+			parameter = __range_values_41[__range_index_41]
+			callable.parameters = bootstrap_append(callable.parameters, lowerer.resolve_ref(parameter))
+		}
+		result.callable = callable
+	}
+	return result
+}
+
+string array_dimension_size(ArrayDimension dimension) {
+	if dimension.Dynamic || dimension.Size == null {
+		return ""
+	}
+	if literal, ok = dimension.Size.(*ast.LiteralExpr); ok {
+		return literal.Raw
+	}
+	return ""
+}
+
+SemanticType* specialize_type(llvm_lowerer* lowerer, SemanticType* type_info) { // translated Go receiver method
+	if type_info == null {
+		return null
+	}
+	result = clone_type(type_info)
+	if replacement = lowerer.substitutions[result.name]; replacement != null {
+		base = clone_type(replacement)
+		base.pointer_depth += result.pointer_depth
+		base.array_dimensions = bootstrap_append(base.array_dimensions, result.array_dimensions...)
+		base.is_const = base.is_const || result.is_const
+		if bootstrap_len(base.array_dimensions) > 0 {
+			base.kind = type_array
+		} else if base.pointer_depth > 0 {
+			base.kind = type_pointer
+		}
+		return base
+	}
+	__range_keys_42 = (result.generic_args).keys()
+	for int64 __range_index_42 = 0; __range_index_42 < bootstrap_len(__range_keys_42); __range_index_42 += 1 {
+		index = __range_keys_42[__range_index_42]
+		argument = (result.generic_args)[index]
+		result.generic_args[index] = lowerer.specialize_type(argument)
+	}
+	if result.callable != null {
+		result.callable.return_type = lowerer.specialize_type(result.callable.return_type)
+		__range_keys_43 = (result.callable.parameters).keys()
+		for int64 __range_index_43 = 0; __range_index_43 < bootstrap_len(__range_keys_43); __range_index_43 += 1 {
+			index = __range_keys_43[__range_index_43]
+			parameter = (result.callable.parameters)[index]
+			result.callable.parameters[index] = lowerer.specialize_type(parameter)
+		}
+	}
+	return result
+}
+
+StructInfo* specialized_struct_info(StructInfo* template, SemanticType*[] arguments) {
+	if template == null {
+		return null
+	}
+	substitutions = build_substitutions(template.generic_parameters, arguments)
+	info = &StructInfo{name: specialization_name(template.name, arguments), declaration: template.declaration, fields: bootstrap_empty_map(), field_order: bootstrap_append([]string(null), template.field_order...), methods: bootstrap_empty_map(), constructors: template.constructors, destructor: template.destructor}
+	__range_keys_44 = (template.fields).keys()
+	for int64 __range_index_44 = 0; __range_index_44 < bootstrap_len(__range_keys_44); __range_index_44 += 1 {
+		name = __range_keys_44[__range_index_44]
+		field = (template.fields)[name]
+		copy_symbol = *field
+		copy_symbol.type_info = substitute_type(field.type_info, substitutions)
+		info.fields[name] = &copy_symbol
+	}
+	__range_keys_45 = (template.methods).keys()
+	for int64 __range_index_45 = 0; __range_index_45 < bootstrap_len(__range_keys_45); __range_index_45 += 1 {
+		name = __range_keys_45[__range_index_45]
+		method = (template.methods)[name]
+		copy_symbol = *method
+		copy_symbol.type_info = substitute_type(method.type_info, substitutions)
+		info.methods[name] = &copy_symbol
+	}
+	return info
+}
+
+IRValue default_array_value(llvm_lowerer* lowerer, SemanticType* type_info) { // translated Go receiver method
+	count = 0
+	if type_info != null && bootstrap_len(type_info.array_dimensions) > 0 && !type_info.array_dimensions[0].dynamic {
+		count, _ = strconv.Atoi(type_info.array_dimensions[0].size)
+	}
+	element = lowerer.array_element_type(type_info)
+	element_size = lowerer.semantic_storage_size(element)
+	header = lowerer.next_register()
+	lowerer.line("%s = call ptr @calloc(i64 1, i64 16)", header)
+	if count > 0 {
+		data = lowerer.next_register()
+		lowerer.line("%s = call ptr @calloc(i64 %d, i64 %d)", data, count, element_size)
+		data_slot = lowerer.next_register()
+		lowerer.line("%s = getelementptr i8, ptr %s, i64 0", data_slot, header)
+		lowerer.line("store ptr %s, ptr %s", data, data_slot)
+	}
+	length_slot = lowerer.next_register()
+	lowerer.line("%s = getelementptr i8, ptr %s, i64 8", length_slot, header)
+	lowerer.line("store i64 %d, ptr %s", count, length_slot)
+	return IRValue{llvm_type: "ptr", value: header, type_info: type_info, fresh: true}
+}
+
+IRValue default_struct_value(llvm_lowerer* lowerer, SemanticType* type_info) { // translated Go receiver method
+	name = base_type_name(type_info)
+	info = lowerer.struct_info[name]
+	if info == null {
+		return lowerer.zero_value(type_info)
+	}
+	can_call_default = bootstrap_len(info.constructors) == 0
+	__range_values_46 = bootstrap_values(info.constructors)
+	for int64 __range_index_46 = 0; __range_index_46 < bootstrap_len(__range_values_46); __range_index_46 += 1 {
+		constructor = __range_values_46[__range_index_46]
+		if constructor != null && bootstrap_len(constructor.parameters) == 0 && !constructor.variadic {
+			can_call_default = true
+			break
+		}
+	}
+	if can_call_default {
+		fn = llvm_constructor_name(name)
+		if !lowerer.defined[fn] && lowerer.declarations[fn] == "" {
+			lowerer.declarations[fn] = fmt.Sprintf("declare ptr @%s()", fn)
+		}
+		value = lowerer.next_register()
+		lowerer.line("%s = call ptr @%s()", value, fn)
+		return IRValue{llvm_type: "ptr", value: value, type_info: type_info, fresh: true}
+	}
+	value = lowerer.next_register()
+	lowerer.line("%s = call ptr @calloc(i64 1, i64 %d)", value, lowerer.struct_storage_size(info))
+	lowerer.initialize_struct_fields(value, info)
+	return IRValue{llvm_type: "ptr", value: value, type_info: type_info, fresh: true}
+}
+
+bool emit_block(llvm_lowerer* lowerer, BlockStmt* block) { // translated Go receiver method
+	if block == null {
+		return false
+	}
+	// Lexical declarations may shadow outer names, but leaving the block must
+	// restore the outer binding. The addresses themselves remain unchanged, so
+	// assignments through an outer binding still have ordinary C-like effects.
+	saved_locals = make(map[string]ir_local, bootstrap_len(lowerer.locals))
+	__range_keys_47 = (lowerer.locals).keys()
+	for int64 __range_index_47 = 0; __range_index_47 < bootstrap_len(__range_keys_47); __range_index_47 += 1 {
+		name = __range_keys_47[__range_index_47]
+		local = (lowerer.locals)[name]
+		saved_locals[name] = local
+	}
+	bootstrap_defer(func() { lowerer.locals = saved_locals }() // TODO lower defer to explicit cleanup/MECC scope)
+	lowerer.block_stack = bootstrap_append(lowerer.block_stack, block)
+	lowerer.mecc_root_scopes = bootstrap_append(lowerer.mecc_root_scopes, null)
+	lowerer.value_cleanup_scopes = bootstrap_append(lowerer.value_cleanup_scopes, null)
+	bootstrap_defer(func() { // TODO lower defer to explicit cleanup/MECC scope)
+		lowerer.block_stack = lowerer.block_stack[:bootstrap_len(lowerer.block_stack)-1]
+		lowerer.mecc_root_scopes = lowerer.mecc_root_scopes[:bootstrap_len(lowerer.mecc_root_scopes)-1]
+		lowerer.value_cleanup_scopes = lowerer.value_cleanup_scopes[:bootstrap_len(lowerer.value_cleanup_scopes)-1]
+	}()
+	__range_values_48 = bootstrap_values(block.Statements)
+	for int64 __range_index_48 = 0; __range_index_48 < bootstrap_len(__range_values_48); __range_index_48 += 1 {
+		statement = __range_values_48[__range_index_48]
+		if lowerer.emit_stmt(statement) {
+			return true
+		}
+	}
+	lowerer.emit_value_cleanup_scope(bootstrap_len(lowerer.value_cleanup_scopes) - 1)
+	lowerer.emit_lifetime_cleanups(block)
+	lowerer.emit_mecc_clear_root_scope(bootstrap_len(lowerer.mecc_root_scopes) - 1)
+	return false
+}
+
+bool emit_stmt(llvm_lowerer* lowerer, Stmt statement) { // translated Go receiver method
+	switch item = statement.(type) { // TODO lower switch to if/else
+	case *ast.VarDeclStmt:
+		sem = lowerer.resolve_ref(item.Type)
+		if item.Type != null && item.Type.Name == "auto" && item.Initializer != null {
+			sem = clone_type(lowerer.result.expression_types[item.Initializer])
+		}
+		ty = lowerer.llvm_type(sem)
+		address = lowerer.next_register()
+		lowerer.line("%s = alloca %s", address, ty)
+		lowerer.locals[item.Name] = ir_local{address: address, type_info: sem}
+		value = lowerer.zero_value(sem)
+		if item.Initializer != null {
+			if array_expression, ok = item.Initializer.(*ast.ArrayExpr); ok && sem != null && (sem.kind == type_array || bootstrap_len(sem.array_dimensions) > 0) {
+				value = lowerer.emit_array_expr(array_expression, sem, lowerer.array_element_type(sem))
+			} else {
+				value = lowerer.emit_expr(item.Initializer)
+			}
+			value = lowerer.coerce(value, sem)
+		} else if sem != null && sem.kind == type_struct && sem.pointer_depth == 0 {
+			value = lowerer.default_struct_value(sem)
+		} else if sem != null && (sem.kind == type_array || bootstrap_len(sem.array_dimensions) > 0) {
+			value = lowerer.default_array_value(sem)
+		}
+		lowerer.line("store %s %s, ptr %s", ty, value.value, address)
+		if is_value_aggregate(sem) && bootstrap_len(lowerer.value_cleanup_scopes) > 0 {
+			index = bootstrap_len(lowerer.value_cleanup_scopes) - 1
+			lowerer.value_cleanup_scopes[index] = bootstrap_append(lowerer.value_cleanup_scopes[index], value_cleanup{address: address, type_info: sem})
+		}
+		if lowerer.result.mecc_enabled && semantic_is_pointer(sem) {
+			lowerer.line("call void @clyth_mecc_store(ptr null, ptr %s, ptr %s)", address, value.value)
+			lowerer.register_mecc_root(address)
+		}
+	case *ast.ExprStmt:
+		lowerer.emit_expr(item.Expression)
+		if call, ok = item.Expression.(*ast.CallExpr); ok {
+			if identifier, ok = call.Callee.(*ast.IdentifierExpr); ok && identifier.Name == "raise" && bootstrap_len(lowerer.catch_stack) > 0 {
+				return true
+			}
+		}
+	case *ast.ReturnStmt:
+		if bootstrap_len(lowerer.catch_stack) > 0 {
+			if item.Value != null {
+				lowerer.emit_expr(item.Value)
+			}
+			context = lowerer.catch_stack[bootstrap_len(lowerer.catch_stack)-1]
+			lowerer.emit_value_cleanups_from(context.block_depth)
+			lowerer.emit_lifetime_cleanups(item)
+			lowerer.line("br label %%%s", lowerer.catch_stack[bootstrap_len(lowerer.catch_stack)-1].end_label)
+			return true
+		}
+		value = lowerer.zero_value(lowerer.return_type)
+		if item.Value != null {
+			value = lowerer.coerce(lowerer.emit_expr(item.Value), lowerer.return_type)
+		}
+		lowerer.emit_value_cleanups_from(0)
+		lowerer.emit_lifetime_cleanups(item)
+		lowerer.emit_mecc_function_frontier()
+		if lowerer.llvm_type(lowerer.return_type) == "void" {
+			lowerer.line("ret void")
+		} else {
+			lowerer.line("ret %s %s", lowerer.llvm_type(lowerer.return_type), value.value)
+		}
+		return true
+	case *ast.BlockStmt:
+		return lowerer.emit_block(item)
+	case *ast.IfStmt:
+		condition = lowerer.to_bool(lowerer.emit_expr(item.Condition))
+		then_label = lowerer.next_label("if.then")
+		else_label = lowerer.next_label("if.else")
+		end_label = lowerer.next_label("if.end")
+		lowerer.line("br i1 %s, label %%%s, label %%%s", condition.value, then_label, else_label)
+		lowerer.raw_line(then_label + ":")
+		then_term = lowerer.emit_stmt(item.Then)
+		if !then_term {
+			lowerer.line("br label %%%s", end_label)
+		}
+		lowerer.raw_line(else_label + ":")
+		else_term = false
+		if item.Else != null {
+			else_term = lowerer.emit_stmt(item.Else)
+		}
+		if !else_term {
+			lowerer.line("br label %%%s", end_label)
+		}
+		if then_term && else_term {
+			return true
+		}
+		lowerer.raw_line(end_label + ":")
+	case *ast.WhileStmt:
+		cond_label = lowerer.next_label("while.cond")
+		body_label = lowerer.next_label("while.body")
+		end_label = lowerer.next_label("while.end")
+		lowerer.line("br label %%%s", cond_label)
+		lowerer.raw_line(cond_label + ":")
+		condition = lowerer.to_bool(lowerer.emit_expr(item.Condition))
+		lowerer.line("br i1 %s, label %%%s, label %%%s", condition.value, body_label, end_label)
+		lowerer.raw_line(body_label + ":")
+		lowerer.break_labels = bootstrap_append(lowerer.break_labels, end_label)
+		lowerer.continue_labels = bootstrap_append(lowerer.continue_labels, cond_label)
+		lowerer.break_cleanup_depths = bootstrap_append(lowerer.break_cleanup_depths, bootstrap_len(lowerer.block_stack))
+		lowerer.continue_cleanup_depths = bootstrap_append(lowerer.continue_cleanup_depths, bootstrap_len(lowerer.block_stack))
+		term = lowerer.emit_stmt(item.Body)
+		lowerer.break_labels = lowerer.break_labels[:bootstrap_len(lowerer.break_labels)-1]
+		lowerer.continue_labels = lowerer.continue_labels[:bootstrap_len(lowerer.continue_labels)-1]
+		lowerer.break_cleanup_depths = lowerer.break_cleanup_depths[:bootstrap_len(lowerer.break_cleanup_depths)-1]
+		lowerer.continue_cleanup_depths = lowerer.continue_cleanup_depths[:bootstrap_len(lowerer.continue_cleanup_depths)-1]
+		if !term {
+			lowerer.line("br label %%%s", cond_label)
+		}
+		lowerer.raw_line(end_label + ":")
+	case *ast.ForStmt:
+		if item.Init != null {
+			lowerer.emit_stmt(item.Init)
+		}
+		cond_label = lowerer.next_label("for.cond")
+		body_label = lowerer.next_label("for.body")
+		post_label = lowerer.next_label("for.post")
+		end_label = lowerer.next_label("for.end")
+		lowerer.line("br label %%%s", cond_label)
+		lowerer.raw_line(cond_label + ":")
+		if item.Condition != null {
+			c = lowerer.to_bool(lowerer.emit_expr(item.Condition))
+			lowerer.line("br i1 %s, label %%%s, label %%%s", c.value, body_label, end_label)
+		} else {
+			lowerer.line("br label %%%s", body_label)
+		}
+		lowerer.raw_line(body_label + ":")
+		lowerer.break_labels = bootstrap_append(lowerer.break_labels, end_label)
+		lowerer.continue_labels = bootstrap_append(lowerer.continue_labels, post_label)
+		lowerer.break_cleanup_depths = bootstrap_append(lowerer.break_cleanup_depths, bootstrap_len(lowerer.block_stack))
+		lowerer.continue_cleanup_depths = bootstrap_append(lowerer.continue_cleanup_depths, bootstrap_len(lowerer.block_stack))
+		term = lowerer.emit_stmt(item.Body)
+		lowerer.break_labels = lowerer.break_labels[:bootstrap_len(lowerer.break_labels)-1]
+		lowerer.continue_labels = lowerer.continue_labels[:bootstrap_len(lowerer.continue_labels)-1]
+		lowerer.break_cleanup_depths = lowerer.break_cleanup_depths[:bootstrap_len(lowerer.break_cleanup_depths)-1]
+		lowerer.continue_cleanup_depths = lowerer.continue_cleanup_depths[:bootstrap_len(lowerer.continue_cleanup_depths)-1]
+		if !term {
+			lowerer.line("br label %%%s", post_label)
+		}
+		lowerer.raw_line(post_label + ":")
+		if item.Post != null {
+			lowerer.emit_expr(item.Post)
+		}
+		lowerer.line("br label %%%s", cond_label)
+		lowerer.raw_line(end_label + ":")
+	case *ast.SwitchStmt:
+		switch_value = lowerer.emit_expr(item.Value)
+		end_label = lowerer.next_label("switch.end")
+		case_labels = bootstrap_array_with_length(bootstrap_len(item.Cases))
+		default_label = end_label
+		__range_keys_49 = (item.Cases).keys()
+		for int64 __range_index_49 = 0; __range_index_49 < bootstrap_len(__range_keys_49); __range_index_49 += 1 {
+			i = __range_keys_49[__range_index_49]
+			c = (item.Cases)[i]
+			case_labels[i] = lowerer.next_label("switch.case")
+			if c.Default {
+				default_label = case_labels[i]
+			}
+		}
+		// A chain of comparisons keeps switch lowering valid for enum/pointer-like cases too.
+		current_test = lowerer.next_label("switch.test")
+		lowerer.line("br label %%%s", current_test)
+		nondefault = bootstrap_array()
+		__range_keys_50 = (item.Cases).keys()
+		for int64 __range_index_50 = 0; __range_index_50 < bootstrap_len(__range_keys_50); __range_index_50 += 1 {
+			i = __range_keys_50[__range_index_50]
+			c = (item.Cases)[i]
+			if !c.Default {
+				nondefault = bootstrap_append(nondefault, i)
+			}
+		}
+		__range_keys_51 = (nondefault).keys()
+		for int64 __range_index_51 = 0; __range_index_51 < bootstrap_len(__range_keys_51); __range_index_51 += 1 {
+			pos = __range_keys_51[__range_index_51]
+			index = (nondefault)[pos]
+			lowerer.raw_line(current_test + ":")
+			case_value = lowerer.coerce(lowerer.emit_expr(item.Cases[index].Value), switch_value.type_info)
+			cmp = lowerer.next_register()
+			predicate = "eq"
+			ty = switch_value.llvm_type
+			lowerer.line("%s = icmp %s %s %s, %s", cmp, predicate, ty, switch_value.value, case_value.value)
+			next = default_label
+			if pos+1 < bootstrap_len(nondefault) {
+				next = lowerer.next_label("switch.test")
+			}
+			lowerer.line("br i1 %s, label %%%s, label %%%s", cmp, case_labels[index], next)
+			current_test = next
+		}
+		if bootstrap_len(nondefault) == 0 {
+			lowerer.raw_line(current_test + ":")
+			lowerer.line("br label %%%s", default_label)
+		}
+		lowerer.break_labels = bootstrap_append(lowerer.break_labels, end_label)
+		lowerer.break_cleanup_depths = bootstrap_append(lowerer.break_cleanup_depths, bootstrap_len(lowerer.block_stack))
+		__range_keys_52 = (item.Cases).keys()
+		for int64 __range_index_52 = 0; __range_index_52 < bootstrap_len(__range_keys_52); __range_index_52 += 1 {
+			i = __range_keys_52[__range_index_52]
+			c = (item.Cases)[i]
+			lowerer.raw_line(case_labels[i] + ":")
+			terminated = false
+			__range_values_53 = bootstrap_values(c.Statements)
+			for int64 __range_index_53 = 0; __range_index_53 < bootstrap_len(__range_values_53); __range_index_53 += 1 {
+				statement = __range_values_53[__range_index_53]
+				if lowerer.emit_stmt(statement) {
+					terminated = true
+					break
+				}
+			}
+			if !terminated {
+				next = end_label
+				if i+1 < bootstrap_len(item.Cases) {
+					next = case_labels[i+1]
+				}
+				lowerer.line("br label %%%s", next)
+			}
+		}
+		lowerer.break_labels = lowerer.break_labels[:bootstrap_len(lowerer.break_labels)-1]
+		lowerer.break_cleanup_depths = lowerer.break_cleanup_depths[:bootstrap_len(lowerer.break_cleanup_depths)-1]
+		lowerer.raw_line(end_label + ":")
+	case *ast.BreakStmt:
+		if bootstrap_len(lowerer.break_labels) > 0 {
+			if bootstrap_len(lowerer.break_cleanup_depths) > 0 {
+				lowerer.emit_control_scope_cleanups(lowerer.break_cleanup_depths[bootstrap_len(lowerer.break_cleanup_depths)-1])
+			}
+			lowerer.line("br label %%%s", lowerer.break_labels[bootstrap_len(lowerer.break_labels)-1])
+			return true
+		}
+	case *ast.ContinueStmt:
+		if bootstrap_len(lowerer.continue_labels) > 0 {
+			if bootstrap_len(lowerer.continue_cleanup_depths) > 0 {
+				lowerer.emit_control_scope_cleanups(lowerer.continue_cleanup_depths[bootstrap_len(lowerer.continue_cleanup_depths)-1])
+			}
+			lowerer.line("br label %%%s", lowerer.continue_labels[bootstrap_len(lowerer.continue_labels)-1])
+			return true
+		}
+	}
+	return false
+}
+
+IRValue emit_expr(llvm_lowerer* lowerer, Expr expression) { // translated Go receiver method
+	sem = lowerer.specialize_type(lowerer.result.expression_types[expression])
+	if sem == null || sem.kind == type_unknown {
+		sem = lowerer.specialize_type(lowerer.infer_expression_type(expression))
+	}
+	if sem == null {
+		sem = &SemanticType{kind: type_unknown}
+	}
+	switch item = expression.(type) { // TODO lower switch to if/else
+	case *ast.LiteralExpr:
+		natural = lowerer.literal_type(item)
+		switch item.Kind { // TODO lower switch to if/else
+		case ast.LiteralInteger:
+			raw = strings.ReplaceAll(item.Raw, "_", "")
+			if raw == "" {
+				raw = "0"
+			}
+			return IRValue{llvm_type: lowerer.llvm_type(natural), value: raw, type_info: natural}
+		case ast.LiteralFloat:
+			return IRValue{llvm_type: lowerer.llvm_type(natural), value: item.Raw, type_info: natural}
+		case ast.LiteralBool:
+			if item.Raw == "true" {
+				return IRValue{llvm_type: "i1", value: "1", type_info: natural}
+			}
+			return IRValue{llvm_type: "i1", value: "0", type_info: natural}
+		case ast.LiteralNull:
+			return IRValue{llvm_type: "ptr", value: "null", type_info: natural}
+		case ast.LiteralCharacter:
+			value = int64(0)
+			unquoted, err = strconv.Unquote(item.Raw)
+			if err == null && bootstrap_len(unquoted) > 0 {
+				value = int64([]rune(unquoted)[0])
+			}
+			return IRValue{llvm_type: "i8", value: strconv.FormatInt(value, 10), type_info: natural}
+		case ast.LiteralString:
+			text = item.Raw
+			if unquoted, err = strconv.Unquote(item.Raw); err == null {
+				text = unquoted
+			}
+			return lowerer.static_string_value(text, natural)
+		case ast.LiteralInterpolatedString:
+			return lowerer.emit_interpolated_string(item, natural)
+		}
+	case *ast.IdentifierExpr:
+		if local, ok = lowerer.locals[item.Name]; ok {
+			// Receiver "this" is already a value pointer rather than an alloca slot.
+			if item.Name == "this" {
+				return IRValue{llvm_type: "ptr", value: local.address, type_info: local.type_info}
+			}
+			ty = lowerer.llvm_type(local.type_info)
+			reg = lowerer.next_register()
+			lowerer.line("%s = load %s, ptr %s", reg, ty, local.address)
+			return IRValue{llvm_type: ty, value: reg, type_info: local.type_info}
+		}
+		if global, ok = lowerer.globals[item.Name]; ok {
+			ty = lowerer.llvm_type(global.type_info)
+			reg = lowerer.next_register()
+			lowerer.line("%s = load %s, ptr %s", reg, ty, global.address)
+			return IRValue{llvm_type: ty, value: reg, type_info: global.type_info}
+		}
+		if lowerer.receiver != null {
+			if field = lowerer.receiver.fields[item.Name]; field != null {
+				return lowerer.load_receiver_field(item.Name, field.type_info)
+			}
+		}
+		if symbol = lowerer.lookup_error_type_symbol(lowerer.result.root_namespace, item.Name, bootstrap_empty_map()); symbol != null {
+			return IRValue{llvm_type: "i32", value: strconv.Itoa(symbol.error_type_id), type_info: &SemanticType{kind: type_error_type, name: "ErrorType"}}
+		}
+		if id, ok = lowerer.result.error_type_ids["builtin::"+item.Name]; ok {
+			return IRValue{llvm_type: "i32", value: strconv.Itoa(id), type_info: &SemanticType{kind: type_error_type, name: "ErrorType"}}
+		}
+		if symbol = lowerer.result.root_namespace.symbols[item.Name]; symbol != null && symbol.kind == symbol_function {
+			return IRValue{llvm_type: "ptr", value: "@" + sanitize_llvm_name(item.Name), type_info: symbol.type_info}
+		}
+		// Enum members may be referenced through namespace member expressions; a bare unknown identifier is conservatively null.
+		return lowerer.zero_value(sem)
+	case *ast.UnaryExpr:
+		if item.Operator == "++" || item.Operator == "--" {
+			address, target_sem, _ = lowerer.assignment_address_with_owner(item.Operand)
+			if address == "" {
+				return lowerer.zero_value(sem)
+			}
+			ty = lowerer.llvm_type(target_sem)
+			old = lowerer.next_register()
+			lowerer.line("%s = load %s, ptr %s", old, ty, address)
+			updated = lowerer.next_register()
+			if ty == "float" || ty == "double" {
+				op = "fadd"
+				if item.Operator == "--" {
+					op = "fsub"
+				}
+				lowerer.line("%s = %s %s %s, 1.0", updated, op, ty, old)
+			} else {
+				op = "add"
+				if item.Operator == "--" {
+					op = "sub"
+				}
+				lowerer.line("%s = %s %s %s, 1", updated, op, ty, old)
+			}
+			lowerer.line("store %s %s, ptr %s", ty, updated, address)
+			result = updated
+			if !item.Prefix {
+				result = old
+			}
+			return IRValue{llvm_type: ty, value: result, type_info: target_sem}
+		}
+		operand = lowerer.emit_expr(item.Operand)
+		switch item.Operator { // TODO lower switch to if/else
+		case "!":
+			b = lowerer.to_bool(operand)
+			reg = lowerer.next_register()
+			lowerer.line("%s = xor i1 %s, true", reg, b.value)
+			return IRValue{llvm_type: "i1", value: reg, type_info: sem}
+		case "-":
+			reg = lowerer.next_register()
+			if operand.llvm_type == "float" || operand.llvm_type == "double" {
+				lowerer.line("%s = fsub %s 0.0, %s", reg, operand.llvm_type, operand.value)
+			} else {
+				lowerer.line("%s = sub %s 0, %s", reg, operand.llvm_type, operand.value)
+			}
+			return IRValue{llvm_type: operand.llvm_type, value: reg, type_info: sem}
+		case "&":
+			return IRValue{llvm_type: "ptr", value: lowerer.address_of(item.Operand), type_info: sem}
+		case "*":
+			if operand.llvm_type == "ptr" {
+				non_null = lowerer.next_register()
+				lowerer.line("%s = icmp ne ptr %s, null", non_null, operand.value)
+				lowerer.emit_checked_failure(non_null, "null_reference", "null pointer dereference", "nullref")
+				ty = lowerer.llvm_type(sem)
+				reg = lowerer.next_register()
+				lowerer.line("%s = load %s, ptr %s", reg, ty, operand.value)
+				return IRValue{llvm_type: ty, value: reg, type_info: sem}
+			}
+		}
+		return operand
+	case *ast.BinaryExpr:
+		left = lowerer.emit_expr(item.Left)
+		if item.Operator == "&&" || item.Operator == "||" {
+			// Clyth guarantees true short-circuit semantics. Keep the RHS in its
+			// own CFG block so observable side effects occur only when required.
+			l = lowerer.to_bool(left)
+			rhs_label = lowerer.next_label("logic.rhs")
+			short_label = lowerer.next_label("logic.short")
+			end_label = lowerer.next_label("logic.end")
+			if item.Operator == "&&" {
+				lowerer.line("br i1 %s, label %%%s, label %%%s", l.value, rhs_label, short_label)
+			} else {
+				lowerer.line("br i1 %s, label %%%s, label %%%s", l.value, short_label, rhs_label)
+			}
+			lowerer.raw_line(rhs_label + ":")
+			right = lowerer.to_bool(lowerer.emit_expr(item.Right))
+			rhs_value = right.value
+			rhs_predecessor = lowerer.current_block
+			lowerer.line("br label %%%s", end_label)
+			lowerer.raw_line(short_label + ":")
+			short_value = "0"
+			if item.Operator == "||" {
+				short_value = "1"
+			}
+			lowerer.line("br label %%%s", end_label)
+			lowerer.raw_line(end_label + ":")
+			reg = lowerer.next_register()
+			lowerer.line("%s = phi i1 [ %s, %%%s ], [ %s, %%%s ]", reg, rhs_value, rhs_predecessor, short_value, short_label)
+			return IRValue{llvm_type: "i1", value: reg, type_info: sem}
+		}
+		right = lowerer.coerce(lowerer.emit_expr(item.Right), left.type_info)
+		if item.Operator == "==" || item.Operator == "!=" || item.Operator == "<" || item.Operator == "<=" || item.Operator == ">" || item.Operator == ">=" {
+			reg = lowerer.next_register()
+			if left.type_info != null && left.type_info.name == "string" && (item.Operator == "==" || item.Operator == "!=") {
+				cmp = lowerer.next_register()
+				lowerer.line("%s = call i32 @strcmp(ptr %s, ptr %s)", cmp, left.value, right.value)
+				pred = "eq"
+				if item.Operator == "!=" {
+					pred = "ne"
+				}
+				lowerer.line("%s = icmp %s i32 %s, 0", reg, pred, cmp)
+				return IRValue{llvm_type: "i1", value: reg, type_info: sem}
+			}
+			pred = map[string]string{"==": "eq", "!=": "ne", "<": "slt", "<=": "sle", ">": "sgt", ">=": "sge"}[item.Operator]
+			if is_unsigned_type(left.type_info) {
+				pred = map[string]string{"==": "eq", "!=": "ne", "<": "ult", "<=": "ule", ">": "ugt", ">=": "uge"}[item.Operator]
+			}
+			if left.llvm_type == "float" || left.llvm_type == "double" {
+				fp = map[string]string{"eq": "oeq", "ne": "one", "slt": "olt", "sle": "ole", "sgt": "ogt", "sge": "oge", "ult": "olt", "ule": "ole", "ugt": "ogt", "uge": "oge"}[pred]
+				lowerer.line("%s = fcmp %s %s %s, %s", reg, fp, left.llvm_type, left.value, right.value)
+			} else {
+				lowerer.line("%s = icmp %s %s %s, %s", reg, pred, left.llvm_type, left.value, right.value)
+			}
+			return IRValue{llvm_type: "i1", value: reg, type_info: sem}
+		}
+		reg = lowerer.next_register()
+		op = map[string]string{"+": "add", "-": "sub", "*": "mul", "/": "sdiv", "%": "srem"}[item.Operator]
+		if is_unsigned_type(left.type_info) {
+			if item.Operator == "/" {
+				op = "udiv"
+			}
+			if item.Operator == "%" {
+				op = "urem"
+			}
+		}
+		if left.llvm_type == "float" || left.llvm_type == "double" {
+			op = map[string]string{"+": "fadd", "-": "fsub", "*": "fmul", "/": "fdiv", "%": "frem"}[item.Operator]
+		}
+		if op == "" {
+			return left
+		}
+		lowerer.line("%s = %s %s %s, %s", reg, op, left.llvm_type, left.value, right.value)
+		return IRValue{llvm_type: left.llvm_type, value: reg, type_info: sem}
+	case *ast.AssignExpr:
+		value = lowerer.emit_expr(item.Value)
+		lowerer.emit_lifetime_cleanups(item)
+		address, target_sem, mecc_owner = lowerer.assignment_address_with_owner(item.Target)
+		if address != "" {
+			value = lowerer.coerce(value, target_sem)
+			if item.Operator == "=" && is_value_aggregate(target_sem) {
+				old = lowerer.next_register()
+				lowerer.line("%s = load ptr, ptr %s", old, address)
+				lowerer.emit_destroy_value(old, target_sem)
+			}
+			if item.Operator != "=" {
+				old = lowerer.next_register()
+				ty = lowerer.llvm_type(target_sem)
+				lowerer.line("%s = load %s, ptr %s", old, ty, address)
+				op = map[string]string{"+=": "add", "-=": "sub", "*=": "mul", "/=": "sdiv", "%=": "srem"}[item.Operator]
+				if ty == "float" || ty == "double" {
+					op = map[string]string{"+=": "fadd", "-=": "fsub", "*=": "fmul", "/=": "fdiv", "%=": "frem"}[item.Operator]
+				} else if is_unsigned_type(target_sem) {
+					if item.Operator == "/=" {
+						op = "udiv"
+					}
+					if item.Operator == "%=" {
+						op = "urem"
+					}
+				}
+				combined = lowerer.next_register()
+				lowerer.line("%s = %s %s %s, %s", combined, op, ty, old, value.value)
+				value = IRValue{llvm_type: ty, value: combined, type_info: target_sem}
+			}
+			lowerer.line("store %s %s, ptr %s", value.llvm_type, value.value, address)
+			if lowerer.result.mecc_enabled && semantic_is_pointer(target_sem) && value.llvm_type == "ptr" {
+				lowerer.line("call void @clyth_mecc_store(ptr %s, ptr %s, ptr %s)", mecc_owner, address, value.value)
+			}
+		}
+		return value
+	case *ast.CallExpr:
+		return lowerer.emit_call(item, sem)
+	case *ast.MemberExpr:
+		object_sem = lowerer.specialize_type(lowerer.result.expression_types[item.Object])
+		if object_sem == null || object_sem.kind == type_unknown {
+			object_sem = lowerer.specialize_type(lowerer.infer_expression_type(item.Object))
+		}
+		if object_sem != null && object_sem.kind == type_namespace {
+			if enum_map, ok = lowerer.enum_values[object_sem.namespace_name]; ok {
+				if value, exists = enum_map[item.Name]; exists {
+					return IRValue{llvm_type: "i32", value: strconv.FormatInt(value, 10), type_info: sem}
+				}
+			}
+			return lowerer.zero_value(sem)
+		}
+		if identifier, ok = item.Object.(*ast.IdentifierExpr); ok && identifier.Name == lowerer.main_args_name && item.Name == "length" && lowerer.main_argc_value != "" {
+			reg = lowerer.next_register()
+			lowerer.line("%s = sext i32 %s to i64", reg, lowerer.main_argc_value)
+			return IRValue{llvm_type: "i64", value: reg, type_info: &SemanticType{kind: type_integer, name: "int64"}}
+		}
+		if object_sem != null && object_sem.name == "string" && (item.Name == "length" || item.Name == "capacity") {
+			object = lowerer.emit_expr(item.Object)
+			length = lowerer.next_register()
+			lowerer.line("%s = call i64 @strlen(ptr %s)", length, object.value)
+			return IRValue{llvm_type: "i64", value: length, type_info: &SemanticType{kind: type_integer, name: "int64"}}
+		}
+		if object_sem != null && (object_sem.kind == type_array || bootstrap_len(object_sem.array_dimensions) > 0) && item.Name == "length" {
+			object = lowerer.emit_expr(item.Object)
+			length_slot = lowerer.next_register()
+			lowerer.line("%s = getelementptr i8, ptr %s, i64 8", length_slot, object.value)
+			length = lowerer.next_register()
+			lowerer.line("%s = load i64, ptr %s", length, length_slot)
+			return IRValue{llvm_type: "i64", value: length, type_info: &SemanticType{kind: type_integer, name: "int64"}}
+		}
+		object = lowerer.emit_expr(item.Object)
+		if object_sem != null && (object_sem.pointer_depth > 0 || object_sem.kind == type_pointer) {
+			non_null = lowerer.next_register()
+			lowerer.line("%s = icmp ne ptr %s, null", non_null, object.value)
+			lowerer.emit_checked_failure(non_null, "null_reference", "null pointer member access", "nullref")
+		}
+		if info = lowerer.struct_info[base_type_name(object_sem)]; info != null {
+			if field = info.fields[item.Name]; field != null {
+				address = lowerer.field_address(object.value, info, item.Name)
+				ty = lowerer.llvm_type(field.type_info)
+				reg = lowerer.next_register()
+				lowerer.line("%s = load %s, ptr %s", reg, ty, address)
+				return IRValue{llvm_type: ty, value: reg, type_info: field.type_info}
+			}
+		}
+		return lowerer.zero_value(sem)
+	case *ast.IndexExpr:
+		object = lowerer.emit_expr(item.Object)
+		index = lowerer.coerce(lowerer.emit_expr(item.Index), &SemanticType{kind: type_integer, name: "int64"})
+		elem_ty = lowerer.llvm_type(sem)
+		object_sem = lowerer.specialize_type(lowerer.result.expression_types[item.Object])
+		if object_sem == null || object_sem.kind == type_unknown {
+			object_sem = lowerer.specialize_type(lowerer.infer_expression_type(item.Object))
+		}
+		data = object.value
+		if object_sem == null || object_sem.kind != type_string || bootstrap_len(object_sem.array_dimensions) != 0 {
+			data = lowerer.array_data_pointer(object.value)
+		}
+		lowerer.emit_index_bounds_check(item, object, index, object_sem)
+		address = lowerer.next_register()
+		lowerer.line("%s = getelementptr %s, ptr %s, i64 %s", address, elem_ty, data, index.value)
+		value = lowerer.next_register()
+		lowerer.line("%s = load %s, ptr %s", value, elem_ty, address)
+		return IRValue{llvm_type: elem_ty, value: value, type_info: sem}
+	case *ast.ArrayExpr:
+		return lowerer.emit_array_expr(item, sem, null)
+	case *ast.KeyValueExpr:
+		return lowerer.emit_expr(item.Value)
+	case *ast.GenericSpecializationExpr:
+		return lowerer.emit_expr(item.Target)
+	case *ast.LambdaExpr:
+		return lowerer.emit_lambda(item, sem)
+	case *ast.NewExpr:
+		created IRValue var
+		// Struct constructor calls already materialize native storage.
+		if call, ok = item.Value.(*ast.CallExpr); ok {
+			if ident, ok2 = call.Callee.(*ast.IdentifierExpr); ok2 {
+				if _, exists = lowerer.struct_info[ident.Name]; exists {
+					created = lowerer.emit_expr(item.Value)
+				}
+			}
+		}
+		if created.value == "" {
+			value = lowerer.emit_expr(item.Value)
+			size = lowerer.semantic_storage_size(value.type_info)
+			if size < 1 {
+				size = 1
+			}
+			allocation = lowerer.next_register()
+			lowerer.line("%s = call ptr @calloc(i64 1, i64 %d)", allocation, size)
+			if value.llvm_type != "void" && value.llvm_type != "ptr" {
+				lowerer.line("store %s %s, ptr %s", value.llvm_type, value.value, allocation)
+			}
+			created = IRValue{llvm_type: "ptr", value: allocation, type_info: clone_type(sem)}
+		}
+		id = lowerer.result.allocation_by_new[item]
+		if info = lowerer.result.allocations[id]; info != null && info.mecc {
+			managed = lowerer.next_register()
+			flag = 0
+			if info.policy.compacting {
+				flag = 1
+			}
+			destructor = "null"
+			if info.type_info != null {
+				owned_type = clone_type(info.type_info)
+				if owned_type.pointer_depth > 0 {
+					owned_type.pointer_depth--
+				}
+				if struct_info = lowerer.struct_info[base_type_name(owned_type)]; struct_info != null && struct_info.destructor {
+					destructor = "@" + llvm_destructor_name(struct_info.name)
+				}
+			}
+			lowerer.line("%s = call ptr @clyth_mecc_adopt(ptr %s, i1 %d, ptr %s)", managed, created.value, flag, destructor)
+			created.value = managed
+		}
+		if slot = lowerer.cleanup_slots[id]; slot != "" {
+			lowerer.line("store ptr %s, ptr %s", created.value, slot)
+		}
+		return created
+	case *ast.CastExpr:
+		value = lowerer.emit_expr(item.Value)
+		target = lowerer.resolve_ref(item.Type)
+		return lowerer.coerce(value, target)
+	}
+	return lowerer.zero_value(sem)
+}
+
+SemanticType* array_element_type(llvm_lowerer* lowerer, SemanticType* array_type) { // translated Go receiver method
+	if array_type == null {
+		return &SemanticType{kind: type_unknown}
+	}
+	result = clone_type(array_type)
+	if bootstrap_len(result.array_dimensions) > 0 {
+		result.array_dimensions = result.array_dimensions[1:]
+	}
+	if bootstrap_len(result.array_dimensions) > 0 {
+		result.kind = type_array
+		return result
+	}
+	if result.pointer_depth > 0 {
+		result.kind = type_pointer
+		return result
+	}
+	switch result.name { // TODO lower switch to if/else
+	case "bool":
+		result.kind = type_bool
+	case "char":
+		result.kind = type_char
+	case "string":
+		result.kind = type_string
+	case "int8", "int16", "int32", "int64", "uint8", "uint16", "uint32", "uint64", "uintptr":
+		result.kind = type_integer
+	case "float32", "float64":
+		result.kind = type_float
+	default:
+		result.kind = type_struct
+	}
+	return result
+}
+
+IRValue emit_array_expr(llvm_lowerer* lowerer, ArrayExpr* item, SemanticType* array_sem, SemanticType* element_override) { // translated Go receiver method
+	elem_sem = element_override
+	if elem_sem == null {
+		elem_sem = &SemanticType{kind: type_integer, name: "int64"}
+		if bootstrap_len(item.Elements) > 0 {
+			if inferred = lowerer.specialize_type(lowerer.result.expression_types[item.Elements[0]]); inferred != null {
+				elem_sem = inferred
+			} else if literal, ok = item.Elements[0].(*ast.LiteralExpr); ok {
+				elem_sem = lowerer.literal_type(literal)
+			}
+		}
+	}
+	elem_ty = lowerer.llvm_type(elem_sem)
+	count = bootstrap_len(item.Elements)
+	bytes = count * lowerer.llvm_storage_size(elem_ty)
+	if bytes == 0 {
+		bytes = 1
+	}
+	data = lowerer.next_register()
+	lowerer.line("%s = call ptr @malloc(i64 %d)", data, bytes)
+	__range_keys_54 = (item.Elements).keys()
+	for int64 __range_index_54 = 0; __range_index_54 < bootstrap_len(__range_keys_54); __range_index_54 += 1 {
+		i = __range_keys_54[__range_index_54]
+		expression = (item.Elements)[i]
+		value IRValue var
+		if pair, ok = expression.(*ast.KeyValueExpr); ok && elem_sem.kind == type_struct && elem_sem.name == "MapEntry" && bootstrap_len(elem_sem.generic_args) == 2 {
+			key = lowerer.coerce(lowerer.emit_expr(pair.Key), elem_sem.generic_args[0])
+			mapped = lowerer.coerce(lowerer.emit_expr(pair.Value), elem_sem.generic_args[1])
+			constructor_name = llvm_constructor_name(base_type_name(elem_sem))
+			if !lowerer.defined[constructor_name] && lowerer.declarations[constructor_name] == "" {
+				lowerer.declarations[constructor_name] = fmt.Sprintf("declare ptr @%s(%s, %s)", constructor_name, lowerer.llvm_type(elem_sem.generic_args[0]), lowerer.llvm_type(elem_sem.generic_args[1]))
+			}
+			register = lowerer.next_register()
+			lowerer.line("%s = call ptr @%s(%s %s, %s %s)", register, constructor_name, key.llvm_type, key.value, mapped.llvm_type, mapped.value)
+			value = IRValue{llvm_type: "ptr", value: register, type_info: elem_sem}
+		} else {
+			value = lowerer.coerce(lowerer.emit_expr(expression), elem_sem)
+		}
+		address = lowerer.next_register()
+		lowerer.line("%s = getelementptr %s, ptr %s, i64 %d", address, elem_ty, data, i)
+		lowerer.line("store %s %s, ptr %s", elem_ty, value.value, address)
+	}
+	header = lowerer.next_register()
+	lowerer.line("%s = call ptr @malloc(i64 16)", header)
+	data_slot = lowerer.next_register()
+	lowerer.line("%s = getelementptr i8, ptr %s, i64 0", data_slot, header)
+	lowerer.line("store ptr %s, ptr %s", data, data_slot)
+	length_slot = lowerer.next_register()
+	lowerer.line("%s = getelementptr i8, ptr %s, i64 8", length_slot, header)
+	lowerer.line("store i64 %d, ptr %s", count, length_slot)
+	return IRValue{llvm_type: "ptr", value: header, type_info: array_sem, fresh: true}
+}
+
+(IRValue, []IRValue) emit_variadic_pack(llvm_lowerer* lowerer, Expr[] expressions, SemanticType* element_type, bool heterogeneous) { // translated Go receiver method
+	count = bootstrap_len(expressions)
+	temporaries = bootstrap_array()
+	storage_count = count
+	if storage_count == 0 {
+		storage_count = 1
+	}
+	if heterogeneous {
+		data = lowerer.next_register()
+		lowerer.line("%s = alloca [%d x i64]", data, storage_count*2)
+		__range_keys_55 = (expressions).keys()
+		for int64 __range_index_55 = 0; __range_index_55 < bootstrap_len(__range_keys_55); __range_index_55 += 1 {
+			index = __range_keys_55[__range_index_55]
+			expression = (expressions)[index]
+			value = lowerer.emit_expr(expression)
+			if value.fresh && (is_value_aggregate(value.type_info) || (value.type_info != null && value.type_info.kind == type_string)) {
+				temporaries = bootstrap_append(temporaries, value)
+			}
+			type_slot = lowerer.next_register()
+			lowerer.line("%s = getelementptr [%d x i64], ptr %s, i64 0, i64 %d", type_slot, storage_count*2, data, index*2)
+			lowerer.line("store i64 %d, ptr %s", stable_variadic_type_id(type_name(value.type_info)), type_slot)
+			payload_slot = lowerer.next_register()
+			lowerer.line("%s = getelementptr [%d x i64], ptr %s, i64 0, i64 %d", payload_slot, storage_count*2, data, index*2+1)
+			payload = lowerer.variadic_payload_i64(value)
+			lowerer.line("store i64 %s, ptr %s", payload, payload_slot)
+		}
+		header = lowerer.emit_stack_array_header(data, count)
+		return IRValue{llvm_type: "ptr", value: header, type_info: &SemanticType{kind: type_array, name: "auto_variadic", array_dimensions: []SemanticArrayDimension{{dynamic: true}}}}, temporaries
+	}
+
+	target = lowerer.specialize_type(element_type)
+	elem_ty = lowerer.llvm_type(target)
+	data = lowerer.next_register()
+	lowerer.line("%s = alloca [%d x %s]", data, storage_count, elem_ty)
+	__range_keys_56 = (expressions).keys()
+	for int64 __range_index_56 = 0; __range_index_56 < bootstrap_len(__range_keys_56); __range_index_56 += 1 {
+		index = __range_keys_56[__range_index_56]
+		expression = (expressions)[index]
+		value = lowerer.emit_expr(expression)
+		if target != null && target.kind == type_string && (value.type_info == null || value.type_info.kind != type_string) {
+			value = lowerer.emit_to_string(value)
+		} else {
+			value = lowerer.coerce(value, target)
+		}
+		if is_value_aggregate(target) || (target != null && target.kind == type_string && value.fresh) {
+			temporaries = bootstrap_append(temporaries, value)
+		}
+		slot = lowerer.next_register()
+		lowerer.line("%s = getelementptr [%d x %s], ptr %s, i64 0, i64 %d", slot, storage_count, elem_ty, data, index)
+		lowerer.line("store %s %s, ptr %s", elem_ty, value.value, slot)
+	}
+	header = lowerer.emit_stack_array_header(data, count)
+	array_type = clone_type(target)
+	if array_type == null {
+		array_type = &SemanticType{kind: type_unknown}
+	}
+	array_type.kind = type_array
+	array_type.array_dimensions = []SemanticArrayDimension{{dynamic: true}}
+	return IRValue{llvm_type: "ptr", value: header, type_info: array_type}, temporaries
+}
+
+string emit_stack_array_header(llvm_lowerer* lowerer, string data, int64 count) { // translated Go receiver method
+	header = lowerer.next_register()
+	lowerer.line("%s = alloca [16 x i8]", header)
+	data_slot = lowerer.next_register()
+	lowerer.line("%s = getelementptr i8, ptr %s, i64 0", data_slot, header)
+	lowerer.line("store ptr %s, ptr %s", data, data_slot)
+	length_slot = lowerer.next_register()
+	lowerer.line("%s = getelementptr i8, ptr %s, i64 8", length_slot, header)
+	lowerer.line("store i64 %d, ptr %s", count, length_slot)
+	return header
+}
+
+uint64 stable_variadic_type_id(string name) {
+	// Small deterministic compiler-owned type-id mixer. This is metadata identity,
+	// not a cryptographic hash and does not depend on a runtime registry.
+	var hash uint64 = 1469598103934665603
+	for index = 0; index < bootstrap_len(name); index++ {
+		hash ^= uint64(name[index])
+		hash *= 1099511628211
+	}
+	return hash
+}
+
+string variadic_payload_i64(llvm_lowerer* lowerer, IRValue value) { // translated Go receiver method
+	if value.value == "" {
+		return "0"
+	}
+	if value.llvm_type == "ptr" {
+		converted = lowerer.next_register()
+		lowerer.line("%s = ptrtoint ptr %s to i64", converted, value.value)
+		return converted
+	}
+	if value.llvm_type == "double" {
+		converted = lowerer.next_register()
+		lowerer.line("%s = bitcast double %s to i64", converted, value.value)
+		return converted
+	}
+	if value.llvm_type == "float" {
+		bits = lowerer.next_register()
+		lowerer.line("%s = bitcast float %s to i32", bits, value.value)
+		converted = lowerer.next_register()
+		lowerer.line("%s = zext i32 %s to i64", converted, bits)
+		return converted
+	}
+	if strings.HasPrefix(value.llvm_type, "i") {
+		bits, _ = strconv.Atoi(strings.TrimPrefix(value.llvm_type, "i"))
+		if bits == 64 {
+			return value.value
+		}
+		converted = lowerer.next_register()
+		op = "sext"
+		if is_unsigned_type(value.type_info) || bits == 1 {
+			op = "zext"
+		}
+		lowerer.line("%s = %s %s %s to i64", converted, op, value.llvm_type, value.value)
+		return converted
+	}
+	return "0"
+}
+
+IRValue emit_to_string(llvm_lowerer* lowerer, IRValue value) { // translated Go receiver method
+	string_type = &SemanticType{kind: type_string, name: "string"}
+	if value.type_info != null && value.type_info.kind == type_string {
+		value.type_info = string_type
+		return value
+	}
+	if value.type_info != null && value.type_info.kind == type_bool && value.llvm_type == "i1" {
+		true_value = lowerer.static_string_value("true", string_type)
+		false_value = lowerer.static_string_value("false", string_type)
+		selected = lowerer.next_register()
+		lowerer.line("%s = select i1 %s, ptr %s, ptr %s", selected, value.value, true_value.value, false_value.value)
+		return IRValue{llvm_type: "ptr", value: selected, type_info: string_type}
+	}
+	if value.type_info != null && value.type_info.kind == type_struct {
+		if info = lowerer.struct_info[base_type_name(value.type_info)]; info != null {
+			if method = info.methods["to_string"]; method != null && method.type_info != null && method.type_info.callable != null && bootstrap_len(method.type_info.callable.parameters) == 0 {
+				result = lowerer.next_register()
+				lowerer.line("%s = call ptr @%s(ptr %s)", result, llvm_method_name(info.name, "to_string"), value.value)
+				return IRValue{llvm_type: "ptr", value: result, type_info: string_type}
+			}
+		}
+	}
+
+	format = "%lld"
+	argument = value
+	if value.type_info != null && is_unsigned_type(value.type_info) {
+		format = "%llu"
+	}
+	if value.llvm_type == "float" || value.llvm_type == "double" {
+		format = "%g"
+		if value.llvm_type == "float" {
+			promoted = lowerer.next_register()
+			lowerer.line("%s = fpext float %s to double", promoted, value.value)
+			argument = IRValue{llvm_type: "double", value: promoted, type_info: &SemanticType{kind: type_float, name: "float64"}}
+		}
+	} else if value.llvm_type == "ptr" {
+		format = "%p"
+	} else if value.type_info != null && value.type_info.kind == type_char {
+		format = "%c"
+	}
+	format_value = lowerer.static_string_value(format, string_type)
+	required32 = lowerer.next_register()
+	lowerer.line("%s = call i32 (ptr, i64, ptr, ...) @snprintf(ptr null, i64 0, ptr %s, %s %s)", required32, format_value.value, argument.llvm_type, argument.value)
+	required64 = lowerer.next_register()
+	lowerer.line("%s = sext i32 %s to i64", required64, required32)
+	capacity = lowerer.next_register()
+	lowerer.line("%s = add i64 %s, 1", capacity, required64)
+	buffer = lowerer.next_register()
+	lowerer.line("%s = call ptr @malloc(i64 %s)", buffer, capacity)
+	lowerer.line("call i32 (ptr, i64, ptr, ...) @snprintf(ptr %s, i64 %s, ptr %s, %s %s)", buffer, capacity, format_value.value, argument.llvm_type, argument.value)
+	return IRValue{llvm_type: "ptr", value: buffer, type_info: string_type, fresh: true}
+}
+
+string constant_initializer(llvm_lowerer* lowerer, Expr expression, SemanticType* target) { // translated Go receiver method
+	if literal, ok = expression.(*ast.LiteralExpr); ok {
+		switch literal.Kind { // TODO lower switch to if/else
+		case ast.LiteralInteger:
+			return strings.ReplaceAll(literal.Raw, "_", "")
+		case ast.LiteralBool:
+			if literal.Raw == "true" {
+				return "1"
+			}
+			return "0"
+		case ast.LiteralFloat:
+			return literal.Raw
+		case ast.LiteralNull:
+			return "null"
+		}
+	}
+	return lowerer.zero_value(target).value
+}
+
+IRValue static_string_value(llvm_lowerer* lowerer, string text, SemanticType* type_info) { // translated Go receiver method
+	index = bootstrap_len(lowerer.strings)
+	lowerer.strings = bootstrap_append(lowerer.strings, text)
+	n = len([]byte(text)) + 1
+	return IRValue{llvm_type: "ptr", value: fmt.Sprintf("getelementptr inbounds ([%d x i8], ptr @.clyth.str.%d, i64 0, i64 0)", n, index), type_info: type_info}
+}
+
+struct interpolation_piece {
+	string literal
+	string expression
+}
+
+interpolation_piece[] split_interpolated_string(string raw) {
+	text = strings.TrimSuffix(strings.TrimPrefix(raw, "`"), "`")
+	pieces = bootstrap_array()
+	start = 0
+	for i = 0; i+1 < bootstrap_len(text); i++ {
+		if text[i] != '$' || text[i+1] != '{' {
+			continue
+		}
+		if i > start {
+			pieces = bootstrap_append(pieces, interpolation_piece{literal: text[start:i]})
+		}
+		depth = 1
+		j = i + 2
+		quote = byte(0)
+		for ; j < bootstrap_len(text); j++ {
+			c = text[j]
+			if quote != 0 {
+				if c == '\\' {
+					j += 1
+					continue
+				}
+				if c == quote {
+					quote = 0
+				}
+				continue
+			}
+			if c == '\'' || c == '"' {
+				quote = c
+				continue
+			}
+			if c == '{' {
+				depth += 1
+			}
+			if c == '}' {
+				depth -= 1
+				if depth == 0 {
+					break
+				}
+			}
+		}
+		if j >= bootstrap_len(text) {
+			pieces = bootstrap_append(pieces, interpolation_piece{literal: text[i:]})
+			return pieces
+		}
+		pieces = bootstrap_append(pieces, interpolation_piece{expression: text[i+2 : j]})
+		i = j
+		start = j + 1
+	}
+	if start < bootstrap_len(text) {
+		pieces = bootstrap_append(pieces, interpolation_piece{literal: text[start:]})
+	}
+	return pieces
+}
+
+(string, IRValue) interpolation_argument(llvm_lowerer* lowerer, IRValue value) { // translated Go receiver method
+	if value.type_info != null && value.type_info.name == "string" {
+		return "%s", value
+	}
+	if value.llvm_type == "ptr" {
+		return "%p", value
+	}
+	if value.llvm_type == "float" {
+		reg = lowerer.next_register()
+		lowerer.line("%s = fpext float %s to double", reg, value.value)
+		return "%g", IRValue{llvm_type: "double", value: reg, type_info: &SemanticType{kind: type_float, name: "float64"}}
+	}
+	if value.llvm_type == "double" {
+		return "%g", value
+	}
+	if value.llvm_type == "i1" {
+		return "%d", lowerer.coerce(value, &SemanticType{kind: type_integer, name: "int32"})
+	}
+	if strings.HasPrefix(value.llvm_type, "i") {
+		if is_unsigned_type(value.type_info) {
+			return "%llu", lowerer.coerce(value, &SemanticType{kind: type_integer, name: "uint64"})
+		}
+		return "%lld", lowerer.coerce(value, &SemanticType{kind: type_integer, name: "int64"})
+	}
+	return "%p", value
+}
+
+SemanticType* infer_expression_type(llvm_lowerer* lowerer, Expr expression) { // translated Go receiver method
+	if expression == null {
+		return &SemanticType{kind: type_unknown}
+	}
+	if existing = lowerer.result.expression_types[expression]; existing != null {
+		return lowerer.specialize_type(existing)
+	}
+	switch item = expression.(type) { // TODO lower switch to if/else
+	case *ast.LiteralExpr:
+		return lowerer.literal_type(item)
+	case *ast.IdentifierExpr:
+		if local = lowerer.locals[item.Name]; local.type_info != null {
+			return local.type_info
+		}
+		if global = lowerer.globals[item.Name]; global.type_info != null {
+			return global.type_info
+		}
+		if lowerer.receiver != null {
+			if field = lowerer.receiver.fields[item.Name]; field != null {
+				return field.type_info
+			}
+		}
+		if symbol = lowerer.result.root_namespace.symbols[item.Name]; symbol != null {
+			return symbol.type_info
+		}
+	case *ast.IndexExpr:
+		object = lowerer.infer_expression_type(item.Object)
+		if object != null && object.name == "string" {
+			return &SemanticType{kind: type_char, name: "char"}
+		}
+		return lowerer.array_element_type(object)
+	case *ast.MemberExpr:
+		object = lowerer.infer_expression_type(item.Object)
+		if item.Name == "length" || item.Name == "capacity" {
+			return &SemanticType{kind: type_integer, name: "int64"}
+		}
+		if info = lowerer.struct_info[base_type_name(object)]; info != null {
+			if field = info.fields[item.Name]; field != null {
+				return field.type_info
+			}
+		}
+	case *ast.UnaryExpr:
+		operand = lowerer.infer_expression_type(item.Operand)
+		if item.Operator == "!" {
+			return &SemanticType{kind: type_bool, name: "bool"}
+		}
+		return operand
+	case *ast.BinaryExpr:
+		if item.Operator == "==" || item.Operator == "!=" || item.Operator == "<" || item.Operator == "<=" || item.Operator == ">" || item.Operator == ">=" || item.Operator == "&&" || item.Operator == "||" {
+			return &SemanticType{kind: type_bool, name: "bool"}
+		}
+		return lowerer.infer_expression_type(item.Left)
+	case *ast.CallExpr:
+		callee = lowerer.infer_expression_type(item.Callee)
+		if callee != null && callee.callable != null {
+			return callee.callable.return_type
+		}
+	case *ast.CastExpr:
+		return lowerer.resolve_ref(item.Type)
+	}
+	return &SemanticType{kind: type_unknown}
+}
+
+void annotate_expression_types(llvm_lowerer* lowerer, Expr expression) { // translated Go receiver method
+	if expression == null {
+		return
+	}
+	switch item = expression.(type) { // TODO lower switch to if/else
+	case *ast.IndexExpr:
+		lowerer.annotate_expression_types(item.Object)
+		lowerer.annotate_expression_types(item.Index)
+	case *ast.MemberExpr:
+		lowerer.annotate_expression_types(item.Object)
+	case *ast.UnaryExpr:
+		lowerer.annotate_expression_types(item.Operand)
+	case *ast.BinaryExpr:
+		lowerer.annotate_expression_types(item.Left)
+		lowerer.annotate_expression_types(item.Right)
+	case *ast.CallExpr:
+		lowerer.annotate_expression_types(item.Callee)
+		__range_values_57 = bootstrap_values(item.Arguments)
+		for int64 __range_index_57 = 0; __range_index_57 < bootstrap_len(__range_values_57); __range_index_57 += 1 {
+			arg = __range_values_57[__range_index_57]
+			lowerer.annotate_expression_types(arg)
+		}
+	case *ast.CastExpr:
+		lowerer.annotate_expression_types(item.Value)
+	}
+	lowerer.result.expression_types[expression] = lowerer.infer_expression_type(expression)
+}
+
+IRValue emit_interpolated_string(llvm_lowerer* lowerer, LiteralExpr* literal, SemanticType* type_info) { // translated Go receiver method
+	pieces = split_interpolated_string(literal.Raw)
+	format strings.Builder var
+	arguments = bootstrap_array()
+	__range_values_58 = bootstrap_values(pieces)
+	for int64 __range_index_58 = 0; __range_index_58 < bootstrap_len(__range_values_58); __range_index_58 += 1 {
+		piece = __range_values_58[__range_index_58]
+		if piece.literal != "" {
+			format.WriteString(strings.ReplaceAll(piece.literal, "%", "%%"))
+			continue
+		}
+		expression, parse_errors, lex_errors = parser.ParseExpression(piece.expression)
+		if expression == null || bootstrap_len(parse_errors) != 0 || bootstrap_len(lex_errors) != 0 {
+			format.WriteString("<invalid-interpolation>")
+			continue
+		}
+		lowerer.annotate_expression_types(expression)
+		value = lowerer.emit_expr(expression)
+		placeholder, promoted = lowerer.interpolation_argument(value)
+		format.WriteString(placeholder)
+		arguments = bootstrap_append(arguments, promoted)
+	}
+	format_value = lowerer.static_string_value(format.String(), &SemanticType{kind: type_string, name: "string"})
+	arg_text = bootstrap_array()
+	__range_values_59 = bootstrap_values(arguments)
+	for int64 __range_index_59 = 0; __range_index_59 < bootstrap_len(__range_values_59); __range_index_59 += 1 {
+		argument = __range_values_59[__range_index_59]
+		arg_text = bootstrap_append(arg_text, argument.llvm_type+" "+argument.value)
+	}
+	suffix = ""
+	if bootstrap_len(arg_text) > 0 {
+		suffix = ", " + strings.Join(arg_text, ", ")
+	}
+	required32 = lowerer.next_register()
+	lowerer.line("%s = call i32 (ptr, i64, ptr, ...) @snprintf(ptr null, i64 0, ptr %s%s)", required32, format_value.value, suffix)
+	required64 = lowerer.next_register()
+	lowerer.line("%s = sext i32 %s to i64", required64, required32)
+	capacity = lowerer.next_register()
+	lowerer.line("%s = add i64 %s, 1", capacity, required64)
+	buffer = lowerer.next_register()
+	lowerer.line("%s = call ptr @malloc(i64 %s)", buffer, capacity)
+	lowerer.line("call i32 (ptr, i64, ptr, ...) @snprintf(ptr %s, i64 %s, ptr %s%s)", buffer, capacity, format_value.value, suffix)
+	return IRValue{llvm_type: "ptr", value: buffer, type_info: type_info, fresh: true}
+}
+
+SemanticType* literal_type(llvm_lowerer* lowerer, LiteralExpr* literal) { // translated Go receiver method
+	switch literal.Kind { // TODO lower switch to if/else
+	case ast.LiteralInteger:
+		return &SemanticType{kind: type_integer, name: "int64", untyped_literal: true}
+	case ast.LiteralFloat:
+		return &SemanticType{kind: type_float, name: "float64", untyped_literal: true}
+	case ast.LiteralBool:
+		return &SemanticType{kind: type_bool, name: "bool"}
+	case ast.LiteralCharacter:
+		return &SemanticType{kind: type_char, name: "char"}
+	case ast.LiteralString, ast.LiteralInterpolatedString:
+		return &SemanticType{kind: type_string, name: "string"}
+	case ast.LiteralNull:
+		return &SemanticType{kind: type_null, name: "null"}
+	}
+	return &SemanticType{kind: type_unknown}
+}
+
+string base_type_name(SemanticType* type_info) {
+	if type_info == null {
+		return ""
+	}
+	if bootstrap_len(type_info.generic_args) > 0 {
+		return specialization_name(type_info.name, type_info.generic_args)
+	}
+	return type_info.name
+}
+
+bool is_value_aggregate(SemanticType* type_info) {
+	if type_info == null || semantic_is_pointer(type_info) {
+		return false
+	}
+	return type_info.kind == type_struct || type_info.kind == type_array || bootstrap_len(type_info.array_dimensions) > 0
+}
+
+(catch_context, bool) active_catch(llvm_lowerer* lowerer) { // translated Go receiver method
+	if bootstrap_len(lowerer.catch_stack) == 0 {
+		return catch_context{}, false
+	}
+	return lowerer.catch_stack[bootstrap_len(lowerer.catch_stack)-1], true
+}
+
+void emit_checked_failure(llvm_lowerer* lowerer, string condition, string error_name, string message, string prefix) { // translated Go receiver method
+	context, ok = lowerer.active_catch()
+	fail_label = lowerer.next_label(prefix + ".fail")
+	ok_label = lowerer.next_label(prefix + ".ok")
+	lowerer.line("br i1 %s, label %%%s, label %%%s", condition, ok_label, fail_label)
+	lowerer.raw_line(fail_label + ":")
+	if !ok {
+		lowerer.line("call void @abort()")
+		lowerer.line("unreachable")
+		lowerer.raw_line(ok_label + ":")
+		return
+	}
+	id = lowerer.result.error_type_ids["builtin::"+error_name]
+	message_value = lowerer.static_string_value(message, &SemanticType{kind: type_string, name: "string"})
+	lowerer.store_error_value(context.error_value, "1", strconv.Itoa(id), message_value.value)
+	lowerer.emit_catch_scope_cleanups(context)
+	lowerer.line("br label %%%s", context.end_label)
+	lowerer.raw_line(ok_label + ":")
+}
+
+void emit_catch_scope_cleanups(llvm_lowerer* lowerer, catch_context context) { // translated Go receiver method
+	start = context.block_depth
+	if start < 0 {
+		start = 0
+	}
+	if start > bootstrap_len(lowerer.block_stack) {
+		start = bootstrap_len(lowerer.block_stack)
+	}
+	for index = bootstrap_len(lowerer.block_stack) - 1; index >= start; index-- {
+		lowerer.emit_value_cleanup_scope(index)
+		lowerer.emit_lifetime_cleanups(lowerer.block_stack[index])
+		lowerer.emit_mecc_clear_root_scope(index)
+	}
+}
+
+void emit_control_scope_cleanups(llvm_lowerer* lowerer, int64 start) { // translated Go receiver method
+	if start < 0 {
+		start = 0
+	}
+	for index = bootstrap_len(lowerer.block_stack) - 1; index >= start; index-- {
+		lowerer.emit_value_cleanup_scope(index)
+		lowerer.emit_lifetime_cleanups(lowerer.block_stack[index])
+		lowerer.emit_mecc_clear_root_scope(index)
+	}
+}
+
+void emit_value_cleanup_scope(llvm_lowerer* lowerer, int64 index) { // translated Go receiver method
+	if index < 0 || index >= bootstrap_len(lowerer.value_cleanup_scopes) {
+		return
+	}
+	cleanups = lowerer.value_cleanup_scopes[index]
+	for i = bootstrap_len(cleanups) - 1; i >= 0; i-- {
+		cleanup = cleanups[i]
+		value = lowerer.next_register()
+		lowerer.line("%s = load ptr, ptr %s", value, cleanup.address)
+		lowerer.emit_destroy_value(value, cleanup.type_info)
+		lowerer.line("store ptr null, ptr %s", cleanup.address)
+	}
+}
+
+void emit_value_cleanups_from(llvm_lowerer* lowerer, int64 start) { // translated Go receiver method
+	if start < 0 {
+		start = 0
+	}
+	for index = bootstrap_len(lowerer.value_cleanup_scopes) - 1; index >= start; index-- {
+		lowerer.emit_value_cleanup_scope(index)
+	}
+}
+
+void emit_destroy_value(llvm_lowerer* lowerer, string value, SemanticType* type_info) { // translated Go receiver method
+	type_info = lowerer.specialize_type(type_info)
+	if type_info == null || value == "" || semantic_is_pointer(type_info) {
+		return
+	}
+	non_null = lowerer.next_register()
+	destroy_label = lowerer.next_label("value.destroy")
+	done_label = lowerer.next_label("value.destroy.done")
+	lowerer.line("%s = icmp ne ptr %s, null", non_null, value)
+	lowerer.line("br i1 %s, label %%%s, label %%%s", non_null, destroy_label, done_label)
+	lowerer.raw_line(destroy_label + ":")
+	lowerer.emit_destroy_value_nonnull(value, type_info)
+	lowerer.line("br label %%%s", done_label)
+	lowerer.raw_line(done_label + ":")
+}
+
+void emit_destroy_call_temporary(llvm_lowerer* lowerer, IRValue value) { // translated Go receiver method
+	if is_value_aggregate(value.type_info) {
+		lowerer.emit_destroy_value(value.value, value.type_info)
+		return
+	}
+	if value.fresh && value.type_info != null && value.type_info.kind == type_string {
+		lowerer.line("call void @free(ptr %s)", value.value)
+	}
+}
+
+void emit_destroy_value_nonnull(llvm_lowerer* lowerer, string value, SemanticType* type_info) { // translated Go receiver method
+	if lowerer.result.mecc_enabled {
+		// Aggregate backing storage can itself own MECC reference slots even when
+		// the aggregate is an ordinary value (and therefore not a managed node).
+		// Retire those roots/edges before the backing address becomes stale.
+		lowerer.line("call void @clyth_mecc_owner_release(ptr %s)", value)
+	}
+	if type_info.kind == type_array || bootstrap_len(type_info.array_dimensions) > 0 {
+		lowerer.emit_destroy_array_value(value, type_info)
+		return
+	}
+	if type_info.kind != type_struct {
+		return
+	}
+	info = lowerer.struct_info[base_type_name(type_info)]
+	if info == null {
+		lowerer.line("call void @free(ptr %s)", value)
+		return
+	}
+	if info.destructor {
+		lowerer.line("call void @%s(ptr %s)", llvm_destructor_name(info.name), value)
+	}
+	__range_values_60 = bootstrap_values(info.field_order)
+	for int64 __range_index_60 = 0; __range_index_60 < bootstrap_len(__range_values_60); __range_index_60 += 1 {
+		name = __range_values_60[__range_index_60]
+		field = info.fields[name]
+		if field == null {
+			continue
+		}
+		field_type = lowerer.specialize_type(field.type_info)
+		if !is_value_aggregate(field_type) {
+			continue
+		}
+		address = lowerer.field_address(value, info, name)
+		nested = lowerer.next_register()
+		lowerer.line("%s = load ptr, ptr %s", nested, address)
+		lowerer.emit_destroy_value(nested, field_type)
+	}
+	lowerer.line("call void @free(ptr %s)", value)
+}
+
+void emit_destroy_array_value(llvm_lowerer* lowerer, string header, SemanticType* type_info) { // translated Go receiver method
+	data = lowerer.array_data_pointer(header)
+	element = lowerer.array_element_type(type_info)
+	if is_value_aggregate(element) {
+		length_slot = lowerer.next_register()
+		lowerer.line("%s = getelementptr i8, ptr %s, i64 8", length_slot, header)
+		length = lowerer.next_register()
+		lowerer.line("%s = load i64, ptr %s", length, length_slot)
+		index_slot = lowerer.next_register()
+		lowerer.line("%s = alloca i64", index_slot)
+		lowerer.line("store i64 0, ptr %s", index_slot)
+		cond_label = lowerer.next_label("value.destroy.cond")
+		body_label = lowerer.next_label("value.destroy.body")
+		end_label = lowerer.next_label("value.destroy.end")
+		lowerer.line("br label %%%s", cond_label)
+		lowerer.raw_line(cond_label + ":")
+		index = lowerer.next_register()
+		lowerer.line("%s = load i64, ptr %s", index, index_slot)
+		more = lowerer.next_register()
+		lowerer.line("%s = icmp ult i64 %s, %s", more, index, length)
+		lowerer.line("br i1 %s, label %%%s, label %%%s", more, body_label, end_label)
+		lowerer.raw_line(body_label + ":")
+		address = lowerer.next_register()
+		lowerer.line("%s = getelementptr ptr, ptr %s, i64 %s", address, data, index)
+		nested = lowerer.next_register()
+		lowerer.line("%s = load ptr, ptr %s", nested, address)
+		lowerer.emit_destroy_value(nested, element)
+		next = lowerer.next_register()
+		lowerer.line("%s = add i64 %s, 1", next, index)
+		lowerer.line("store i64 %s, ptr %s", next, index_slot)
+		lowerer.line("br label %%%s", cond_label)
+		lowerer.raw_line(end_label + ":")
+	}
+	lowerer.line("call void @free(ptr %s)", data)
+	lowerer.line("call void @free(ptr %s)", header)
+}
+
+Symbol* lookup_error_type_symbol(llvm_lowerer* lowerer, Namespace* namespace, string name, Map<Namespace*, bool> seen) { // translated Go receiver method
+	if namespace == null || seen[namespace] {
+		return null
+	}
+	seen[namespace] = true
+	if symbol = namespace.symbols[name]; symbol != null && symbol.kind == symbol_error_type {
+		return symbol
+	}
+	__range_values_61 = bootstrap_values(namespace.open_imports)
+	for int64 __range_index_61 = 0; __range_index_61 < bootstrap_len(__range_values_61); __range_index_61 += 1 {
+		imported = __range_values_61[__range_index_61]
+		if symbol = lowerer.lookup_error_type_symbol(imported, name, seen); symbol != null {
+			return symbol
+		}
+	}
+	return null
+}
+
+void store_error_value(llvm_lowerer* lowerer, string object, string flag, string error_type, string message) { // translated Go receiver method
+	info = lowerer.struct_info["Error"]
+	if info == null {
+		return
+	}
+	flag_address = lowerer.field_address(object, info, "error")
+	lowerer.line("store i1 %s, ptr %s", flag, flag_address)
+	type_address = lowerer.field_address(object, info, "error_type")
+	lowerer.line("store i32 %s, ptr %s", error_type, type_address)
+	message_address = lowerer.field_address(object, info, "error_message")
+	lowerer.line("store ptr %s, ptr %s", message, message_address)
+}
+
+IRValue emit_catch(llvm_lowerer* lowerer, CallExpr* call, SemanticType* result_sem) { // translated Go receiver method
+	info = lowerer.struct_info["Error"]
+	object = lowerer.next_register()
+	lowerer.line("%s = call ptr @calloc(i64 1, i64 %d)", object, lowerer.struct_storage_size(info))
+	empty = lowerer.static_string_value("", &SemanticType{kind: type_string, name: "string"})
+	lowerer.store_error_value(object, "0", "0", empty.value)
+	end_label = lowerer.next_label("catch.end")
+	context = catch_context{error_value: object, end_label: end_label, block_depth: bootstrap_len(lowerer.block_stack)}
+	lowerer.catch_stack = bootstrap_append(lowerer.catch_stack, context)
+	if bootstrap_len(call.Arguments) == 1 {
+		if lambda, ok = call.Arguments[0].(*ast.LambdaExpr); ok {
+			terminated = lowerer.emit_block(lambda.Body)
+			if !terminated {
+				lowerer.line("br label %%%s", end_label)
+			}
+		} else {
+			// Non-lambda void() callables remain supported; call them normally.
+			callback = lowerer.emit_expr(call.Arguments[0])
+			lowerer.line("call void %s()", callback.value)
+			lowerer.line("br label %%%s", end_label)
+		}
+	} else {
+		lowerer.line("br label %%%s", end_label)
+	}
+	lowerer.catch_stack = lowerer.catch_stack[:bootstrap_len(lowerer.catch_stack)-1]
+	lowerer.raw_line(end_label + ":")
+	return IRValue{llvm_type: "ptr", value: object, type_info: &SemanticType{kind: type_struct, name: "Error"}, fresh: true}
+}
+
+IRValue emit_call(llvm_lowerer* lowerer, CallExpr* call, SemanticType* result_sem) { // translated Go receiver method
+	if identifier, ok = call.Callee.(*ast.IdentifierExpr); ok && identifier.Name == "catch" {
+		return lowerer.emit_catch(call, result_sem)
+	}
+	if identifier, ok = call.Callee.(*ast.IdentifierExpr); ok && identifier.Name == "raise" {
+		if bootstrap_len(call.Arguments) == 2 && bootstrap_len(lowerer.catch_stack) > 0 {
+			error_type = lowerer.emit_expr(call.Arguments[0])
+			message = lowerer.emit_expr(call.Arguments[1])
+			context = lowerer.catch_stack[bootstrap_len(lowerer.catch_stack)-1]
+			lowerer.store_error_value(context.error_value, "1", error_type.value, message.value)
+			lowerer.emit_catch_scope_cleanups(context)
+			lowerer.line("br label %%%s", context.end_label)
+			return IRValue{llvm_type: "void", type_info: result_sem}
+		}
+		return IRValue{llvm_type: "void", type_info: result_sem}
+	}
+	if identifier, ok = call.Callee.(*ast.IdentifierExpr); ok && identifier.Name == "free" {
+		if bootstrap_len(call.Arguments) == 1 {
+			argument = lowerer.emit_expr(call.Arguments[0])
+			if argument.value != "null" {
+				if lowerer.result.mecc_enabled {
+					lowerer.line("call void @clyth_mecc_owner_release(ptr %s)", argument.value)
+				}
+				id = lowerer.result.expression_allocations[call.Arguments[0]]
+				if info = lowerer.result.allocations[id]; info != null && info.mecc {
+					lowerer.line("call void @clyth_mecc_release(ptr %s)", argument.value)
+				} else {
+					lowerer.emit_destructor_for_value(argument.value, info)
+					lowerer.line("call void @free(ptr %s)", argument.value)
+				}
+				if slot = lowerer.cleanup_slots[id]; slot != "" {
+					lowerer.line("store ptr null, ptr %s", slot)
+				}
+			}
+		}
+		return IRValue{llvm_type: "void", type_info: result_sem}
+	}
+	callee_sem = lowerer.result.expression_types[call.Callee]
+	if callee_sem == null {
+		callee_sem = lowerer.infer_expression_type(call.Callee)
+	}
+	expected = []*SemanticType{}
+	default_values = bootstrap_array()
+	variadic = false
+	native_variadic = false
+	heterogeneous_variadic = false
+	if callee_sem != null && callee_sem.callable != null {
+		expected = callee_sem.callable.parameters
+		default_values = callee_sem.callable.default_values
+		variadic = callee_sem.callable.variadic
+		native_variadic = callee_sem.callable.native_variadic
+		heterogeneous_variadic = callee_sem.callable.heterogeneous_variadic
+	}
+	arguments = bootstrap_array()
+	function_name = ""
+	indirect = ""
+	switch callee = call.Callee.(type) { // TODO lower switch to if/else
+	case *ast.IdentifierExpr:
+		if lowerer.receiver != null && lowerer.receiver.methods[callee.Name] != null {
+			function_name = llvm_method_name(lowerer.receiver.name, callee.Name)
+			arguments = bootstrap_append(arguments, IRValue{llvm_type: "ptr", value: lowerer.locals["this"].address, type_info: &SemanticType{kind: type_struct, name: lowerer.receiver.name}})
+		} else if template, exists = lowerer.struct_info[callee.Name]; exists {
+			constructor_type = lowerer.specialize_type(result_sem)
+			function_name = llvm_constructor_name(base_type_name(constructor_type))
+			if bootstrap_len(template.constructors) > 0 {
+				constructor = template.constructors[0]
+				substitutions = build_substitutions(template.generic_parameters, constructor_type.generic_args)
+				expected = expected[:0]
+				__range_values_62 = bootstrap_values(constructor.parameters)
+				for int64 __range_index_62 = 0; __range_index_62 < bootstrap_len(__range_values_62); __range_index_62 += 1 {
+					parameter = __range_values_62[__range_index_62]
+					expected = bootstrap_append(expected, substitute_type(parameter, substitutions))
+				}
+				default_values = constructor.default_values
+				variadic = constructor.variadic
+				native_variadic = constructor.native_variadic
+				heterogeneous_variadic = constructor.heterogeneous_variadic
+			}
+		} else if local, ok = lowerer.locals[callee.Name]; ok && local.type_info != null && local.type_info.callable != null {
+			loaded = lowerer.emit_expr(callee)
+			indirect = loaded.value
+		} else {
+			function_name = sanitize_llvm_name(callee.Name)
+		}
+	case *ast.MemberExpr:
+		object_sem = lowerer.specialize_type(lowerer.result.expression_types[callee.Object])
+		if object_sem != null && (object_sem.kind == type_array || bootstrap_len(object_sem.array_dimensions) > 0) && callee.Name == "resize" {
+			object = lowerer.emit_expr(callee.Object)
+			if bootstrap_len(call.Arguments) != 1 {
+				return lowerer.zero_value(result_sem)
+			}
+			new_length = lowerer.coerce(lowerer.emit_expr(call.Arguments[0]), &SemanticType{kind: type_integer, name: "int64"})
+			lowerer.emit_array_resize(object.value, object_sem, new_length.value)
+			return IRValue{llvm_type: "void", type_info: result_sem}
+		}
+		if object_sem != null && object_sem.kind == type_namespace {
+			function_name = sanitize_llvm_name(callee.Name)
+		} else {
+			object = lowerer.emit_expr(callee.Object)
+			arguments = bootstrap_append(arguments, object)
+			function_name = llvm_method_name(base_type_name(object_sem), callee.Name)
+		}
+	case *ast.GenericSpecializationExpr:
+		if id, ok = callee.Target.(*ast.IdentifierExpr); ok {
+			constructor_type = lowerer.specialize_type(result_sem)
+			if constructor_type == null || constructor_type.name == "" || constructor_type.kind == type_unknown {
+				constructor_type = &SemanticType{kind: type_struct, name: id.Name}
+				__range_values_63 = bootstrap_values(callee.TypeArguments)
+				for int64 __range_index_63 = 0; __range_index_63 < bootstrap_len(__range_values_63); __range_index_63 += 1 {
+					argument = __range_values_63[__range_index_63]
+					constructor_type.generic_args = bootstrap_append(constructor_type.generic_args, lowerer.resolve_ref(argument))
+				}
+			}
+			if constructor_type.name == id.Name && bootstrap_len(constructor_type.generic_args) == 0 {
+				__range_values_64 = bootstrap_values(callee.TypeArguments)
+				for int64 __range_index_64 = 0; __range_index_64 < bootstrap_len(__range_values_64); __range_index_64 += 1 {
+					argument = __range_values_64[__range_index_64]
+					constructor_type.generic_args = bootstrap_append(constructor_type.generic_args, lowerer.resolve_ref(argument))
+				}
+			}
+			constructor_type = lowerer.specialize_type(constructor_type)
+			if info = lowerer.struct_info[base_type_name(constructor_type)]; info != null {
+				function_name = llvm_constructor_name(info.name)
+				if bootstrap_len(info.constructors) > 0 {
+					constructor = info.constructors[0]
+					expected = bootstrap_append(expected[:0], constructor.parameters...)
+					default_values = constructor.default_values
+					variadic = constructor.variadic
+					native_variadic = constructor.native_variadic
+					heterogeneous_variadic = constructor.heterogeneous_variadic
+				}
+			} else {
+				function_name = sanitize_llvm_name(id.Name)
+			}
+		} else {
+			v = lowerer.emit_expr(callee)
+			indirect = v.value
+		}
+	default:
+		v = lowerer.emit_expr(call.Callee)
+		indirect = v.value
+	}
+	effective_args = bootstrap_append([]ast.Expr(null), call.Arguments...)
+	fixed_count = bootstrap_len(expected)
+	if variadic && !native_variadic && fixed_count > 0 {
+		fixed_count -= 1
+	}
+	for bootstrap_len(effective_args) < fixed_count {
+		index = bootstrap_len(effective_args)
+		if index >= bootstrap_len(default_values) || default_values[index] == null {
+			break
+		}
+		effective_args = bootstrap_append(effective_args, default_values[index])
+	}
+
+	regular_count = bootstrap_len(effective_args)
+	if variadic && !native_variadic {
+		if regular_count > fixed_count {
+			regular_count = fixed_count
+		}
+	}
+	value_argument_temporaries = bootstrap_array()
+	for index = 0; index < regular_count; index++ {
+		arg = effective_args[index]
+		value IRValue var
+		if index < bootstrap_len(expected) {
+			target = lowerer.specialize_type(expected[index])
+			if array_expr, ok = arg.(*ast.ArrayExpr); ok && target != null && (target.kind == type_array || bootstrap_len(target.array_dimensions) > 0) {
+				value = lowerer.emit_array_expr(array_expr, target, lowerer.array_element_type(target))
+			} else {
+				value = lowerer.coerce(lowerer.emit_expr(arg), target)
+			}
+			if is_value_aggregate(target) || (target != null && target.kind == type_string && value.fresh) {
+				value_argument_temporaries = bootstrap_append(value_argument_temporaries, value)
+			}
+		} else {
+			value = lowerer.emit_expr(arg)
+		}
+		arguments = bootstrap_append(arguments, value)
+	}
+	if variadic && !native_variadic && bootstrap_len(expected) > 0 {
+		variadic_type = lowerer.specialize_type(expected[bootstrap_len(expected)-1])
+		pack, variadic_temporaries = lowerer.emit_variadic_pack(effective_args[regular_count:], variadic_type, heterogeneous_variadic)
+		arguments = bootstrap_append(arguments, pack)
+		value_argument_temporaries = bootstrap_append(value_argument_temporaries, variadic_temporaries...)
+	} else {
+		for index = regular_count; index < bootstrap_len(effective_args); index++ {
+			arguments = bootstrap_append(arguments, lowerer.emit_expr(effective_args[index]))
+		}
+	}
+	return_ty = lowerer.llvm_type(result_sem)
+	arg_text = bootstrap_array_with_capacity(bootstrap_len(arguments))
+	__range_values_65 = bootstrap_values(arguments)
+	for int64 __range_index_65 = 0; __range_index_65 < bootstrap_len(__range_values_65); __range_index_65 += 1 {
+		arg = __range_values_65[__range_index_65]
+		arg_text = bootstrap_append(arg_text, arg.llvm_type+" "+arg.value)
+	}
+	callee_text = "@" + function_name
+	if indirect != "" {
+		callee_text = indirect
+	}
+	if function_name != "" && !lowerer.defined[function_name] && lowerer.declarations[function_name] == "" {
+		declaration_args = bootstrap_array()
+		if bootstrap_len(arguments) > 0 {
+			__range_values_66 = bootstrap_values(arguments)
+			for int64 __range_index_66 = 0; __range_index_66 < bootstrap_len(__range_values_66); __range_index_66 += 1 {
+				arg = __range_values_66[__range_index_66]
+				declaration_args = bootstrap_append(declaration_args, arg.llvm_type)
+			}
+		} else {
+			__range_values_67 = bootstrap_values(expected)
+			for int64 __range_index_67 = 0; __range_index_67 < bootstrap_len(__range_values_67); __range_index_67 += 1 {
+				arg = __range_values_67[__range_index_67]
+				declaration_args = bootstrap_append(declaration_args, lowerer.llvm_type(arg))
+			}
+		}
+		if variadic {
+			declaration_args = bootstrap_append(declaration_args, "...")
+		}
+		lowerer.declarations[function_name] = fmt.Sprintf("declare %s @%s(%s)", return_ty, function_name, strings.Join(declaration_args, ", "))
+	}
+	if return_ty == "void" {
+		lowerer.line("call void %s(%s)", callee_text, strings.Join(arg_text, ", "))
+		for index = bootstrap_len(value_argument_temporaries) - 1; index >= 0; index-- {
+			temporary = value_argument_temporaries[index]
+			lowerer.emit_destroy_call_temporary(temporary)
+		}
+		return IRValue{llvm_type: "void", value: "", type_info: result_sem}
+	}
+	reg = lowerer.next_register()
+	lowerer.line("%s = call %s %s(%s)", reg, return_ty, callee_text, strings.Join(arg_text, ", "))
+	for index = bootstrap_len(value_argument_temporaries) - 1; index >= 0; index-- {
+		temporary = value_argument_temporaries[index]
+		lowerer.emit_destroy_call_temporary(temporary)
+	}
+	fresh = result_sem != null && result_sem.kind == type_struct && result_sem.pointer_depth == 0 && strings.Contains(function_name, "__ctor")
+	return IRValue{llvm_type: return_ty, value: reg, type_info: result_sem, fresh: fresh}
+}
+
+IRValue emit_lambda(llvm_lowerer* lowerer, LambdaExpr* lambda, SemanticType* sem) { // translated Go receiver method
+	lowerer.lambda++
+	name = fmt.Sprintf("clyth.lambda.%d", lowerer.lambda)
+	// Save the surrounding function builder and emit the non-capturing lambda separately.
+	saved_lines, saved_locals, saved_return, saved_receiver = lowerer.current_lines, lowerer.locals, lowerer.return_type, lowerer.receiver
+	saved_reg, saved_label = lowerer.register, lowerer.label
+	lowerer.register, lowerer.label = 0, 0
+	lowerer.current_lines = null
+	lowerer.locals = bootstrap_empty_map()
+	lowerer.receiver = null
+	callable = sem.callable
+	if callable == null {
+		callable = &SemanticCallable{return_type: &SemanticType{kind: type_void, name: "void"}}
+	}
+	lowerer.return_type = callable.return_type
+	params = bootstrap_array()
+	__range_keys_68 = (lambda.Parameters).keys()
+	for int64 __range_index_68 = 0; __range_index_68 < bootstrap_len(__range_keys_68); __range_index_68 += 1 {
+		i = __range_keys_68[__range_index_68]
+		p = (lambda.Parameters)[i]
+		pt = &SemanticType{kind: type_unknown}
+		if i < bootstrap_len(callable.parameters) {
+			pt = callable.parameters[i]
+		}
+		ty = lowerer.llvm_type(pt)
+		params = bootstrap_append(params, fmt.Sprintf("%s %%arg.%d", ty, i))
+		addr = fmt.Sprintf("%%lambda.arg.addr.%d", i)
+		lowerer.locals[p.Name] = ir_local{address: addr, type_info: pt}
+	}
+	lowerer.raw_line(fmt.Sprintf("define internal %s @%s(%s) {", lowerer.llvm_type(callable.return_type), name, strings.Join(params, ", ")))
+	lowerer.raw_line("entry:")
+	__range_keys_69 = (lambda.Parameters).keys()
+	for int64 __range_index_69 = 0; __range_index_69 < bootstrap_len(__range_keys_69); __range_index_69 += 1 {
+		i = __range_keys_69[__range_index_69]
+		p = (lambda.Parameters)[i]
+		local = lowerer.locals[p.Name]
+		ty = lowerer.llvm_type(local.type_info)
+		lowerer.line("%s = alloca %s", local.address, ty)
+		lowerer.line("store %s %%arg.%d, ptr %s", ty, i, local.address)
+	}
+	term = lowerer.emit_block(lambda.Body)
+	if !term {
+		lowerer.emit_default_return(callable.return_type)
+	}
+	lowerer.raw_line("}")
+	lambda_def = strings.Join(lowerer.current_lines, "\n")
+	lowerer.current_lines, saved_lines = saved_lines, lowerer.current_lines
+	_ = saved_lines
+	lowerer.locals = saved_locals
+	lowerer.return_type = saved_return
+	lowerer.receiver = saved_receiver
+	lowerer.register = saved_reg
+	lowerer.label = saved_label
+	lowerer.function_defs = bootstrap_append(lowerer.function_defs, lambda_def)
+	return IRValue{llvm_type: "ptr", value: "@" + name, type_info: sem}
+}
+
+bool span_contains(outer, Node inner) {
+	if outer == null || inner == null {
+		return false
+	}
+	return inner.Span().Start.Offset >= outer.Span().Start.Offset && inner.Span().End.Offset <= outer.Span().End.Offset
+}
+
+void prepare_cleanup_slots(llvm_lowerer* lowerer, Node body) { // translated Go receiver method
+	if body == null {
+		return
+	}
+	// Cleanup actions are path-sensitive; AllocationInfo flags such as
+	// explicitly_freed/escaped are aggregate summaries across all analyzed paths.
+	// Allocate a slot whenever at least one concrete path requires compiler
+	// cleanup. Explicit free nulls the slot on paths that destroy early, which
+	// gives us exactly-once destruction without suppressing cleanup elsewhere.
+	needed = bootstrap_empty_map()
+	__range_values_70 = bootstrap_values(lowerer.result.lifetime_actions)
+	for int64 __range_index_70 = 0; __range_index_70 < bootstrap_len(__range_values_70); __range_index_70 += 1 {
+		action = __range_values_70[__range_index_70]
+		if action.kind != lifetime_cleanup || action.allocation <= 0 {
+			continue
+		}
+		info = lowerer.result.allocations[action.allocation]
+		if info == null || info.new_expr == null || info.mecc || !span_contains(body, info.new_expr) {
+			continue
+		}
+		needed[action.allocation] = true
+	}
+	ids = bootstrap_array_with_capacity(bootstrap_len(needed))
+	__range_keys_71 = (needed).keys()
+	for int64 __range_index_71 = 0; __range_index_71 < bootstrap_len(__range_keys_71); __range_index_71 += 1 {
+		id = __range_keys_71[__range_index_71]
+		ids = bootstrap_append(ids, id)
+	}
+	for i = 1; i < bootstrap_len(ids); i++ {
+		for j = i; j > 0 && ids[j] < ids[j-1]; j-- {
+			ids[j], ids[j-1] = ids[j-1], ids[j]
+		}
+	}
+	__range_values_72 = bootstrap_values(ids)
+	for int64 __range_index_72 = 0; __range_index_72 < bootstrap_len(__range_values_72); __range_index_72 += 1 {
+		id = __range_values_72[__range_index_72]
+		slot = lowerer.next_register()
+		lowerer.line("%s = alloca ptr", slot)
+		lowerer.line("store ptr null, ptr %s", slot)
+		lowerer.cleanup_slots[id] = slot
+	}
+}
+
+void emit_destructor_for_value(llvm_lowerer* lowerer, string value, AllocationInfo* info) { // translated Go receiver method
+	if info == null || info.type_info == null {
+		return
+	}
+	type_info = clone_type(info.type_info)
+	if type_info.pointer_depth > 0 {
+		type_info.pointer_depth--
+	}
+	name = base_type_name(type_info)
+	struct_info = lowerer.struct_info[name]
+	if struct_info == null || !struct_info.destructor {
+		return
+	}
+	fn = llvm_destructor_name(name)
+	if !lowerer.defined[fn] && lowerer.declarations[fn] == "" {
+		lowerer.declarations[fn] = fmt.Sprintf("declare void @%s(ptr)", fn)
+	}
+	lowerer.line("call void @%s(ptr %s)", fn, value)
+}
+
+void emit_lifetime_cleanups(llvm_lowerer* lowerer, Node node) { // translated Go receiver method
+	__range_values_73 = bootstrap_values(lowerer.lifetime_actions[node])
+	for int64 __range_index_73 = 0; __range_index_73 < bootstrap_len(__range_values_73); __range_index_73 += 1 {
+		action = __range_values_73[__range_index_73]
+		if action.kind != lifetime_cleanup {
+			continue
+		}
+		slot = lowerer.cleanup_slots[action.allocation]
+		if slot == "" {
+			continue
+		}
+		value = lowerer.next_register()
+		lowerer.line("%s = load ptr, ptr %s", value, slot)
+		occupied = lowerer.next_register()
+		lowerer.line("%s = icmp ne ptr %s, null", occupied, value)
+		free_label = lowerer.next_label("cleanup.free")
+		done_label = lowerer.next_label("cleanup.done")
+		lowerer.line("br i1 %s, label %%%s, label %%%s", occupied, free_label, done_label)
+		lowerer.raw_line(free_label + ":")
+		info = lowerer.result.allocations[action.allocation]
+		lowerer.emit_destructor_for_value(value, info)
+		lowerer.line("call void @free(ptr %s)", value)
+		lowerer.line("store ptr null, ptr %s", slot)
+		lowerer.line("br label %%%s", done_label)
+		lowerer.raw_line(done_label + ":")
+	}
+}
+
+void register_mecc_root(llvm_lowerer* lowerer, string slot) { // translated Go receiver method
+	if !lowerer.result.mecc_enabled || slot == "" || bootstrap_len(lowerer.mecc_root_scopes) == 0 {
+		return
+	}
+	index = bootstrap_len(lowerer.mecc_root_scopes) - 1
+	lowerer.mecc_root_scopes[index] = bootstrap_append(lowerer.mecc_root_scopes[index], slot)
+}
+
+void emit_mecc_clear_root_scope(llvm_lowerer* lowerer, int64 index) { // translated Go receiver method
+	if !lowerer.result.mecc_enabled || index < 0 || index >= bootstrap_len(lowerer.mecc_root_scopes) {
+		return
+	}
+	__range_values_74 = bootstrap_values(lowerer.mecc_root_scopes[index])
+	for int64 __range_index_74 = 0; __range_index_74 < bootstrap_len(__range_values_74); __range_index_74 += 1 {
+		slot = __range_values_74[__range_index_74]
+		lowerer.line("call void @clyth_mecc_store(ptr null, ptr %s, ptr null)", slot)
+	}
+}
+
+void emit_mecc_clear_all_roots(llvm_lowerer* lowerer) { // translated Go receiver method
+	if !lowerer.result.mecc_enabled {
+		return
+	}
+	for index = bootstrap_len(lowerer.mecc_root_scopes) - 1; index >= 0; index-- {
+		lowerer.emit_mecc_clear_root_scope(index)
+	}
+}
+
+void emit_mecc_function_frontier(llvm_lowerer* lowerer) { // translated Go receiver method
+	if !lowerer.result.mecc_enabled {
+		return
+	}
+	lowerer.emit_mecc_clear_all_roots()
+	// Pointer returns transfer a reference to the caller before it can establish
+	// a new root slot. Defer collapse in that case; the caller or next non-pointer
+	// frontier will perform it safely.
+	if !semantic_is_pointer(lowerer.return_type) {
+		lowerer.line("call void @clyth_mecc_collapse()")
+	}
+}
+
+void emit_default_return(llvm_lowerer* lowerer, SemanticType* type_info) { // translated Go receiver method
+	lowerer.emit_mecc_function_frontier()
+	v = lowerer.zero_value(type_info)
+	if v.llvm_type == "void" {
+		lowerer.line("ret void")
+	} else {
+		lowerer.line("ret %s %s", v.llvm_type, v.value)
+	}
+}
+IRValue zero_value(llvm_lowerer* lowerer, SemanticType* type_info) { // translated Go receiver method
+	ty = lowerer.llvm_type(type_info)
+	value = "0"
+	if ty == "ptr" {
+		value = "null"
+	} else if ty == "float" || ty == "double" {
+		value = "0.0"
+	} else if ty == "void" {
+		value = ""
+	}
+	return IRValue{llvm_type: ty, value: value, type_info: type_info}
+}
+
+IRValue clone_struct_value(llvm_lowerer* lowerer, IRValue value, SemanticType* target) { // translated Go receiver method
+	info = lowerer.struct_info[base_type_name(target)]
+	if info == null || value.value == "null" {
+		return IRValue{llvm_type: "ptr", value: value.value, type_info: target}
+	}
+	copy_value = lowerer.next_register()
+	lowerer.line("%s = call ptr @calloc(i64 1, i64 %d)", copy_value, lowerer.struct_storage_size(info))
+	__range_values_75 = bootstrap_values(info.field_order)
+	for int64 __range_index_75 = 0; __range_index_75 < bootstrap_len(__range_values_75); __range_index_75 += 1 {
+		name = __range_values_75[__range_index_75]
+		field = info.fields[name]
+		if field == null {
+			continue
+		}
+		field_type = lowerer.specialize_type(field.type_info)
+		source_address = lowerer.field_address(value.value, info, name)
+		destination_address = lowerer.field_address(copy_value, info, name)
+		ty = lowerer.llvm_type(field_type)
+		loaded = lowerer.next_register()
+		lowerer.line("%s = load %s, ptr %s", loaded, ty, source_address)
+		field_value = IRValue{llvm_type: ty, value: loaded, type_info: field_type}
+		if field_type.kind == type_struct && field_type.pointer_depth == 0 {
+			field_value = lowerer.clone_struct_value(field_value, field_type)
+		} else if field_type.kind == type_array || bootstrap_len(field_type.array_dimensions) > 0 {
+			field_value = lowerer.clone_array_value(field_value, field_type)
+		}
+		lowerer.line("store %s %s, ptr %s", field_value.llvm_type, field_value.value, destination_address)
+	}
+	return IRValue{llvm_type: "ptr", value: copy_value, type_info: target, fresh: true}
+}
+
+IRValue clone_array_value(llvm_lowerer* lowerer, IRValue value, SemanticType* target) { // translated Go receiver method
+	if value.value == "null" {
+		return IRValue{llvm_type: "ptr", value: "null", type_info: target}
+	}
+	length_slot = lowerer.next_register()
+	lowerer.line("%s = getelementptr i8, ptr %s, i64 8", length_slot, value.value)
+	length = lowerer.next_register()
+	lowerer.line("%s = load i64, ptr %s", length, length_slot)
+	source_data = lowerer.array_data_pointer(value.value)
+	element = lowerer.array_element_type(target)
+	element_size = lowerer.semantic_storage_size(element)
+	new_header = lowerer.next_register()
+	lowerer.line("%s = call ptr @calloc(i64 1, i64 16)", new_header)
+	bytes = lowerer.next_register()
+	lowerer.line("%s = mul i64 %s, %d", bytes, length, element_size)
+	new_data = lowerer.next_register()
+	lowerer.line("%s = call ptr @calloc(i64 %s, i64 %d)", new_data, length, element_size)
+	if element.kind == type_struct && element.pointer_depth == 0 {
+		index_slot = lowerer.next_register()
+		lowerer.line("%s = alloca i64", index_slot)
+		lowerer.line("store i64 0, ptr %s", index_slot)
+		cond_label = lowerer.next_label("array.copy.cond")
+		body_label = lowerer.next_label("array.copy.body")
+		end_label = lowerer.next_label("array.copy.end")
+		lowerer.line("br label %%%s", cond_label)
+		lowerer.raw_line(cond_label + ":")
+		index = lowerer.next_register()
+		lowerer.line("%s = load i64, ptr %s", index, index_slot)
+		more = lowerer.next_register()
+		lowerer.line("%s = icmp ult i64 %s, %s", more, index, length)
+		lowerer.line("br i1 %s, label %%%s, label %%%s", more, body_label, end_label)
+		lowerer.raw_line(body_label + ":")
+		source_element_address = lowerer.next_register()
+		lowerer.line("%s = getelementptr ptr, ptr %s, i64 %s", source_element_address, source_data, index)
+		source_element = lowerer.next_register()
+		lowerer.line("%s = load ptr, ptr %s", source_element, source_element_address)
+		cloned = lowerer.clone_struct_value(IRValue{llvm_type: "ptr", value: source_element, type_info: element}, element)
+		destination_element_address = lowerer.next_register()
+		lowerer.line("%s = getelementptr ptr, ptr %s, i64 %s", destination_element_address, new_data, index)
+		lowerer.line("store ptr %s, ptr %s", cloned.value, destination_element_address)
+		next_index = lowerer.next_register()
+		lowerer.line("%s = add i64 %s, 1", next_index, index)
+		lowerer.line("store i64 %s, ptr %s", next_index, index_slot)
+		lowerer.line("br label %%%s", cond_label)
+		lowerer.raw_line(end_label + ":")
+	} else {
+		lowerer.line("call ptr @memcpy(ptr %s, ptr %s, i64 %s)", new_data, source_data, bytes)
+	}
+	data_slot = lowerer.next_register()
+	lowerer.line("%s = getelementptr i8, ptr %s, i64 0", data_slot, new_header)
+	lowerer.line("store ptr %s, ptr %s", new_data, data_slot)
+	new_length_slot = lowerer.next_register()
+	lowerer.line("%s = getelementptr i8, ptr %s, i64 8", new_length_slot, new_header)
+	lowerer.line("store i64 %s, ptr %s", length, new_length_slot)
+	return IRValue{llvm_type: "ptr", value: new_header, type_info: target, fresh: true}
+}
+
+IRValue coerce(llvm_lowerer* lowerer, IRValue value, SemanticType* target) { // translated Go receiver method
+	if target == null || is_unknown_type(target) {
+		return value
+	}
+	target_ty = lowerer.llvm_type(target)
+	if target.kind == type_struct && target.pointer_depth == 0 && value.llvm_type == "ptr" && value.type_info != null && value.type_info.kind == type_struct && value.type_info.pointer_depth == 0 {
+		if value.fresh {
+			value.type_info = target
+			value.fresh = false
+			return value
+		}
+		return lowerer.clone_struct_value(value, target)
+	}
+	if (target.kind == type_array || bootstrap_len(target.array_dimensions) > 0) && value.llvm_type == "ptr" && value.type_info != null && (value.type_info.kind == type_array || bootstrap_len(value.type_info.array_dimensions) > 0) {
+		if value.fresh {
+			value.type_info = target
+			value.fresh = false
+			return value
+		}
+		return lowerer.clone_array_value(value, target)
+	}
+	if value.llvm_type == target_ty {
+		value.type_info = target
+		return value
+	}
+	if target_ty == "void" {
+		return IRValue{llvm_type: "void", type_info: target}
+	}
+	if value.llvm_type == "ptr" && target_ty == "ptr" {
+		return IRValue{llvm_type: "ptr", value: value.value, type_info: target}
+	}
+	reg = lowerer.next_register()
+	if strings.HasPrefix(value.llvm_type, "i") && strings.HasPrefix(target_ty, "i") {
+		from_bits, _ = strconv.Atoi(strings.TrimPrefix(value.llvm_type, "i"))
+		to_bits, _ = strconv.Atoi(strings.TrimPrefix(target_ty, "i"))
+		if from_bits < to_bits {
+			op = "sext"
+			if is_unsigned_type(value.type_info) {
+				op = "zext"
+			}
+			lowerer.line("%s = %s %s %s to %s", reg, op, value.llvm_type, value.value, target_ty)
+		} else {
+			lowerer.line("%s = trunc %s %s to %s", reg, value.llvm_type, value.value, target_ty)
+		}
+		return IRValue{llvm_type: target_ty, value: reg, type_info: target}
+	}
+	if value.llvm_type == "ptr" && strings.HasPrefix(target_ty, "i") {
+		lowerer.line("%s = ptrtoint ptr %s to %s", reg, value.value, target_ty)
+		return IRValue{llvm_type: target_ty, value: reg, type_info: target}
+	}
+	if strings.HasPrefix(value.llvm_type, "i") && target_ty == "ptr" {
+		lowerer.line("%s = inttoptr %s %s to ptr", reg, value.llvm_type, value.value)
+		return IRValue{llvm_type: "ptr", value: reg, type_info: target}
+	}
+	if strings.HasPrefix(value.llvm_type, "i") && (target_ty == "float" || target_ty == "double") {
+		op = "sitofp"
+		if is_unsigned_type(value.type_info) {
+			op = "uitofp"
+		}
+		lowerer.line("%s = %s %s %s to %s", reg, op, value.llvm_type, value.value, target_ty)
+		return IRValue{llvm_type: target_ty, value: reg, type_info: target}
+	}
+	if (value.llvm_type == "float" || value.llvm_type == "double") && strings.HasPrefix(target_ty, "i") {
+		op = "fptosi"
+		if is_unsigned_type(target) {
+			op = "fptoui"
+		}
+		lowerer.line("%s = %s %s %s to %s", reg, op, value.llvm_type, value.value, target_ty)
+		return IRValue{llvm_type: target_ty, value: reg, type_info: target}
+	}
+	return lowerer.zero_value(target)
+}
+
+bool is_unsigned_type(SemanticType* type_info) {
+	if type_info == null {
+		return false
+	}
+	return strings.HasPrefix(type_info.name, "uint") || type_info.name == "uintptr" || type_info.name == "char" || type_info.kind == type_bool || type_info.name == "bool"
+}
+
+IRValue to_bool(llvm_lowerer* lowerer, IRValue value) { // translated Go receiver method
+	if value.llvm_type == "i1" {
+		return value
+	}
+	reg = lowerer.next_register()
+	if value.llvm_type == "ptr" {
+		lowerer.line("%s = icmp ne ptr %s, null", reg, value.value)
+	} else if value.llvm_type == "float" || value.llvm_type == "double" {
+		lowerer.line("%s = fcmp one %s %s, 0.0", reg, value.llvm_type, value.value)
+	} else {
+		lowerer.line("%s = icmp ne %s %s, 0", reg, value.llvm_type, value.value)
+	}
+	return IRValue{llvm_type: "i1", value: reg, type_info: &SemanticType{kind: type_bool, name: "bool"}}
+}
+
+string address_of(llvm_lowerer* lowerer, Expr expression) { // translated Go receiver method
+	address, _ = lowerer.assignment_address(expression)
+	if address == "" {
+		return "null"
+	}
+	return address
+}
+(string, *SemanticType) assignment_address(llvm_lowerer* lowerer, Expr expression) { // translated Go receiver method
+	address, semantic, _ = lowerer.assignment_address_with_owner(expression)
+	return address, semantic
+}
+
+(string, *SemanticType, string) assignment_address_with_owner(llvm_lowerer* lowerer, Expr expression) { // translated Go receiver method
+	switch item = expression.(type) { // TODO lower switch to if/else
+	case *ast.IdentifierExpr:
+		if local, ok = lowerer.locals[item.Name]; ok {
+			return local.address, local.type_info, "null"
+		}
+		if global, ok = lowerer.globals[item.Name]; ok {
+			return global.address, global.type_info, "null"
+		}
+		if lowerer.receiver != null {
+			if field = lowerer.receiver.fields[item.Name]; field != null {
+				owner = lowerer.locals["this"].address
+				return lowerer.field_address(owner, lowerer.receiver, item.Name), field.type_info, owner
+			}
+		}
+	case *ast.MemberExpr:
+		object = lowerer.emit_expr(item.Object)
+		object_sem = lowerer.specialize_type(lowerer.result.expression_types[item.Object])
+		if object_sem == null || object_sem.kind == type_unknown {
+			object_sem = lowerer.specialize_type(lowerer.infer_expression_type(item.Object))
+		}
+		if object_sem != null && (object_sem.pointer_depth > 0 || object_sem.kind == type_pointer) {
+			non_null = lowerer.next_register()
+			lowerer.line("%s = icmp ne ptr %s, null", non_null, object.value)
+			lowerer.emit_checked_failure(non_null, "null_reference", "null pointer member access", "nullref")
+		}
+		if info = lowerer.struct_info[base_type_name(object_sem)]; info != null {
+			if field = info.fields[item.Name]; field != null {
+				return lowerer.field_address(object.value, info, item.Name), field.type_info, object.value
+			}
+		}
+	case *ast.IndexExpr:
+		object = lowerer.emit_expr(item.Object)
+		index = lowerer.coerce(lowerer.emit_expr(item.Index), &SemanticType{kind: type_integer, name: "int64"})
+		object_sem = lowerer.specialize_type(lowerer.result.expression_types[item.Object])
+		if object_sem == null || object_sem.kind == type_unknown {
+			object_sem = lowerer.specialize_type(lowerer.infer_expression_type(item.Object))
+		}
+		lowerer.emit_index_bounds_check(item, object, index, object_sem)
+		sem = lowerer.specialize_type(lowerer.result.expression_types[item])
+		ty = lowerer.llvm_type(sem)
+		data = object.value
+		if object_sem == null || object_sem.kind != type_string || bootstrap_len(object_sem.array_dimensions) != 0 {
+			data = lowerer.array_data_pointer(object.value)
+		}
+		address = lowerer.next_register()
+		lowerer.line("%s = getelementptr %s, ptr %s, i64 %s", address, ty, data, index.value)
+		return address, sem, object.value
+	case *ast.UnaryExpr:
+		if item.Operator == "*" {
+			pointer = lowerer.emit_expr(item.Operand)
+			if pointer.llvm_type != "ptr" {
+				return "", lowerer.result.expression_types[expression], "null"
+			}
+			non_null = lowerer.next_register()
+			lowerer.line("%s = icmp ne ptr %s, null", non_null, pointer.value)
+			lowerer.emit_checked_failure(non_null, "null_reference", "null pointer dereference", "nullref")
+			return pointer.value, lowerer.specialize_type(lowerer.result.expression_types[item]), "null"
+		}
+	}
+	return "", lowerer.result.expression_types[expression], "null"
+}
+
+void emit_index_bounds_check(llvm_lowerer* lowerer, IndexExpr* item, IRValue object, IRValue index, SemanticType* object_sem) { // translated Go receiver method
+	if object_sem == null || lowerer.result.index_safety[item] == index_safety_proven {
+		return
+	}
+	length = ""
+	if object_sem.kind == type_string && bootstrap_len(object_sem.array_dimensions) == 0 {
+		length_reg = lowerer.next_register()
+		lowerer.line("%s = call i64 @strlen(ptr %s)", length_reg, object.value)
+		length = length_reg
+	} else if bootstrap_len(object_sem.array_dimensions) > 0 || object_sem.kind == type_array {
+		if bootstrap_len(object_sem.array_dimensions) > 0 && !object_sem.array_dimensions[0].dynamic && object_sem.array_dimensions[0].size != "" {
+			length = object_sem.array_dimensions[0].size
+		} else {
+			length_slot = lowerer.next_register()
+			lowerer.line("%s = getelementptr i8, ptr %s, i64 8", length_slot, object.value)
+			length_reg = lowerer.next_register()
+			lowerer.line("%s = load i64, ptr %s", length_reg, length_slot)
+			length = length_reg
+		}
+	}
+	if length == "" {
+		return
+	}
+	in_bounds = lowerer.next_register()
+	lowerer.line("%s = icmp ult i64 %s, %s", in_bounds, index.value, length)
+	lowerer.emit_checked_failure(in_bounds, "bounds_error", "array or string index out of bounds", "bounds")
+}
+
+string array_data_pointer(llvm_lowerer* lowerer, string header) { // translated Go receiver method
+	data_slot = lowerer.next_register()
+	lowerer.line("%s = getelementptr i8, ptr %s, i64 0", data_slot, header)
+	data = lowerer.next_register()
+	lowerer.line("%s = load ptr, ptr %s", data, data_slot)
+	return data
+}
+
+void emit_array_resize(llvm_lowerer* lowerer, string header, SemanticType* array_type, string new_length) { // translated Go receiver method
+	element_type = lowerer.array_element_type(array_type)
+	element_size = lowerer.llvm_storage_size(lowerer.llvm_type(element_type))
+	data = lowerer.array_data_pointer(header)
+	bytes = lowerer.next_register()
+	lowerer.line("%s = mul i64 %s, %d", bytes, new_length, element_size)
+	resized = lowerer.next_register()
+	lowerer.line("%s = call ptr @realloc(ptr %s, i64 %s)", resized, data, bytes)
+	data_slot = lowerer.next_register()
+	lowerer.line("%s = getelementptr i8, ptr %s, i64 0", data_slot, header)
+	lowerer.line("store ptr %s, ptr %s", resized, data_slot)
+	length_slot = lowerer.next_register()
+	lowerer.line("%s = getelementptr i8, ptr %s, i64 8", length_slot, header)
+	lowerer.line("store i64 %s, ptr %s", new_length, length_slot)
+}
+
+int64 llvm_storage_size(llvm_lowerer* lowerer, string llvm_type) { // translated Go receiver method
+	switch llvm_type { // TODO lower switch to if/else
+	case "i1", "i8":
+		return 1
+	case "i16":
+		return 2
+	case "i32", "float":
+		return 4
+	case "i64", "double", "ptr":
+		return 8
+	default:
+		return 8
+	}
+}
+
+int64 align_up(int64 value, int64 alignment) {
+	if alignment <= 1 {
+		return value
+	}
+	return (value + alignment - 1) / alignment * alignment
+}
+
+int64 semantic_storage_size(llvm_lowerer* lowerer, SemanticType* type_info) { // translated Go receiver method
+	return lowerer.llvm_storage_size(lowerer.llvm_type(type_info))
+}
+
+int64 semantic_alignment(llvm_lowerer* lowerer, SemanticType* type_info) { // translated Go receiver method
+	size = lowerer.semantic_storage_size(type_info)
+	if size > 8 {
+		return 8
+	}
+	if size < 1 {
+		return 1
+	}
+	return size
+}
+
+int64 struct_field_offset(llvm_lowerer* lowerer, StructInfo* info, string field_name) { // translated Go receiver method
+	if info == null {
+		return 0
+	}
+	offset = 0
+	names = info.field_order
+	if bootstrap_len(names) == 0 {
+		names = bootstrap_array_with_capacity(bootstrap_len(info.fields))
+		__range_keys_76 = (info.fields).keys()
+		for int64 __range_index_76 = 0; __range_index_76 < bootstrap_len(__range_keys_76); __range_index_76 += 1 {
+			name = __range_keys_76[__range_index_76]
+			names = bootstrap_append(names, name)
+		}
+		sort_strings(names)
+	}
+	__range_values_77 = bootstrap_values(names)
+	for int64 __range_index_77 = 0; __range_index_77 < bootstrap_len(__range_values_77); __range_index_77 += 1 {
+		name = __range_values_77[__range_index_77]
+		field = info.fields[name]
+		if field == null {
+			continue
+		}
+		alignment = lowerer.semantic_alignment(field.type_info)
+		offset = align_up(offset, alignment)
+		if name == field_name {
+			return offset
+		}
+		offset += lowerer.semantic_storage_size(field.type_info)
+	}
+	return offset
+}
+
+int64 struct_storage_size(llvm_lowerer* lowerer, StructInfo* info) { // translated Go receiver method
+	if info == null || bootstrap_len(info.fields) == 0 {
+		return 1
+	}
+	offset, max_alignment = 0, 1
+	names = info.field_order
+	if bootstrap_len(names) == 0 {
+		names = bootstrap_array_with_capacity(bootstrap_len(info.fields))
+		__range_keys_78 = (info.fields).keys()
+		for int64 __range_index_78 = 0; __range_index_78 < bootstrap_len(__range_keys_78); __range_index_78 += 1 {
+			name = __range_keys_78[__range_index_78]
+			names = bootstrap_append(names, name)
+		}
+		sort_strings(names)
+	}
+	__range_values_79 = bootstrap_values(names)
+	for int64 __range_index_79 = 0; __range_index_79 < bootstrap_len(__range_values_79); __range_index_79 += 1 {
+		name = __range_values_79[__range_index_79]
+		field = info.fields[name]
+		if field == null {
+			continue
+		}
+		alignment = lowerer.semantic_alignment(field.type_info)
+		if alignment > max_alignment {
+			max_alignment = alignment
+		}
+		offset = align_up(offset, alignment)
+		offset += lowerer.semantic_storage_size(field.type_info)
+	}
+	return align_up(offset, max_alignment)
+}
+
+void initialize_struct_fields(llvm_lowerer* lowerer, string object, StructInfo* info) { // translated Go receiver method
+	if info == null {
+		return
+	}
+	__range_values_80 = bootstrap_values(info.field_order)
+	for int64 __range_index_80 = 0; __range_index_80 < bootstrap_len(__range_values_80); __range_index_80 += 1 {
+		name = __range_values_80[__range_index_80]
+		field = info.fields[name]
+		if field == null {
+			continue
+		}
+		field_type = lowerer.specialize_type(field.type_info)
+		address = lowerer.field_address(object, info, name)
+		if bootstrap_len(field_type.array_dimensions) > 0 || field_type.kind == type_array {
+			count = 0
+			if bootstrap_len(field_type.array_dimensions) > 0 && !field_type.array_dimensions[0].dynamic {
+				count, _ = strconv.Atoi(field_type.array_dimensions[0].size)
+			}
+			element = lowerer.array_element_type(field_type)
+			element_size = lowerer.semantic_storage_size(element)
+			header = lowerer.next_register()
+			lowerer.line("%s = call ptr @calloc(i64 1, i64 16)", header)
+			if count > 0 {
+				data = lowerer.next_register()
+				lowerer.line("%s = call ptr @calloc(i64 %d, i64 %d)", data, count, element_size)
+				data_slot = lowerer.next_register()
+				lowerer.line("%s = getelementptr i8, ptr %s, i64 0", data_slot, header)
+				lowerer.line("store ptr %s, ptr %s", data, data_slot)
+			}
+			length_slot = lowerer.next_register()
+			lowerer.line("%s = getelementptr i8, ptr %s, i64 8", length_slot, header)
+			lowerer.line("store i64 %d, ptr %s", count, length_slot)
+			lowerer.line("store ptr %s, ptr %s", header, address)
+		} else if field_type.kind == type_struct && field_type.pointer_depth == 0 {
+			nested_info = lowerer.struct_info[base_type_name(field_type)]
+			if nested_info != null {
+				nested = lowerer.next_register()
+				lowerer.line("%s = call ptr @calloc(i64 1, i64 %d)", nested, lowerer.struct_storage_size(nested_info))
+				lowerer.initialize_struct_fields(nested, nested_info)
+				lowerer.line("store ptr %s, ptr %s", nested, address)
+			}
+		}
+	}
+}
+
+string field_address(llvm_lowerer* lowerer, string object, StructInfo* info, string field_name) { // translated Go receiver method
+	byte_offset = lowerer.struct_field_offset(info, field_name)
+	address = lowerer.next_register()
+	lowerer.line("%s = getelementptr i8, ptr %s, i64 %d", address, object, byte_offset)
+	return address
+}
+IRValue load_receiver_field(llvm_lowerer* lowerer, string name, SemanticType* sem) { // translated Go receiver method
+	address = lowerer.field_address(lowerer.locals["this"].address, lowerer.receiver, name)
+	ty = lowerer.llvm_type(sem)
+	reg = lowerer.next_register()
+	lowerer.line("%s = load %s, ptr %s", reg, ty, address)
+	return IRValue{llvm_type: ty, value: reg, type_info: sem}
+}

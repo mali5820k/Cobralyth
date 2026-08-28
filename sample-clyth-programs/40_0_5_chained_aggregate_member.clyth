@@ -1,0 +1,22 @@
+extern C int32 printf(string formatted_string, ...)
+
+struct ChainInner {
+    int32 value
+}
+
+struct ChainOuter {
+    ChainInner inner
+}
+
+int32 main() {
+    ChainInner inner
+    inner.value = 42
+
+    ChainOuter outer
+    outer.inner = inner
+
+    ChainOuter[1] values = [outer]
+    int32 result = values[0].inner.value
+    printf("chained aggregate=%d\n", result)
+    return result - 42
+}

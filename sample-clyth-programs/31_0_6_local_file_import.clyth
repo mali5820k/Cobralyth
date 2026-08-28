@@ -1,0 +1,8 @@
+import "support/legacy_math.clyth" as math
+extern C int32 printf(string formatted_string, ...)
+
+int32 main(string[] args) {
+    int32 value = math.add_two(40)
+    printf("imported result=%d\n", value)
+    return value - 42
+}

@@ -1,0 +1,21 @@
+import file-io
+
+int32 add(int32 left, int32 right) {
+    return left + right
+}
+
+int32 main(string[] args) {
+    int32 value = add(20, 22)
+    if args.length == 3 {
+        println(args[1])
+        println(args[2])
+    }
+    int32 index = 0
+    while index < 2 {
+        index += 1
+    }
+    if index == 2 && value == 42 {
+        println("stage1-native-ok")
+    }
+    return value
+}

@@ -1,0 +1,515 @@
+// AUTO-TRANSLATED BOOTSTRAP SEED FROM FROZEN GO V1.0.0 IMPLEMENTATION.
+// Source: compiler/go/internal/compiler/semantic_types.go
+// This file preserves implementation logic for the Go -> Clyth bootstrap port.
+
+// package compiler
+
+// Go imports:
+// "encoding/json"
+// "fmt"
+// "sort"
+// "strings"
+// "github.com/mali5820k/clyth-bootstrap/internal/frontend/ast"
+// "github.com/mali5820k/clyth-bootstrap/internal/frontend/token"
+
+import "../frontend/ast/ast.clyth"
+import "../frontend/token/token.clyth"
+import string
+import collections
+
+// TypeKind identifies the semantic category assigned to an expression or declaration.
+// The semantic layer deliberately keeps "unknown" as a first-class type so one
+// unresolved imported/native surface does not produce a cascade of unrelated errors.
+// type TypeKind = string  // TODO bootstrap nominal alias
+
+// Go constants (manual nominal lowering follows):
+// "unknown"    TypeKind = "unknown"
+// "void"       TypeKind = "void"
+// "bool"       TypeKind = "bool"
+// "integer"    TypeKind = "integer"
+// "float"      TypeKind = "float"
+// "string"     TypeKind = "string"
+// "char"       TypeKind = "char"
+// "struct"     TypeKind = "struct"
+// "protocol"   TypeKind = "protocol"
+// "enum"       TypeKind = "enum"
+// "array"      TypeKind = "array"
+// "pointer"    TypeKind = "pointer"
+// "callable"   TypeKind = "callable"
+// "namespace"  TypeKind = "namespace"
+// "error_type" TypeKind = "error_type"
+// "null"       TypeKind = "null"
+
+
+
+
+
+// SemanticType is the canonical resolved representation of a Clyth type.
+// Struct names remain Go-style exported type names, while implementation state
+// uses snake_case identifiers as required by the bootstrap compiler style.
+struct SemanticType {
+	string kind
+	string name
+	SemanticType*[] generic_args
+	SemanticArrayDimension[] array_dimensions
+	int64 pointer_depth
+	bool is_const
+	SemanticCallable* callable
+	string namespace_name
+	bool untyped_literal
+}
+
+// SemanticArrayDimension records one fixed or dynamic array dimension.
+struct SemanticArrayDimension {
+	bool dynamic
+	string size
+}
+
+// SemanticCallable describes the resolved signature of a function or callable value.
+struct SemanticCallable {
+	SemanticType* return_type
+	SemanticType*[] parameters
+	Expr[] default_values
+	int64 required_parameters
+	bool variadic
+	bool heterogeneous_variadic
+	bool native_variadic
+}
+
+// SymbolKind identifies the declaration category stored in a scope or namespace.
+// type SymbolKind = string  // TODO bootstrap nominal alias
+
+// Go constants (manual nominal lowering follows):
+// "function"   SymbolKind = "function"
+// "struct"     SymbolKind = "struct"
+// "protocol"   SymbolKind = "protocol"
+// "global"     SymbolKind = "global"
+// "parameter"  SymbolKind = "parameter"
+// "local"      SymbolKind = "local"
+// "field"      SymbolKind = "field"
+// "method"     SymbolKind = "method"
+// "namespace"  SymbolKind = "namespace"
+// "error_type" SymbolKind = "error_type"
+
+// Symbol is a semantically resolved declaration available for lookup.
+struct Symbol {
+	string name
+	string kind
+	SemanticType* type_info
+	Node declaration
+	string namespace_name
+	int64 scope_id
+	string[] generic_parameters
+	string receiver_name
+	int64 error_type_id
+}
+
+// Scope models one lexical scope. Parent links implement ordinary lexical lookup.
+struct Scope {
+	int64 id
+	int64 parent_id
+	string kind
+	Map<string, Symbol*> symbols
+}
+
+// Namespace contains the declarations exported by a source file or runtime module.
+struct Namespace {
+	string name
+	string source_path
+	string import_kind
+	Map<string, Symbol*> symbols
+	Map<string, StructInfo*> structs
+	Map<string, ProtocolInfo*> protocols
+	Namespace*[] open_imports
+	Map<string, Namespace*> alias_imports
+	bool analyzed_bodies
+}
+
+// StructInfo stores fields and methods after declaration hoisting. Generic members
+// retain their template types and are substituted when a specialization is used.
+struct StructInfo {
+	string name
+	StructDecl* declaration
+	string[] generic_parameters
+	Map<string, Symbol*> fields
+	string[] field_order
+	Map<string, Symbol*> methods
+	SemanticCallable*[] constructors
+	bool destructor
+}
+
+// ProtocolInfo stores protocol method requirements for later conformance analysis.
+struct ProtocolInfo {
+	string name
+	ProtocolDecl* declaration
+	string[] generic_parameters
+	Map<string, Symbol*> methods
+}
+
+// GenericSpecialization records every concrete generic type/expression requested
+// by source. LLVM lowering can consume this metadata to choose deterministic names.
+struct GenericSpecialization {
+	string base_name
+	string concrete_name
+	SemanticType*[] type_arguments
+	Span source_span
+	string source_path
+}
+
+// SemanticError is a source-located semantic diagnostic.
+struct SemanticError {
+	string source_path
+	Span source_span
+	string message
+}
+
+string SemanticErrorString(SemanticError semantic_error) {
+    return `${semantic_error.source_path}:${semantic_error.source_span.Start.Line}:${semantic_error.source_span.Start.Column}: ${semantic_error.message}`
+}
+
+// DiagnosticLevel identifies a non-fatal compiler diagnostic emitted after
+// successful syntax/semantic validation.
+// type DiagnosticLevel = string  // TODO bootstrap nominal alias
+
+// Go constants (manual nominal lowering follows):
+// "info"    DiagnosticLevel = "info"
+// "warning" DiagnosticLevel = "warning"
+
+// CompilerDiagnostic is a source-located informational or warning diagnostic.
+struct CompilerDiagnostic {
+	string level
+	string code
+	string message
+	string source_path
+	Span source_span
+}
+
+// MeccPolicy is the effective compiler policy attached to one lexical region.
+// MECC availability itself is a build option; scoped directives only tune the
+// behavior of estates when MECC is enabled.
+struct MeccPolicy {
+	bool compacting
+}
+
+// LifetimeActionKind identifies a compiler-selected lifetime operation.
+// type LifetimeActionKind = string  // TODO bootstrap nominal alias
+
+// Go constants (manual nominal lowering follows):
+// "cleanup"       LifetimeActionKind = "cleanup"
+// "explicit_free" LifetimeActionKind = "explicit_free"
+// "mecc"          LifetimeActionKind = "mecc"
+
+// LifetimeAction records one allocation-level action selected before lowering.
+struct LifetimeAction {
+	string kind
+	int64 allocation
+	Node node
+	string reason
+	MeccPolicy policy
+}
+
+// AllocationInfo records provenance and the finalized lifetime disposition for
+// one `new` allocation expression.
+struct AllocationInfo {
+	int64 id
+	NewExpr* new_expr
+	string source_path
+	Span source_span
+	SemanticType* type_info
+	MeccPolicy policy
+	bool escaped
+	bool mecc
+	bool explicitly_freed
+	string destruction_reason
+}
+
+// IndexSafety records whether semantic analysis could prove an indexing
+// operation safe. Invalid fixed-array accesses are rejected during semantic
+// analysis and therefore never reach lowering; the remaining states let the
+// backend elide checks only when a proof actually exists.
+// type IndexSafety = string  // TODO bootstrap nominal alias
+
+// Go constants (manual nominal lowering follows):
+// "runtime" IndexSafety = "runtime"
+// "proven_safe"  IndexSafety = "proven_safe"
+
+// AnalysisResult is the immutable output consumed by symbol emission and lowering.
+struct AnalysisResult {
+	string root_path
+	Namespace* root_namespace
+	Scope*[] scopes
+	Map<string, Namespace*> namespaces
+	GenericSpecialization[] specializations
+	SemanticError[] semantic_errors
+	Map<Expr, SemanticType*> expression_types
+	bool mecc_enabled
+	bool mecc_macros_present
+	Map<Node, MeccPolicy> mecc_policy_by_node
+	Map<int64, AllocationInfo*> allocations
+	Map<NewExpr*, int64> allocation_by_new
+	Map<Expr, int64> expression_allocations
+	LifetimeAction[] lifetime_actions
+	CompilerDiagnostic[] compiler_diagnostics
+	Map<string, int64> error_type_ids
+	Map<IndexExpr*, string> index_safety
+}
+
+SemanticType*[] append_semantic_type(SemanticType*[] values, SemanticType* value) {
+    int64 n = values.length
+    SemanticType*[] replacement = array<SemanticType*>(n + 1)
+    int64 i = 0
+    while i < n { replacement[i] = values[i]; i += 1 }
+    replacement[n] = value
+    return replacement
+}
+
+SemanticArrayDimension[] append_semantic_dimension(SemanticArrayDimension[] values, SemanticArrayDimension value) {
+    int64 n = values.length
+    SemanticArrayDimension[] replacement = array<SemanticArrayDimension>(n + 1)
+    int64 i = 0
+    while i < n { replacement[i] = values[i]; i += 1 }
+    replacement[n] = value
+    return replacement
+}
+
+string[] append_semantic_string(string[] values, string value) {
+    int64 n = values.length
+    string[] replacement = array<string>(n + 1)
+    int64 i = 0
+    while i < n { replacement[i] = values[i]; i += 1 }
+    replacement[n] = value
+    return replacement
+}
+
+SemanticType*[] copy_semantic_types(SemanticType*[] input) {
+    SemanticType*[] output = array<SemanticType*>(input.length)
+    int64 i = 0
+    while i < input.length { output[i] = input[i]; i += 1 }
+    return output
+}
+
+SemanticArrayDimension[] copy_semantic_dimensions(SemanticArrayDimension[] input) {
+    SemanticArrayDimension[] output = array<SemanticArrayDimension>(input.length)
+    int64 i = 0
+    while i < input.length { output[i] = input[i]; i += 1 }
+    return output
+}
+
+string join_semantic_strings(string[] values, string separator) {
+    string result = ""
+    int64 i = 0
+    while i < values.length {
+        if i > 0 { result = result + separator }
+        result = result + values[i]
+        i += 1
+    }
+    return result
+}
+
+string repeat_semantic_string(string value, int64 count) {
+    string result = ""
+    int64 i = 0
+    while i < count { result = result + value; i += 1 }
+    return result
+}
+
+bool semantic_char_in(string value, int64 index, string expected) {
+    return bootstrap_string_slice(value, index, 1) == expected
+}
+
+string sanitize_specialization_name(string value) {
+    string output = ""
+    int64 i = 0
+    int64 length = bootstrap_string_length(value)
+    while i < length {
+        string ch = bootstrap_string_slice(value, i, 1)
+        if ch == " " || ch == "<" || ch == "," || ch == "[" || ch == "(" { output = output + "_" }
+        else if ch == "*" { output = output + "p" }
+        else if ch != ">" && ch != "]" && ch != ")" { output = output + ch }
+        i += 1
+    }
+    return output
+}
+
+SemanticType* clone_type(SemanticType* type_info) {
+    if type_info == null { return null }
+    SemanticType* cloned = new SemanticType()
+    cloned.kind = type_info.kind
+    cloned.name = type_info.name
+    cloned.generic_args = copy_semantic_types(type_info.generic_args)
+    cloned.array_dimensions = copy_semantic_dimensions(type_info.array_dimensions)
+    cloned.pointer_depth = type_info.pointer_depth
+    cloned.is_const = type_info.is_const
+    cloned.namespace_name = type_info.namespace_name
+    cloned.untyped_literal = type_info.untyped_literal
+    if type_info.callable != null {
+        SemanticCallable* callable = new SemanticCallable()
+        callable.return_type = type_info.callable.return_type
+        callable.parameters = copy_semantic_types(type_info.callable.parameters)
+        callable.default_values = type_info.callable.default_values
+        callable.required_parameters = type_info.callable.required_parameters
+        callable.variadic = type_info.callable.variadic
+        callable.heterogeneous_variadic = type_info.callable.heterogeneous_variadic
+        callable.native_variadic = type_info.callable.native_variadic
+        cloned.callable = callable
+    }
+    return cloned
+}
+
+string type_name(SemanticType* type_info) {
+    if type_info == null { return "unknown" }
+    if type_info.kind == "namespace" { return "namespace(" + type_info.namespace_name + ")" }
+    if type_info.callable != null {
+        string[] parameter_names
+        int64 i = 0
+        while i < type_info.callable.parameters.length {
+            parameter_names = append_semantic_string(parameter_names, type_name(type_info.callable.parameters[i]))
+            i += 1
+        }
+        if type_info.callable.variadic { parameter_names = append_semantic_string(parameter_names, "...") }
+        return type_name(type_info.callable.return_type) + "(" + join_semantic_strings(parameter_names, ", ") + ")"
+    }
+    string name = type_info.name
+    if name == "" { name = type_info.kind }
+    if type_info.generic_args.length > 0 {
+        string[] arguments
+        int64 i = 0
+        while i < type_info.generic_args.length {
+            arguments = append_semantic_string(arguments, type_name(type_info.generic_args[i]))
+            i += 1
+        }
+        name = name + "<" + join_semantic_strings(arguments, ", ") + ">"
+    }
+    int64 d = 0
+    while d < type_info.array_dimensions.length {
+        SemanticArrayDimension dimension = type_info.array_dimensions[d]
+        if dimension.dynamic { name = name + "[]" }
+        else { name = name + "[" + dimension.size + "]" }
+        d += 1
+    }
+    if type_info.pointer_depth > 0 { name = name + repeat_semantic_string("*", type_info.pointer_depth) }
+    if type_info.is_const { name = "const " + name }
+    return name
+}
+
+bool specialization_is_concrete(GenericSpecialization specialization) {
+    if specialization.type_arguments.length == 0 { return false }
+    int64 i = 0
+    while i < specialization.type_arguments.length {
+        SemanticType* argument = specialization.type_arguments[i]
+        if argument == null || argument.kind == "unknown" { return false }
+        i += 1
+    }
+    return true
+}
+
+string specialization_name(string base_name, SemanticType*[] arguments) {
+    string[] argument_names
+    int64 i = 0
+    while i < arguments.length {
+        argument_names = append_semantic_string(argument_names, sanitize_specialization_name(type_name(arguments[i])))
+        i += 1
+    }
+    return base_name + "__" + join_semantic_strings(argument_names, "__")
+}
+
+bool is_integer_type(SemanticType* type_info) {
+    if type_info == null { return false }
+    if type_info.kind == "integer" { return true }
+    return type_info.name == "int8" || type_info.name == "int16" || type_info.name == "int32" || type_info.name == "int64" || type_info.name == "uint8" || type_info.name == "uint16" || type_info.name == "uint32" || type_info.name == "uint64"
+}
+
+bool is_integer_like(SemanticType* type_info) { return is_integer_type(type_info) || (type_info != null && (type_info.kind == "char" || type_info.name == "char")) }
+bool is_float_type(SemanticType* type_info) { return type_info != null && (type_info.kind == "float" || type_info.name == "float32" || type_info.name == "float64") }
+bool is_numeric_type(SemanticType* type_info) { return is_integer_type(type_info) || is_float_type(type_info) }
+bool is_unknown_type(SemanticType* type_info) { return type_info == null || type_info.kind == "unknown" }
+
+bool types_compatible(SemanticType* target, SemanticType* value) {
+    if is_unknown_type(target) || is_unknown_type(value) { return true }
+    if value.kind == "null" { return target.pointer_depth > 0 || target.kind == "pointer" || target.name == "string" || target.name == "owned" }
+    if target.array_dimensions.length == value.array_dimensions.length && target.array_dimensions.length > 0 && is_integer_like(target) && is_integer_like(value) { return true }
+    if target.array_dimensions.length == 0 && value.array_dimensions.length == 0 && is_integer_like(target) && is_integer_like(value) { return true }
+    if value.untyped_literal && is_float_type(value) && is_float_type(target) { return true }
+    if target.kind == "bool" && is_integer_type(value) { return true }
+    if value.kind == "bool" && is_integer_type(target) { return true }
+    if target.callable != null || value.callable != null { return callables_compatible(target.callable, value.callable) }
+    if target.name != value.name || target.pointer_depth != value.pointer_depth || target.array_dimensions.length != value.array_dimensions.length { return false }
+    if target.generic_args.length != value.generic_args.length { return false }
+    int64 i = 0
+    while i < target.generic_args.length {
+        if !types_compatible(target.generic_args[i], value.generic_args[i]) { return false }
+        i += 1
+    }
+    return true
+}
+
+bool callables_compatible(SemanticCallable* target, SemanticCallable* value) {
+    if target == null || value == null { return false }
+    if !types_compatible(target.return_type, value.return_type) || target.variadic != value.variadic || target.parameters.length != value.parameters.length { return false }
+    int64 i = 0
+    while i < target.parameters.length {
+        if !types_compatible(target.parameters[i], value.parameters[i]) { return false }
+        i += 1
+    }
+    return true
+}
+
+string json_escape_semantic(string value) {
+    string out = ""
+    int64 i = 0
+    int64 n = bootstrap_string_length(value)
+    while i < n {
+        string ch = bootstrap_string_slice(value, i, 1)
+        if ch == "\\" { out = out + "\\\\" }
+        else if ch == "\"" { out = out + "\\\"" }
+        else if ch == "\n" { out = out + "\\n" }
+        else if ch == "\r" { out = out + "\\r" }
+        else if ch == "\t" { out = out + "\\t" }
+        else { out = out + ch }
+        i += 1
+    }
+    return out
+}
+
+string json_quote_semantic(string value) { return "\"" + json_escape_semantic(value) + "\"" }
+string json_bool_semantic(bool value) { if value { return "true" }; return "false" }
+
+string semantic_type_json(SemanticType* type_info) {
+    if type_info == null { return "null" }
+    string result = "{\"kind\":" + json_quote_semantic(type_info.kind) + ",\"name\":" + json_quote_semantic(type_info.name) + ",\"display\":" + json_quote_semantic(type_name(type_info)) + ",\"const\":" + json_bool_semantic(type_info.is_const)
+    if type_info.generic_args.length > 0 {
+        result = result + ",\"generic_args\":["
+        int64 i = 0
+        while i < type_info.generic_args.length {
+            if i > 0 { result = result + "," }
+            result = result + semantic_type_json(type_info.generic_args[i])
+            i += 1
+        }
+        result = result + "]"
+    }
+    if type_info.callable != null {
+        result = result + ",\"callable\":{\"return_type\":" + semantic_type_json(type_info.callable.return_type) + ",\"parameters\":["
+        int64 i = 0
+        while i < type_info.callable.parameters.length {
+            if i > 0 { result = result + "," }
+            result = result + semantic_type_json(type_info.callable.parameters[i])
+            i += 1
+        }
+        result = result + "],\"variadic\":" + json_bool_semantic(type_info.callable.variadic) + "}"
+    }
+    if type_info.namespace_name != "" { result = result + ",\"namespace\":" + json_quote_semantic(type_info.namespace_name) }
+    return result + "}"
+}
+
+// Deterministic symbol JSON used by --emit-symbols-json.  The self-hosted
+// compiler serializes directly rather than depending on Go's encoding/json.
+string symbols_json(AnalysisResult* result) {
+    string json = "{\"root_path\":" + json_quote_semantic(result.root_path)
+    if result.root_namespace != null { json = json + ",\"root_namespace\":" + json_quote_semantic(result.root_namespace.name) }
+    json = json + ",\"scope_count\":" + `${result.scopes.length}`
+    json = json + ",\"mecc_enabled\":" + json_bool_semantic(result.mecc_enabled)
+    json = json + ",\"mecc_macros_present\":" + json_bool_semantic(result.mecc_macros_present)
+    // Namespace/specialization/allocation detail is appended by the build-side
+    // serializer once the corresponding Map key iteration path is linked.
+    return json + "}"
+}

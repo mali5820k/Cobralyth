@@ -1,0 +1,7 @@
+int32 main() {
+    return declared_later()
+}
+
+int32 declared_later() {
+    return 42
+}

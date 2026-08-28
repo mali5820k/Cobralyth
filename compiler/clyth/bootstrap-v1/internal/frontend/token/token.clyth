@@ -1,0 +1,148 @@
+// Source-level Clyth translation of compiler/go/internal/frontend/token/token.go.
+// Stage-zero acceptance pass: Go aliases/maps are expressed with native Clyth V1 constructs.
+
+enum Kind {
+    Illegal, EOF, Newline, Identifier, Integer, Float, String, InterpolatedString, Character,
+    Import, Auto, Extern, Struct, Protocol, Enum, Constructor, OnFree, Private, Public,
+    Return, If, Else, While, For, Switch, Case, Default, Continue, Break, True, False,
+    Null, As, New, Const, Cast, This,
+    LParen, RParen, LBrace, RBrace, LBracket, RBracket, Less, Greater, Comma, Dot, Colon,
+    Semicolon, Plus, Minus, Star, Slash, Percent, Assign, Bang, Ampersand, Pipe, Tilde,
+    Equal, NotEqual, LessEqual, GreaterEqual, AndAnd, OrOr, PlusAssign, MinusAssign,
+    StarAssign, SlashAssign, PercentAssign, Arrow, FatArrow, Scope, Ellipsis, Increment,
+    Decrement, Hash
+}
+
+struct Position {
+    int64 Offset
+    int64 Line
+    int64 Column
+
+    constructor(int64 offset, int64 line, int64 column) {
+        Offset = offset
+        Line = line
+        Column = column
+    }
+}
+
+struct Span {
+    Position Start
+    Position End
+
+    constructor(Position start, Position end) {
+        Start = start
+        End = end
+    }
+}
+
+Span Merge(Span a, Span b) {
+    return Span(a.Start, b.End)
+}
+
+struct Token {
+    Kind Kind
+    string Lexeme
+    Span Span
+
+    constructor(Kind kind, string lexeme, Span span) {
+        Kind = kind
+        Lexeme = lexeme
+        Span = span
+    }
+}
+
+
+Token make_token_value(Kind kind, string lexeme, Span span) {
+    Token value
+    value.Kind = kind
+    value.Lexeme = lexeme
+    value.Span = span
+    return value
+}
+
+string TokenString(Token t) {
+    return `${KindString(t.Kind)}(${t.Lexeme})@${t.Span.Start.Line}:${t.Span.Start.Column}`
+}
+
+string KindString(Kind k) {
+    switch (k) {
+    case Kind.Illegal: return "illegal"
+    case Kind.EOF: return "eof"
+    case Kind.Newline: return "newline"
+    case Kind.Identifier: return "identifier"
+    case Kind.Integer: return "integer"
+    case Kind.Float: return "float"
+    case Kind.String: return "string"
+    case Kind.InterpolatedString: return "interpolated-string"
+    case Kind.Character: return "character"
+    case Kind.Import: return "import"
+    case Kind.Auto: return "auto"
+    case Kind.Extern: return "extern"
+    case Kind.Struct: return "struct"
+    case Kind.Protocol: return "protocol"
+    case Kind.Enum: return "enum"
+    case Kind.Constructor: return "constructor"
+    case Kind.OnFree: return "on_free"
+    case Kind.Private: return "private"
+    case Kind.Public: return "public"
+    case Kind.Return: return "return"
+    case Kind.If: return "if"
+    case Kind.Else: return "else"
+    case Kind.While: return "while"
+    case Kind.For: return "for"
+    case Kind.Switch: return "switch"
+    case Kind.Case: return "case"
+    case Kind.Default: return "default"
+    case Kind.Continue: return "continue"
+    case Kind.Break: return "break"
+    case Kind.True: return "true"
+    case Kind.False: return "false"
+    case Kind.Null: return "null"
+    case Kind.As: return "as"
+    case Kind.New: return "new"
+    case Kind.Const: return "const"
+    case Kind.Cast: return "cast"
+    case Kind.This: return "this"
+    case Kind.LParen: return "("
+    case Kind.RParen: return ")"
+    case Kind.LBrace: return "{"
+    case Kind.RBrace: return "}"
+    case Kind.LBracket: return "["
+    case Kind.RBracket: return "]"
+    case Kind.Less: return "<"
+    case Kind.Greater: return ">"
+    case Kind.Comma: return ","
+    case Kind.Dot: return "."
+    case Kind.Colon: return ":"
+    case Kind.Semicolon: return ";"
+    case Kind.Plus: return "+"
+    case Kind.Minus: return "-"
+    case Kind.Star: return "*"
+    case Kind.Slash: return "/"
+    case Kind.Percent: return "%"
+    case Kind.Assign: return "="
+    case Kind.Bang: return "!"
+    case Kind.Ampersand: return "&"
+    case Kind.Pipe: return "|"
+    case Kind.Tilde: return "~"
+    case Kind.Equal: return "=="
+    case Kind.NotEqual: return "!="
+    case Kind.LessEqual: return "<="
+    case Kind.GreaterEqual: return ">="
+    case Kind.AndAnd: return "&&"
+    case Kind.OrOr: return "||"
+    case Kind.PlusAssign: return "+="
+    case Kind.MinusAssign: return "-="
+    case Kind.StarAssign: return "*="
+    case Kind.SlashAssign: return "/="
+    case Kind.PercentAssign: return "%="
+    case Kind.Arrow: return "->"
+    case Kind.FatArrow: return "=>"
+    case Kind.Scope: return "::"
+    case Kind.Ellipsis: return "..."
+    case Kind.Increment: return "++"
+    case Kind.Decrement: return "--"
+    case Kind.Hash: return "#"
+    default: return `kind(${k})`
+    }
+}

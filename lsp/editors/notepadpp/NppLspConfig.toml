@@ -1,0 +1,6 @@
+# Merge this section into Plugins -> NppLspClient -> Open Configuration.
+# The executable may be an absolute Windows path if clyth-lsp.exe is not on PATH.
+[lspservers.Clyth]
+mode = "io"
+executable = 'clyth-lsp.exe'
+auto_start_server = true

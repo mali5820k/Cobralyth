@@ -1,0 +1,645 @@
+// AUTO-TRANSLATED BOOTSTRAP SEED FROM FROZEN GO V1.0.0 IMPLEMENTATION.
+// Source: compiler/go/internal/compiler/toolchain.go
+// This file preserves implementation logic for the Go -> Clyth bootstrap port.
+
+// package compiler
+
+// Go imports:
+// "errors"
+// "fmt"
+// "os"
+// "os/exec"
+// "path/filepath"
+// "runtime"
+// "strconv"
+// "strings"
+
+import file-io
+import process
+import string
+
+struct ToolchainOptions {
+	string Target
+	string Zig
+	string LLC
+	string LLD
+	string MuslSysroot
+}
+
+struct ResolvedToolchain {
+	string Target
+	string LLVMTriple
+	string Zig
+	string LLC
+	string LLD
+	string MuslSysroot
+}
+struct BootstrapToolResult { string value string error_message bool ok }
+struct BootstrapToolchainResult { ResolvedToolchain* value string error_message bool ok }
+struct BootstrapArchiveResult { string value string error_message bool ok }
+
+
+
+BootstrapToolchainResult resolve_toolchain(ToolchainOptions options, bool require_zig) {
+    string target = options.Target
+    if target == "" {
+        string arch = bootstrap_host_arch()
+        if arch == "amd64" {
+            target = "x86_64-linux-musl"
+        } else if arch == "arm64" {
+            target = "aarch64-linux-musl"
+        } else {
+            target = arch+"-linux-musl"
+        }
+    }
+
+    ResolvedToolchain* resolved = new ResolvedToolchain()
+    resolved.Target = target
+    resolved.LLVMTriple = llvm_triple_for_target(target)
+
+    BootstrapToolResult zig_result = resolve_tool(options.Zig, "CLYTH_ZIG", bootstrap_array("zig"))
+    if require_zig && !zig_result.ok {
+        return bootstrap_toolchain_error(zig_result.error_message)
+    }
+    if zig_result.ok {
+        resolved.Zig = zig_result.value
+    }
+
+    BootstrapToolResult llc_result = resolve_tool(options.LLC, "CLYTH_LLC", bootstrap_array("llc"))
+    if !llc_result.ok {
+        return bootstrap_toolchain_error(llc_result.error_message)
+    }
+    resolved.LLC = llc_result.value
+
+    BootstrapToolResult lld_result = resolve_tool(options.LLD, "CLYTH_LLD", bootstrap_array("ld.lld", "lld"))
+    if !lld_result.ok {
+        return bootstrap_toolchain_error(lld_result.error_message)
+    }
+    resolved.LLD = lld_result.value
+
+    resolved.MuslSysroot = options.MuslSysroot
+    if resolved.MuslSysroot == "" {
+        resolved.MuslSysroot = bootstrap_getenv("CLYTH_MUSL_SYSROOT")
+    }
+    if resolved.MuslSysroot == "" {
+        return bootstrap_toolchain_error("Clyth musl sysroot is required (--musl-sysroot or CLYTH_MUSL_SYSROOT)")
+    }
+
+    BootstrapToolResult absolute_result = bootstrap_abs_path(resolved.MuslSysroot)
+    if !absolute_result.ok {
+        return bootstrap_toolchain_error(absolute_result.error_message)
+    }
+    resolved.MuslSysroot = absolute_result.value
+    string validation_error = validate_musl_sysroot(resolved.MuslSysroot)
+    if validation_error != "" {
+        return bootstrap_toolchain_error(validation_error)
+    }
+    return bootstrap_toolchain_success(resolved)
+}
+
+BootstrapToolResult resolve_tool(string explicit, string env_name, string[] candidates) {
+    if explicit != "" {
+        BootstrapToolResult absolute_result = bootstrap_abs_path(explicit)
+        if !absolute_result.ok {
+            return absolute_result
+        }
+        if bootstrap_path_is_file(absolute_result.value) {
+            return bootstrap_tool_success(absolute_result.value)
+        }
+        return bootstrap_tool_error("tool does not exist: "+absolute_result.value)
+    }
+    if env_name != "" {
+        string value = bootstrap_getenv(env_name)
+        if value != "" {
+            return resolve_tool(value, "", candidates)
+        }
+    }
+    for int64 candidate_index = 0; candidate_index < candidates.length; candidate_index += 1 {
+        BootstrapToolResult path_result = bootstrap_look_path(candidates[candidate_index])
+        if path_result.ok {
+            return path_result
+        }
+    }
+    return bootstrap_tool_error("required tool not found: "+bootstrap_join(candidates, " or "))
+}
+
+string validate_musl_sysroot(string root) {
+    string[] required = bootstrap_array("include", path_join2("lib", "libc.a"), path_join2("lib", "crt1.o"), path_join2("lib", "crti.o"), path_join2("lib", "crtn.o"))
+    for int64 required_index = 0; required_index < required.length; required_index += 1 {
+        string relative = required[required_index]
+        if !bootstrap_path_exists(path_join2(root, relative)) {
+            return "invalid Clyth musl sysroot: missing "+relative
+        }
+    }
+    return ""
+}
+
+string llvm_triple_for_target(string target) {
+    if target == "x86_64-linux-musl" || target == "x86_64-unknown-linux-musl" {
+        return "x86_64-unknown-linux-musl"
+    }
+    if target == "aarch64-linux-musl" || target == "aarch64-unknown-linux-musl" {
+        return "aarch64-unknown-linux-musl"
+    }
+    if target == "arm-linux-musleabihf" || target == "armv7-linux-musleabihf" {
+        return "armv7-unknown-linux-musleabihf"
+    }
+    return target
+}
+
+string compile_llvm_object(ResolvedToolchain* toolchain, string ir_path, string object_path) {
+    BootstrapCommandResult result = bootstrap_run_command(toolchain.LLC, bootstrap_array("-filetype=obj", "-mtriple="+toolchain.LLVMTriple, "-o", object_path, ir_path))
+    if !result.ok {
+        return "llc failed: "+result.error_message+"\n"+result.output
+    }
+    return ""
+}
+
+string link_static_musl(ResolvedToolchain* toolchain, string[] object_paths, string output_path, string[] extra_archives) {
+    string lib = path_join2(toolchain.MuslSysroot, "lib")
+    string[] arguments = bootstrap_array("-static", "-o", output_path, path_join2(lib, "crt1.o"), path_join2(lib, "crti.o"))
+    arguments = bootstrap_append_all(arguments, object_paths)
+    arguments = bootstrap_append_all(arguments, extra_archives)
+    arguments = bootstrap_append(arguments, path_join2(lib, "libc.a"))
+    arguments = bootstrap_append(arguments, path_join2(lib, "crtn.o"))
+    BootstrapCommandResult result = bootstrap_run_command(toolchain.LLD, arguments)
+    if !result.ok {
+        return "lld failed: "+result.error_message+"\n"+result.output
+    }
+    return ""
+}
+
+BootstrapArchiveResult build_compiler_runtime(ResolvedToolchain* toolchain, string output_dir) {
+    if !bootstrap_target_requires_compiler_runtime(toolchain.Target) {
+        return bootstrap_archive_success("")
+    }
+    if toolchain.Zig == "" {
+        return bootstrap_archive_error("target requires compiler runtime builtins; provide Zig with --zig or CLYTH_ZIG")
+    }
+    BootstrapCommandResult env_result = bootstrap_run_command(toolchain.Zig, bootstrap_array("env"))
+    if !env_result.ok {
+        return bootstrap_archive_error("zig env failed: "+env_result.error_message)
+    }
+    string lib_dir = bootstrap_parse_zig_lib_dir(env_result.output)
+    if lib_dir == "" {
+        return bootstrap_archive_error("zig env did not report lib_dir")
+    }
+    string source = path_join2(lib_dir, "compiler_rt.zig")
+    string archive = path_join2(output_dir, "libclyth_compiler_rt.a")
+    BootstrapCommandResult build_result = bootstrap_run_command(toolchain.Zig, bootstrap_array("build-lib", source, "-target", toolchain.Target, "-O", "ReleaseFast", "-femit-bin="+archive))
+    if !build_result.ok {
+        return bootstrap_archive_error("building Zig compiler runtime failed: "+build_result.error_message+"\n"+build_result.output)
+    }
+    return bootstrap_archive_success(archive)
+}
+
+// compile_native_wrapper uses Zig only as a compiler driver. The include search
+// path is replaced with the Clyth-managed musl headers so Zig's bundled libc can
+// never silently define the runtime ABI of a Clyth module.
+string compile_native_wrapper(ResolvedToolchain* toolchain, string source, string output, bool cxx) {
+    if toolchain.Zig == "" {
+        return "Zig is required to compile native module wrappers"
+    }
+    string mode = "cc"
+    if cxx {
+        mode = "c++"
+    }
+    string[] arguments = bootstrap_array(mode, "-target", toolchain.Target, "-O2", "-fno-sanitize=all", "-nostdinc", "-isystem", path_join2(toolchain.MuslSysroot, "include"), "-c", source, "-o", output)
+    BootstrapCommandResult result = bootstrap_run_command(toolchain.Zig, arguments)
+    if !result.ok {
+        return "zig "+mode+" failed: "+result.error_message+"\n"+result.output
+    }
+    return ""
+}
+
+string find_repository_root(string start) {
+    string current = start
+    if bootstrap_path_is_file(current) {
+        current = path_dirname_copy(current)
+    }
+    BootstrapToolResult absolute = bootstrap_abs_path(current)
+    if absolute.ok {
+        current = absolute.value
+    }
+    while true {
+        if bootstrap_path_is_dir(path_join2(current, "module-src")) {
+            return current
+        }
+        string parent = path_dirname_copy(current)
+        if parent == current {
+            return ""
+        }
+        current = parent
+    }
+}
+
+// build_runtime_module_archive compiles one repository-native module binding with
+// Zig while explicitly using the selected Clyth musl headers.
+BootstrapArchiveResult build_runtime_module_archive(ResolvedToolchain* toolchain, string repository_root, string module_name, string temporary_dir) {
+    if repository_root == "" {
+        return bootstrap_archive_success("")
+    }
+    string binding = path_join5(repository_root, "module-src", "runtime", module_name, "c-binding")
+    string source_dir = path_join2(binding, "src")
+    if !bootstrap_path_is_dir(source_dir) {
+        return bootstrap_archive_success("")
+    }
+    if toolchain.Zig == "" {
+        return bootstrap_archive_error("module "+module_name+" has native bindings and requires Zig")
+    }
+
+    string vendor_root = ""
+    string vendor_script = path_join2(binding, "fetch-vendors.sh")
+    if bootstrap_path_exists(vendor_script) {
+        BootstrapCommandResult vendor_result = bootstrap_run_command_with_env(vendor_script, bootstrap_empty_array(), bootstrap_array("CLYTH_VENDOR_CACHE="+path_join3(repository_root, "module-src", "vendor")))
+        if !vendor_result.ok {
+            return bootstrap_archive_error("resolving pinned vendor source for module "+module_name+": "+vendor_result.error_message+"\n"+vendor_result.output)
+        }
+        vendor_root = bootstrap_trim_space(vendor_result.output)
+    }
+
+    BootstrapDirectoryResult entries_result = bootstrap_read_dir(source_dir)
+    if !entries_result.ok {
+        return bootstrap_archive_error(entries_result.error_message)
+    }
+    string module_dir = path_join2(temporary_dir, "native-"+toolchain_sanitize_name(module_name))
+    string mkdir_error = bootstrap_mkdir_all(module_dir)
+    if mkdir_error != "" {
+        return bootstrap_archive_error(mkdir_error)
+    }
+
+    string[] objects = bootstrap_empty_array()
+    for int64 entry_index = 0; entry_index < entries_result.entries.length; entry_index += 1 {
+        BootstrapDirectoryEntry entry = entries_result.entries[entry_index]
+        if entry.is_dir || path_extension_copy(entry.name) != ".c" {
+            continue
+        }
+        string source = path_join2(source_dir, entry.name)
+        string object = path_join2(module_dir, toolchain_trim_suffix(entry.name, ".c")+".o")
+        string[] arguments = bootstrap_array("cc", "-target", toolchain.Target, "-O2", "-fno-sanitize=all", "-nostdinc", "-isystem", path_join2(toolchain.MuslSysroot, "include"))
+        if bootstrap_path_is_dir(path_join2(binding, "include")) {
+            arguments = bootstrap_append(arguments, "-I")
+            arguments = bootstrap_append(arguments, path_join2(binding, "include"))
+        }
+        arguments = bootstrap_append_all(arguments, bootstrap_vendor_include_arguments(vendor_root))
+        arguments = bootstrap_append_all(arguments, bootstrap_array("-std=gnu11", "-fPIC", "-c", source, "-o", object))
+        BootstrapCommandResult compile_result = bootstrap_run_command(toolchain.Zig, arguments)
+        if !compile_result.ok {
+            return bootstrap_archive_error("building native module "+module_name+": "+compile_result.error_message+"\n"+compile_result.output)
+        }
+        objects = bootstrap_append(objects, object)
+    }
+
+    string[] vendor_sources = bootstrap_glob_values(path_join3(vendor_root, "src", "*.c"))
+    for int64 source_index = 0; source_index < vendor_sources.length; source_index += 1 {
+        string source = vendor_sources[source_index]
+        string object = path_join2(module_dir, "vendor-"+toolchain_trim_suffix(path_basename_copy(source), ".c")+".o")
+        string[] arguments = bootstrap_array("cc", "-target", toolchain.Target, "-O2", "-fno-sanitize=all", "-nostdinc", "-isystem", path_join2(toolchain.MuslSysroot, "include"), "-I", vendor_root, "-I", path_join2(vendor_root, "src"), "-std=gnu11", "-fPIC", "-c", source, "-o", object)
+        BootstrapCommandResult compile_result = bootstrap_run_command(toolchain.Zig, arguments)
+        if !compile_result.ok {
+            return bootstrap_archive_error("building vendor source for native module "+module_name+": "+compile_result.error_message+"\n"+compile_result.output)
+        }
+        objects = bootstrap_append(objects, object)
+    }
+
+    if objects.length == 0 {
+        return bootstrap_archive_success("")
+    }
+    string archive = path_join2(module_dir, "lib"+module_name+"_binding.a")
+    string[] arguments = bootstrap_array("ar", "rcs", archive)
+    arguments = bootstrap_append_all(arguments, objects)
+    BootstrapCommandResult archive_result = bootstrap_run_command(toolchain.Zig, arguments)
+    if !archive_result.ok {
+        return bootstrap_archive_error("archiving native module "+module_name+": "+archive_result.error_message+"\n"+archive_result.output)
+    }
+    return bootstrap_archive_success(archive)
+}
+
+// build_mecc_runtime builds the small compiler-owned estate runtime only when a
+// translation unit actually requires MECC. The first V1.0.0 runtime is
+// deliberately conservative: adopted allocations are registered in an estate
+// table, explicit releases can reclaim them early, and any remaining estate
+// allocations are reclaimed at process shutdown. Compiler-emitted edge/root
+// instrumentation can refine that destruction frontier without changing this ABI.
+BootstrapArchiveResult build_mecc_runtime(ResolvedToolchain* toolchain, string output_dir) {
+	if toolchain.Zig == "" {
+		return bootstrap_archive_error("MECC runtime requires Zig to compile its native support")
+	}
+	string source = path_join2(output_dir, "clyth_mecc_runtime.c")
+	string object = path_join2(output_dir, "clyth_mecc_runtime.o")
+	string archive = path_join2(output_dir, "libclyth_mecc.a")
+	string code = `
+#include <stddef.h>
+#include <stdint.h>
+#include <stdbool.h>
+#include <stdlib.h>
+
+typedef void (*ClythMeccDestructor)(void *);
+
+typedef struct ClythMeccNode {
+    void *pointer;
+    bool compacting;
+    bool marked;
+    ClythMeccDestructor destructor;
+    struct ClythMeccNode *next;
+} ClythMeccNode;
+
+typedef struct ClythMeccReference {
+    void *owner;
+    void *slot;
+    void *target;
+    struct ClythMeccReference *next;
+} ClythMeccReference;
+
+static ClythMeccNode *clyth_mecc_nodes = NULL;
+static ClythMeccReference *clyth_mecc_references = NULL;
+static bool clyth_mecc_atexit_registered = false;
+
+static ClythMeccNode *clyth_mecc_find(void *pointer) {
+    ClythMeccNode *node = clyth_mecc_nodes;
+    while (node != NULL) {
+        if (node->pointer == pointer) return node;
+        node = node->next;
+    }
+    return NULL;
+}
+
+static ClythMeccReference *clyth_mecc_find_reference(void *slot) {
+    ClythMeccReference *reference = clyth_mecc_references;
+    while (reference != NULL) {
+        if (reference->slot == slot) return reference;
+        reference = reference->next;
+    }
+    return NULL;
+}
+
+static void clyth_mecc_remove_reference_slot(void *slot) {
+    ClythMeccReference **cursor = &clyth_mecc_references;
+    while (*cursor != NULL) {
+        ClythMeccReference *reference = *cursor;
+        if (reference->slot == slot) {
+            *cursor = reference->next;
+            free(reference);
+            return;
+        }
+        cursor = &reference->next;
+    }
+}
+
+static void clyth_mecc_remove_owner_references(void *owner) {
+    ClythMeccReference **cursor = &clyth_mecc_references;
+    while (*cursor != NULL) {
+        ClythMeccReference *reference = *cursor;
+        if (reference->owner == owner) {
+            *cursor = reference->next;
+            free(reference);
+            continue;
+        }
+        cursor = &reference->next;
+    }
+}
+
+static void clyth_mecc_remove_target_references(void *target) {
+    ClythMeccReference **cursor = &clyth_mecc_references;
+    while (*cursor != NULL) {
+        ClythMeccReference *reference = *cursor;
+        if (reference->target == target) {
+            *cursor = reference->next;
+            free(reference);
+            continue;
+        }
+        cursor = &reference->next;
+    }
+}
+
+static void clyth_mecc_destroy_node(ClythMeccNode *node) {
+    if (node == NULL) return;
+    clyth_mecc_remove_owner_references(node->pointer);
+    clyth_mecc_remove_target_references(node->pointer);
+    if (node->destructor != NULL) node->destructor(node->pointer);
+    free(node->pointer);
+    free(node);
+}
+
+static void clyth_mecc_mark(ClythMeccNode *node) {
+    if (node == NULL || node->marked) return;
+    node->marked = true;
+    ClythMeccReference *reference = clyth_mecc_references;
+    while (reference != NULL) {
+        if (reference->owner == node->pointer) {
+            clyth_mecc_mark(clyth_mecc_find(reference->target));
+        }
+        reference = reference->next;
+    }
+}
+
+void clyth_mecc_collapse(void) {
+    ClythMeccNode *node = clyth_mecc_nodes;
+    while (node != NULL) {
+        node->marked = false;
+        node = node->next;
+    }
+
+    ClythMeccReference *reference = clyth_mecc_references;
+    while (reference != NULL) {
+        if (reference->owner == NULL || clyth_mecc_find(reference->owner) == NULL) {
+            clyth_mecc_mark(clyth_mecc_find(reference->target));
+        }
+        reference = reference->next;
+    }
+
+    ClythMeccNode **cursor = &clyth_mecc_nodes;
+    while (*cursor != NULL) {
+        ClythMeccNode *current = *cursor;
+        if (!current->marked) {
+            *cursor = current->next;
+            clyth_mecc_destroy_node(current);
+            continue;
+        }
+        cursor = &current->next;
+    }
+}
+
+static void clyth_mecc_shutdown(void) {
+    ClythMeccReference *reference = clyth_mecc_references;
+    while (reference != NULL) {
+        ClythMeccReference *next = reference->next;
+        free(reference);
+        reference = next;
+    }
+    clyth_mecc_references = NULL;
+
+    ClythMeccNode *node = clyth_mecc_nodes;
+    clyth_mecc_nodes = NULL;
+    while (node != NULL) {
+        ClythMeccNode *next = node->next;
+        if (node->destructor != NULL) node->destructor(node->pointer);
+        free(node->pointer);
+        free(node);
+        node = next;
+    }
+}
+
+void *clyth_mecc_adopt(void *pointer, bool compacting, ClythMeccDestructor destructor) {
+    if (pointer == NULL) return NULL;
+    ClythMeccNode *existing = clyth_mecc_find(pointer);
+    if (existing != NULL) {
+        if (existing->destructor == NULL) existing->destructor = destructor;
+        return pointer;
+    }
+    ClythMeccNode *node = (ClythMeccNode *)calloc(1, sizeof(ClythMeccNode));
+    if (node == NULL) return pointer;
+    node->pointer = pointer;
+    node->compacting = compacting;
+    node->destructor = destructor;
+    node->next = clyth_mecc_nodes;
+    clyth_mecc_nodes = node;
+    if (!clyth_mecc_atexit_registered) {
+        atexit(clyth_mecc_shutdown);
+        clyth_mecc_atexit_registered = true;
+    }
+    return pointer;
+}
+
+// Store one managed pointer reference. slot is the stable address containing
+// the pointer. If owner is a managed node the reference is an estate edge;
+// otherwise it is an external/root reference. Storing null or an unmanaged
+// pointer removes any previous MECC reference for that slot.
+void clyth_mecc_store(void *owner, void *slot, void *target) {
+    if (slot == NULL) return;
+    ClythMeccNode *target_node = clyth_mecc_find(target);
+    if (target_node == NULL) {
+        clyth_mecc_remove_reference_slot(slot);
+        return;
+    }
+    ClythMeccReference *reference = clyth_mecc_find_reference(slot);
+    if (reference == NULL) {
+        reference = (ClythMeccReference *)calloc(1, sizeof(ClythMeccReference));
+        if (reference == NULL) return;
+        reference->slot = slot;
+        reference->next = clyth_mecc_references;
+        clyth_mecc_references = reference;
+    }
+    reference->owner = owner;
+    reference->target = target;
+}
+
+void clyth_mecc_owner_release(void *owner) {
+    if (owner == NULL) return;
+    clyth_mecc_remove_owner_references(owner);
+}
+
+// Explicit Clyth free remains authoritative. This removes the object from the
+// estate immediately even if stale aliases still exist; semantic analysis is
+// responsible for diagnosing provable UAF/double-free and warning on stale
+// container references.
+void clyth_mecc_release(void *pointer) {
+    if (pointer == NULL) return;
+    ClythMeccNode **cursor = &clyth_mecc_nodes;
+    while (*cursor != NULL) {
+        ClythMeccNode *node = *cursor;
+        if (node->pointer == pointer) {
+            *cursor = node->next;
+            clyth_mecc_destroy_node(node);
+            return;
+        }
+        cursor = &node->next;
+    }
+}
+`
+	string write_error = toolchain_write_text_file(source, code)
+	if write_error != "" {
+		return bootstrap_archive_error(write_error)
+	}
+	string compile_error = compile_native_wrapper(toolchain, source, object, false)
+	if compile_error != "" {
+		return bootstrap_archive_error(compile_error)
+	}
+	BootstrapCommandResult archive_result = bootstrap_run_command(toolchain.Zig, bootstrap_array("ar", "rcs", archive, object))
+	if !archive_result.ok {
+		return bootstrap_archive_error("archiving MECC runtime failed: "+archive_result.error_message+"\n"+archive_result.output)
+	}
+	return bootstrap_archive_success(archive)
+}
+
+// Stage-1 bootstrap compatibility helpers. These are expressed in Clyth terms
+// and will disappear as the translated call sites are normalized.
+struct BootstrapCommandResult { string output string error_message bool ok }
+struct BootstrapDirectoryEntry { string name bool is_dir }
+struct BootstrapDirectoryResult { BootstrapDirectoryEntry[] entries string error_message bool ok }
+
+string[] bootstrap_array(string... values) { return values }
+string[] bootstrap_empty_array() { return array<string>(0) }
+string[] bootstrap_append(string[] values, string value) {
+    int64 old_length = values.length
+    string[] result = array<string>(values, old_length + 1)
+    result[old_length] = value
+    return result
+}
+string[] bootstrap_append_all(string[] values, string[] suffix) {
+    int64 old_length = values.length
+    string[] result = array<string>(values, old_length + suffix.length)
+    int64 i = 0
+    while i < suffix.length { result[old_length + i] = suffix[i]; i += 1 }
+    return result
+}
+BootstrapToolResult bootstrap_tool_success(string value) { BootstrapToolResult r; r.value=value; r.ok=true; return r }
+BootstrapToolResult bootstrap_tool_error(string message) { BootstrapToolResult r; r.error_message=message; r.ok=false; return r }
+BootstrapToolchainResult bootstrap_toolchain_success(ResolvedToolchain* value) { BootstrapToolchainResult r; r.value=value; r.ok=true; return r }
+BootstrapToolchainResult bootstrap_toolchain_error(string message) { BootstrapToolchainResult r; r.error_message=message; r.ok=false; return r }
+BootstrapArchiveResult bootstrap_archive_success(string value) { BootstrapArchiveResult r; r.value=value; r.ok=true; return r }
+BootstrapArchiveResult bootstrap_archive_error(string message) { BootstrapArchiveResult r; r.error_message=message; r.ok=false; return r }
+BootstrapToolResult bootstrap_abs_path(string path) { string v=absolute_path(path); if v=="" {return bootstrap_tool_error("cannot resolve path: "+path)}; return bootstrap_tool_success(v) }
+bool bootstrap_path_exists(string path) { return path_exists(path) != 0 }
+bool bootstrap_path_is_file(string path) { return is_file(path) != 0 }
+bool bootstrap_path_is_dir(string path) { return is_directory(path) != 0 }
+string bootstrap_getenv(string name) { return environment_value_copy(name) }
+bool bootstrap_target_requires_compiler_runtime(string target) { return target=="aarch64-linux-musl" || target=="aarch64-unknown-linux-musl" || target=="arm-linux-musleabihf" || target=="armv7-linux-musleabihf" }
+
+string bootstrap_host_arch() { return process_host_arch() }
+BootstrapToolResult bootstrap_look_path(string executable) { string path=process_look_path(executable); if path=="" {return bootstrap_tool_error("executable not found: "+executable)}; return bootstrap_tool_success(path) }
+string bootstrap_join(string[] values, string separator) { string out=""; int64 i=0; while i<values.length { if i>0 {out=out+separator}; out=out+values[i]; i+=1 }; return out }
+string bootstrap_trim_space(string value) { int64 start=0; int64 finish=value.length; while start<finish { string ch=bootstrap_string_slice(value,start,1); if ch!=" " && ch!="\n" && ch!="\r" && ch!="\t" {break}; start+=1 }; while finish>start { string ch=bootstrap_string_slice(value,finish-1,1); if ch!=" " && ch!="\n" && ch!="\r" && ch!="\t" {break}; finish-=1 }; return bootstrap_string_slice(value,start,finish-start) }
+string toolchain_trim_suffix(string value,string suffix){if suffix==""||bootstrap_string_ends_with(value,suffix)==0{return value};return bootstrap_string_slice(value,0,value.length-suffix.length)}
+string toolchain_sanitize_name(string value) { string out=""; int64 i=0; while i<value.length { string ch=bootstrap_string_slice(value,i,1); if ch=="-" || ch=="." || ch=="/" {out=out+"_"} else {out=out+ch}; i+=1 }; return out }
+string toolchain_write_text_file(string path,string text){if overwrite_file(path,text)==0{return ""};return "failed to write: "+path}
+string bootstrap_mkdir_all(string path){if create_directories(path)==0 || is_directory(path)!=0{return ""};return "failed to create directory: "+path}
+
+BootstrapCommandResult bootstrap_run_command(string executable,string[] args) {
+    string command=process_shell_quote(executable); int64 i=0
+    while i<args.length { command=command+" "+process_shell_quote(args[i]); i+=1 }
+    string output=process_run_capture(command); int32 status=process_last_exit_status()
+    BootstrapCommandResult r; r.output=output; r.ok=status==0; if status!=0 {r.error_message="process exited with status "+`${status}`}; return r
+}
+BootstrapCommandResult bootstrap_run_command_with_env(string executable,string[] args,string[] env) {
+    string command="env"; int64 i=0
+    while i<env.length { command=command+" "+process_shell_quote(env[i]); i+=1 }
+    command=command+" "+process_shell_quote(executable); i=0
+    while i<args.length { command=command+" "+process_shell_quote(args[i]); i+=1 }
+    string output=process_run_capture(command); int32 status=process_last_exit_status()
+    BootstrapCommandResult r; r.output=output; r.ok=status==0; if status!=0 {r.error_message="process exited with status "+`${status}`}; return r
+}
+
+string[] bootstrap_split_lines(string text) {
+    string[] lines=array<string>(0); int64 start=0; int64 i=0
+    while i<=text.length {
+        bool at_end=i==text.length; bool newline=false; if !at_end {newline=bootstrap_string_slice(text,i,1)=="\n"}
+        if at_end || newline { if i>start {int64 n=lines.length; lines=array<string>(lines,n+1); lines[n]=bootstrap_string_slice(text,start,i-start)}; start=i+1 }
+        i+=1
+    }
+    return lines
+}
+string[] bootstrap_glob_values(string pattern){return bootstrap_split_lines(glob_text(pattern))}
+BootstrapDirectoryResult bootstrap_read_dir(string path) {
+    BootstrapDirectoryResult r; if !bootstrap_path_is_dir(path){r.error_message="directory does not exist: "+path;r.ok=false;return r}
+    string[] lines=bootstrap_split_lines(directory_entries_text(path)); r.entries=array<BootstrapDirectoryEntry>(lines.length); int64 i=0
+    while i<lines.length {string line=lines[i]; BootstrapDirectoryEntry e; if line.length>=2 {e.is_dir=bootstrap_string_slice(line,0,1)=="D"; e.name=bootstrap_string_slice(line,2,line.length-2)}; r.entries[i]=e; i+=1}; r.ok=true; return r
+}
+string[] bootstrap_vendor_include_arguments(string vendor_root) {
+    string[] result=array<string>(0); if vendor_root=="" {return result}; string[] dirs=bootstrap_array(vendor_root,path_join2(vendor_root,"include"),path_join2(vendor_root,"src")); int64 i=0
+    while i<dirs.length {if bootstrap_path_is_dir(dirs[i]) {result=bootstrap_append(result,"-I");result=bootstrap_append(result,dirs[i])};i+=1}; return result
+}
+string bootstrap_parse_zig_lib_dir(string output) {
+    string[] lines=bootstrap_split_lines(output); int64 i=0
+    while i<lines.length {string line=bootstrap_trim_space(lines[i]); string prefix=".lib_dir = "; if bootstrap_string_starts_with(line,prefix)!=0 {string value=bootstrap_trim_space(bootstrap_string_slice(line,prefix.length,line.length-prefix.length)); if bootstrap_string_ends_with(value,",")!=0 {value=bootstrap_string_slice(value,0,value.length-1)}; value=bootstrap_trim_space(value); if value.length>=2 && bootstrap_string_slice(value,0,1)=="\"" && bootstrap_string_slice(value,value.length-1,1)=="\"" {return bootstrap_string_slice(value,1,value.length-2)}; return value}; i+=1}; return ""
+}

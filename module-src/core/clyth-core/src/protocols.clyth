@@ -1,0 +1,11 @@
+/**
+ * Compiler-recognized core protocols.
+ *
+ * A struct opts into protocol syntax sugar by naming the protocol in its base
+ * list. Concrete index/value types are inferred from the implementing method
+ * signatures; they are not repeated on the struct declaration.
+ */
+protocol Indexable {
+    auto on_read_index(auto index)
+    void on_write_index(auto index, auto value)
+}

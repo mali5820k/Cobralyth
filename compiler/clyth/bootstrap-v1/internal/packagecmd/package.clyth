@@ -1,0 +1,149 @@
+// AUTO-TRANSLATED BOOTSTRAP SEED FROM FROZEN GO V1.0.0 IMPLEMENTATION.
+// Source: compiler/go/internal/packagecmd/package.go
+// Syntax-normalized Clyth bootstrap boundary. Package I/O/archive/network
+// operations are represented by bootstrap helpers until semantic binding.
+
+struct moduleInfo {
+    string Name
+    string Version
+    string[] Dependencies
+}
+
+struct registry {
+    string Type
+    string Location
+}
+
+struct registryFile {
+    Map<string, registry> Registries
+}
+
+struct registryPackage {
+    string File
+    string SHA256
+    string SourceURL
+    string SourceRevision
+    string LicenseSPDX
+    string LicenseFile
+}
+
+struct registryIndex {
+    Map<string, Map<string, registryPackage>> Packages
+}
+
+struct lockEntry {
+    string Version
+    string Registry
+    string SHA256
+    string Package
+    string Source
+    string SourceRevision
+    string InstallKind
+    string LicenseSPDX
+    string LicenseFile
+}
+
+struct lockFile {
+    Map<string, lockEntry> Packages
+}
+
+struct BootstrapRegistryFileResult { registryFile value string error_message bool ok }
+struct BootstrapRegistryIndexResult { registryIndex value string error_message bool ok }
+struct BootstrapLockFileResult { lockFile value string error_message bool ok }
+struct BootstrapStringResult { string value string error_message bool ok }
+
+string Run(string command, string[] args, Writer out, Writer errOut) {
+    if command == "package" {
+        if args.length != 1 { return "usage: clyth package <module-directory>" }
+        BootstrapStringResult result = Package(args[0])
+        if result.ok { bootstrap_writer_line(out, result.value) }
+        return result.error_message
+    } else if command == "add-registry" {
+        return setRegistry(false, args, out)
+    } else if command == "update-registry" {
+        return setRegistry(true, args, out)
+    } else if command == "remove-registry" {
+        if args.length != 1 { return "usage: clyth remove-registry <name>" }
+        return removeRegistry(args[0], out)
+    } else if command == "list-registries" {
+        return listRegistries(out)
+    } else if command == "registry-info" {
+        return registryInfo(args, out)
+    } else if command == "list" {
+        return list_packages(out)
+    } else if command == "info" {
+        return package_info(args, out)
+    } else if command == "init" {
+        return init_project(args, out)
+    } else if command == "debug" {
+        return debug_project(out)
+    } else if command == "update" {
+        return updatePackages(args, out)
+    } else if command == "install" {
+        return install(args, out)
+    } else if command == "remove" {
+        if args.length != 1 { return "usage: clyth remove <package>" }
+        return removePackage(args[0], out)
+    } else if command == "refresh" {
+        return refresh(out)
+    }
+    return "unsupported package command "+command
+}
+
+string clythHome() { return bootstrap_clyth_home() }
+string readJSON(string path, string destination) { return bootstrap_read_json(path, destination) }
+string writeJSON(string path, string value) { return bootstrap_write_json(path, value) }
+
+BootstrapRegistryFileResult loadRegistries() { return bootstrap_load_registries() }
+string saveRegistries(registryFile value) { return bootstrap_save_registries(value) }
+
+string setRegistry(bool update, string[] args, Writer out) {
+    if args.length != 3 { return "usage: clyth add-registry <name> (--path <directory> | --url <remote-url>)" }
+    if args[1] != "--path" && args[1] != "--url" { return "usage: clyth add-registry <name> (--path <directory> | --url <remote-url>)" }
+    return bootstrap_set_registry(update, args[0], args[1], args[2], out)
+}
+
+string removeRegistry(string name, Writer out) { return bootstrap_remove_registry(name, out) }
+string listRegistries(Writer out) { return bootstrap_list_registries(out) }
+BootstrapStringResult Package(string dir) { return bootstrap_package_directory(dir) }
+BootstrapStringResult shaFile(string path) { return bootstrap_sha_file(path) }
+BootstrapLockFileResult loadLock(string root) { return bootstrap_load_lock(root) }
+string saveLock(string root, lockFile value) { return bootstrap_save_lock(root, value) }
+
+string install(string[] args, Writer out) { return install_internal(args, out, true) }
+string install_internal(string[] args, Writer out, bool direct) {
+    return bootstrap_install_package(args, out, direct)
+}
+
+string installArchive(string projectRoot, string archive, string registryName, Writer out) {
+    return bootstrap_install_archive(projectRoot, archive, registryName, out)
+}
+
+string removePackage(string name, Writer out) { return bootstrap_remove_package(name, out) }
+string refresh(Writer out) { return bootstrap_refresh_packages(out) }
+string WriteRegistry(string registryDir) { return bootstrap_write_registry(registryDir) }
+
+string registryInfo(string[] args, Writer out) {
+    if args.length != 1 { return "usage: clyth registry-info <registry-name>" }
+    return bootstrap_registry_info(args[0], out)
+}
+
+BootstrapRegistryIndexResult readRegistryIndex(registry reg) {
+    return bootstrap_read_registry_index(reg)
+}
+
+string updatePackages(string[] args, Writer out) {
+    return bootstrap_update_packages(args, out)
+}
+
+string buildFromSource(string project_root, string name, string version, string registry_name, registryPackage meta, Writer out) {
+    return bootstrap_build_package_from_source(project_root, name, version, registry_name, meta, out)
+}
+
+string record_project_dependency(string root, string name, string version) {
+    return bootstrap_record_project_dependency(root, name, version)
+}
+
+string install_local_archive(string project_root, string archive, Writer out) {
+    return bootstrap_install_local_archive(project_root, archive, out)
+}

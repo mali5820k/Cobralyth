@@ -1,0 +1,137 @@
+// Source-level Clyth translation of compiler/go/internal/packagecmd/project.go.
+
+struct ProjectLicense {
+    string SPDX
+    string File
+}
+
+struct ProjectManifest {
+    string ProjectName
+    string Version
+    string ProjectType
+    ProjectLicense License
+    string Entry
+    Map<string, string> Dependencies
+}
+
+struct ProjectRootResult {
+    string root
+    string error
+}
+
+struct ProjectLoadResult {
+    ProjectManifest project
+    string error
+}
+
+ProjectRootResult find_project_root(string start) {
+    ProjectRootResult result
+    string current = filepath.Abs(start)
+    bool searching = true
+    while searching {
+        if os.Exists(filepath.Join(current, "clyth_project.json")) {
+            result.root = current
+            result.error = ""
+            return result
+        }
+        string parent = filepath.Dir(current)
+        if parent == current {
+            result.root = ""
+            result.error = "clyth_project.json not found"
+            return result
+        }
+        current = parent
+    }
+    return result
+}
+
+string init_project(string[] args, Writer out) {
+    if args.length != 1 { return "usage: clyth init <project-name>" }
+    string root = filepath.Abs(args[0])
+    string err = os.MkdirAll(filepath.Join(root, "src"), 0755)
+    if err != "" { return err }
+
+    ProjectManifest manifest
+    manifest.ProjectName = filepath.Base(root)
+    manifest.Version = "1.0.0"
+    manifest.ProjectType = "program"
+    manifest.License.SPDX = "UNLICENSED"
+    manifest.License.File = "LICENSE.md"
+    manifest.Entry = "src/main.clyth"
+    manifest.Dependencies = Map<string, string>()
+
+    err = writeJSON(filepath.Join(root, "clyth_project.json"), manifest)
+    if err != "" { return err }
+    err = os.WriteFile(filepath.Join(root, "src", "main.clyth"), "int32 main() { return 0 }\n", 0644)
+    if err != "" { return err }
+    err = os.WriteFile(filepath.Join(root, "LICENSE.md"), "Replace this file with the project license text.\n", 0644)
+    if err != "" { return err }
+    fmt.Fprintln(out, "Initialized Clyth V1.0.0 project", manifest.ProjectName)
+    return ""
+}
+
+ProjectLoadResult load_project(string root) {
+    ProjectLoadResult result
+    result.error = readJSON(filepath.Join(root, "clyth_project.json"), &result.project)
+    return result
+}
+
+string save_project(string root, ProjectManifest project) {
+    return writeJSON(filepath.Join(root, "clyth_project.json"), project)
+}
+
+string list_packages(Writer out) {
+    string cwd = os.Getwd()
+    ProjectRootResult found = find_project_root(cwd)
+    if found.error != "" { return found.error }
+    LockResult loaded = loadLock(found.root)
+    if loaded.error != "" { return loaded.error }
+
+    string[] names = loaded.lock.Packages.keys()
+    sort.Strings(names)
+    int64 i = 0
+    while i < names.length {
+        string n = names[i]
+        LockEntry e = loaded.lock.Packages[n]
+        fmt.Fprintf(out, "%s\t%s\t%s\t%s\n", n, e.Version, e.Registry, e.InstallKind)
+        i += 1
+    }
+    return ""
+}
+
+string package_info(string[] args, Writer out) {
+    if args.length != 1 { return "usage: clyth info <module>" }
+    string cwd = os.Getwd()
+    ProjectRootResult found = find_project_root(cwd)
+    if found.error != "" { return found.error }
+    LockResult loaded = loadLock(found.root)
+    if loaded.error != "" { return loaded.error }
+    if loaded.lock.Packages.contains(args[0]) == false {
+        return fmt.Sprintf("package %q is not locked", args[0])
+    }
+    LockEntry entry = loaded.lock.Packages[args[0]]
+    string encoded = json.MarshalIndent(entry, "", "  ")
+    fmt.Fprintln(out, encoded)
+    return ""
+}
+
+string debug_project(Writer out) {
+    string cwd = os.Getwd()
+    fmt.Fprintln(out, "Clyth V1.0.0 bootstrap diagnostics")
+    fmt.Fprintln(out, "clyth-home:", clythHome())
+    ProjectRootResult found = find_project_root(cwd)
+    if found.error == "" {
+        fmt.Fprintln(out, "project:", found.root)
+        ProjectLoadResult loaded = load_project(found.root)
+        if loaded.error == "" {
+            ProjectManifest p = loaded.project
+            fmt.Fprintf(out, "project-name: %s\nproject-type: %s\nversion: %s\nlicense: %s (%s)\n", p.ProjectName, p.ProjectType, p.Version, p.License.SPDX, p.License.File)
+        }
+    } else {
+        fmt.Fprintln(out, "project: none")
+    }
+    RegistryLoadResult regs = loadRegistries()
+    if regs.error != "" { return regs.error }
+    fmt.Fprintln(out, "registries:", regs.registries.Registries.length)
+    return ""
+}

@@ -1,0 +1,19 @@
+/**
+ * Canonical Clyth V1 raw-array descriptor.
+ *
+ * Surface syntax T[] desugars to this compiler-owned structural primitive.
+ * Raw arrays never grow implicitly and expose no collection API. The only
+ * built-in member is length; indexing is unchecked and maps through Indexable.
+ */
+intrinsic_struct array<T> : Indexable {
+    T* array_ptr
+    uint64 length
+
+    T on_read_index(uint64 index) {
+        return array_ptr[index]
+    }
+
+    void on_write_index(uint64 index, T value) {
+        array_ptr[index] = value
+    }
+}

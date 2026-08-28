@@ -1,0 +1,23 @@
+extern C int32 printf(string formatted_string, ...)
+
+struct AggregateToken {
+    int32 kind
+    int32 value
+}
+
+AggregateToken read_token() {
+    AggregateToken first
+    AggregateToken second
+    first.kind = 1
+    first.value = 40
+    second.kind = 2
+    second.value = 42
+    AggregateToken[2] values = [first, second]
+    return values[1]
+}
+
+int32 main() {
+    AggregateToken token = read_token()
+    printf("aggregate token=%d\n", token.value)
+    return token.value - 42
+}

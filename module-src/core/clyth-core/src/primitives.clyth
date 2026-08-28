@@ -1,0 +1,10 @@
+/**
+ * Clyth scalar primitives remain direct compiler/LLVM primitives rather than
+ * aggregate wrappers. Their public names and ABI identities are reserved by
+ * Clyth Core: bool, char, int8/int16/int32/int64, uint8/uint16/uint32/uint64,
+ * float32/float64, void, and raw T* pointers.
+ *
+ * Structural native types such as array<T> and string are declared in sibling
+ * intrinsic_struct definitions so their layouts and protocol capabilities are
+ * inspectable as Clyth source.
+ */

@@ -1,0 +1,19 @@
+{
+  "name": "string",
+  "version": "1.0.0",
+  "entry": "src/string.clyth",
+  "dependencies": [
+    "musl-libc"
+  ],
+  "module-kind": "runtime",
+  "usage": "runtime",
+  "link-by-default": false,
+  "licenses": {
+    "clyth": "licenses/clyth-wrapper-license.md",
+    "native": "licenses/native-binding-license.md"
+  },
+  "source-layout-version": 1,
+  "native-binding": {
+    "root": "c-binding"
+  }
+}

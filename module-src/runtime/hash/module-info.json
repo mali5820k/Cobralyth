@@ -1,0 +1,20 @@
+{
+  "name": "hash",
+  "version": "1.0.0",
+  "dependencies": [
+    "musl-libc"
+  ],
+  "licenses": {
+    "clyth": "licenses/clyth-wrapper-license.md",
+    "native": "licenses/native-binding-license.md"
+  },
+  "entry": "src/hash.clyth",
+  "module-kind": "runtime",
+  "usage": "runtime",
+  "link-by-default": false,
+  "source-layout-version": 1,
+  "native-binding": {
+    "root": "c-binding",
+    "vendor-fetch-script": "c-binding/fetch-vendors.sh"
+  }
+}

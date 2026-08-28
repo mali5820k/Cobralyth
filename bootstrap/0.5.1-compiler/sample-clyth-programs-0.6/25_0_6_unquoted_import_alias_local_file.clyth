@@ -1,8 +1,0 @@
-import support/import-helper-file.clyth as helper
-import file-io as io
-
-int32 main() {
-    if helper.imported_answer() != 42 { return 1 }
-    if io.file_exists("support/import-helper-file.clyth") != 1 { return 2 }
-    return 0
-}

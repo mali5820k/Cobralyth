@@ -1,0 +1,51 @@
+// Clyth V1.0.0 self-host bootstrap driver.
+// Stage 1 intentionally brings the compiler path online before package-manager
+// commands; package tooling is wired after compiler self-host convergence.
+
+import "../../internal/compiler/build.clyth"
+import file-io
+
+void usage() {
+    println("Clyth V1.0.0 self-host compiler")
+    println("")
+    println("Usage: clyth build <source.clyth> [compiler options]")
+    println("       clyth --version")
+    println("       clyth --help")
+}
+
+int32 main(string[] args) {
+    if args.length <= 1 {
+        usage()
+        return 0
+    }
+
+    string command = args[1]
+    if command == "-h" || command == "--help" {
+        usage()
+        return 0
+    }
+    if command == "-v" || command == "--version" {
+        println("Clyth V1.0.0 self-host bootstrap")
+        return 0
+    }
+    if command != "build" {
+        println("error: Stage-1 bootstrap currently accepts only the build command")
+        usage()
+        return 2
+    }
+
+    int64 count = args.length - 2
+    string[] build_args = array<string>(count)
+    int64 index = 0
+    while index < count {
+        build_args[index] = args[index + 2]
+        index += 1
+    }
+
+    string build_error = RunBuild(build_args, 0, 0)
+    if build_error != "" {
+        println("error: " + build_error)
+        return 2
+    }
+    return 0
+}

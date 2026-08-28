@@ -1,12 +1,11 @@
 #!/usr/bin/env bash
-# Install only the final Stage 2 distribution. Bootstrap compiler generations
-# are implementation details and are never copied into the user's prefix.
+# Install the current Clyth distribution.
 set -Eeuo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-DIST="$ROOT/0.6.0-compiler/dist"
+DIST="$ROOT/dist"
 [[ -d "$DIST" ]] || {
-  printf 'missing bootstrapped compiler distribution: %s\n' "$DIST" >&2
+  printf 'missing Clyth distribution: %s\n' "$DIST" >&2
   exit 1
 }
 

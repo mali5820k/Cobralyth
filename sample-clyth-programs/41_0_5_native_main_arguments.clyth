@@ -1,0 +1,19 @@
+import file-io
+
+int32 main(string[] args) {
+    println(`argc=${args.length}`)
+
+    if (args.length > 0) {
+        println(args[0])
+    }
+
+    if (args.length > 1) {
+        println(args[1])
+    }
+
+    if (args.length > 2) {
+        println(args[2])
+    }
+
+    return 0
+}

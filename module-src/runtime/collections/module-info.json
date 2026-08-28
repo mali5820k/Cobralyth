@@ -1,0 +1,16 @@
+{
+  "name": "collections",
+  "version": "1.0.0",
+  "dependencies": [
+    "hash",
+    "musl-libc"
+  ],
+  "licenses": {
+    "clyth": "licenses/clyth-wrapper-license.md"
+  },
+  "entry": "src/list.clyth",
+  "module-kind": "runtime",
+  "usage": "runtime",
+  "link-by-default": false,
+  "source-layout-version": 1
+}

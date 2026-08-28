@@ -1,0 +1,15 @@
+int32 apply(int32 value, int32(int32) callback) {
+    return callback(value)
+}
+
+int32 main() {
+    auto increment = int32(int32 value) => {
+        return value + 1
+    }
+
+    int32(int32) double_value = (value) => {
+        return value * 2
+    }
+
+    return apply(20, increment) + apply(10, double_value) - 41
+}

@@ -1,0 +1,12 @@
+struct Counter {
+    int32 value
+
+    int32 read() {
+        return this.value
+    }
+}
+
+int32 main() {
+    Counter counter = Counter()
+    return counter.read()
+}

@@ -1,0 +1,74 @@
+// Source-level Clyth translation of compiler/go/internal/frontend/lexer/trie.go.
+// The Go map-backed child table is represented as a fixed byte-indexed array.
+// This preserves the trie algorithm while avoiding a Go map dependency in stage 1.
+
+import "../token/token.clyth"
+import string
+
+struct trieNode {
+    trieNode*[256] children
+    Kind kind
+    bool terminal
+}
+
+struct trie {
+    trieNode* root
+}
+
+trie* newTrie() {
+    trie* t = new trie()
+    t.root = new trieNode()
+    return t
+}
+
+void insert(trie* t, string text, Kind kind) {
+    trieNode* n = t.root
+    int64 i = 0
+    int64 length = bootstrap_string_length(text)
+    while i < length {
+        uint8 c = text[i]
+        if n.children[c] == null {
+            n.children[c] = new trieNode()
+        }
+        n = n.children[c]
+        i += 1
+    }
+    n.kind = kind
+    n.terminal = true
+}
+
+Kind exact(trie* t, string text, bool* ok) {
+    trieNode* n = t.root
+    int64 i = 0
+    int64 length = bootstrap_string_length(text)
+    while i < length {
+        n = n.children[text[i]]
+        if n == null {
+            *ok = false
+            return Kind.Illegal
+        }
+        i += 1
+    }
+    *ok = n.terminal
+    return n.kind
+}
+
+Kind longest(trie* t, string source, int64 start, int64* end, bool* ok) {
+    trieNode* n = t.root
+    Kind kind = Kind.Illegal
+    *end = start
+    *ok = false
+    int64 i = start
+    int64 length = bootstrap_string_length(source)
+    while i < length {
+        n = n.children[source[i]]
+        if n == null { break }
+        if n.terminal {
+            kind = n.kind
+            *end = i + 1
+            *ok = true
+        }
+        i += 1
+    }
+    return kind
+}

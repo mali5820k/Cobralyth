@@ -4,7 +4,7 @@
 set -Eeuo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-DIST="$ROOT/0.6.0-compiler/dist"
+DIST="$ROOT/dist"
 if [[ -x "$DIST/uninstall.sh" ]]; then
   exec "$DIST/uninstall.sh" "$@"
 fi

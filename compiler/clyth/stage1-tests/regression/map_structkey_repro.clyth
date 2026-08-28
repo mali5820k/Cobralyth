@@ -1,0 +1,11 @@
+import collections
+struct P { int64 x }
+struct E { int32 kind P* p uint64 hash() { return 17 } }
+int32 main() {
+    Map<E, int64> m = Map<E, int64>()
+    P* p = new P(); p.x = 9
+    E e; e.kind = 1; e.p = p
+    m[e] = 5
+    if m[e] != 5 { return 20 }
+    return 0
+}

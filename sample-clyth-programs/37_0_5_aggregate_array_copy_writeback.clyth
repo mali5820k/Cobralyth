@@ -1,0 +1,23 @@
+extern C int32 printf(string formatted_string, ...)
+
+struct WritebackValue {
+    int32 left
+    int32 right
+}
+
+int32 main() {
+    WritebackValue initial
+    initial.left = 10
+    initial.right = 20
+
+    WritebackValue[2] values
+    values[0] = initial
+
+    WritebackValue copied = values[0]
+    copied.left = 22
+    values[1] = copied
+
+    WritebackValue result = values[1]
+    printf("writeback=%d\n", result.left + result.right)
+    return result.left + result.right - 42
+}

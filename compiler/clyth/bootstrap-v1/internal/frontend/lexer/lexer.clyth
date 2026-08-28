@@ -1,0 +1,441 @@
+import "../token/token.clyth"
+import string
+
+struct LexerError {
+    Span Span
+    string Message
+
+    constructor(Span span, string message) {
+        Span = span
+        Message = message
+    }
+}
+
+string ErrorString(LexerError e) {
+    return `${e.Span.Start.Line}:${e.Span.Start.Column}: ${e.Message}`
+}
+
+struct LexResult {
+    Token[] tokens
+    LexerError[] errors
+}
+
+struct Lexer {
+    string source
+    int64 offset
+    int64 line
+    int64 column
+    LexerError[] errs
+
+    constructor(string input) {
+        source = input
+        offset = 0
+        line = 1
+        column = 1
+        
+    }
+}
+
+// The two Go initialization maps are populated imperatively in Clyth so that
+// the trie algorithm remains the same without depending on Go map literals.
+LexerError[] append_lexer_error(LexerError[] values, LexerError value) {
+    int64 old_length = values.length
+    LexerError[] replacement = array<LexerError>(old_length + 1)
+    int64 i = 0
+    while i < old_length { replacement[i] = values[i]; i += 1 }
+    replacement[old_length] = value
+    return replacement
+}
+
+Token[] append_token(Token[] values, Token value) {
+    int64 old_length = values.length
+    Token[] replacement = array<Token>(old_length + 1)
+    int64 i = 0
+    while i < old_length { replacement[i] = values[i]; i += 1 }
+    replacement[old_length] = value
+    return replacement
+}
+
+// UTF-8 helpers port the tiny decoding step used by the Go lexer.  Clyth's
+// source positions remain byte-offset based while line/column advance once per
+// rune for non-ASCII identifiers and comments.
+int64 bootstrap_utf8_rune_size(string source, int64 offset) {
+    int64 length = bootstrap_string_length(source)
+    if offset < 0 || offset >= length { return 0 }
+    uint8 first = source[offset]
+    if first < 128 { return 1 }
+    if first < 224 { return 2 }
+    if first < 240 { return 3 }
+    return 4
+}
+
+int64 bootstrap_utf8_rune_at(string source, int64 offset) {
+    int64 length = bootstrap_string_length(source)
+    if offset < 0 || offset >= length { return 0 }
+    uint8 first = source[offset]
+    if first < 128 { return first }
+    int64 size = bootstrap_utf8_rune_size(source, offset)
+    if size == 2 && offset + 1 < length {
+        return (first % 32) * 64 + (source[offset + 1] % 64)
+    }
+    if size == 3 && offset + 2 < length {
+        return (first % 16) * 4096 + (source[offset + 1] % 64) * 64 + (source[offset + 2] % 64)
+    }
+    if size == 4 && offset + 3 < length {
+        return (first % 8) * 262144 + (source[offset + 1] % 64) * 4096 + (source[offset + 2] % 64) * 64 + (source[offset + 3] % 64)
+    }
+    return first
+}
+
+Kind keyword_kind(string text, bool* ok) {
+    *ok = true
+    if text == "import" { return Kind.Import }
+    if text == "auto" { return Kind.Auto }
+    if text == "extern" { return Kind.Extern }
+    if text == "struct" { return Kind.Struct }
+    if text == "protocol" { return Kind.Protocol }
+    if text == "enum" { return Kind.Enum }
+    if text == "constructor" { return Kind.Constructor }
+    if text == "on_free" { return Kind.OnFree }
+    if text == "private" { return Kind.Private }
+    if text == "public" { return Kind.Public }
+    if text == "return" { return Kind.Return }
+    if text == "if" { return Kind.If }
+    if text == "else" { return Kind.Else }
+    if text == "while" { return Kind.While }
+    if text == "for" { return Kind.For }
+    if text == "switch" { return Kind.Switch }
+    if text == "case" { return Kind.Case }
+    if text == "default" { return Kind.Default }
+    if text == "continue" { return Kind.Continue }
+    if text == "break" { return Kind.Break }
+    if text == "true" { return Kind.True }
+    if text == "false" { return Kind.False }
+    if text == "null" { return Kind.Null }
+    if text == "as" { return Kind.As }
+    if text == "new" { return Kind.New }
+    if text == "const" { return Kind.Const }
+    if text == "cast" { return Kind.Cast }
+    if text == "this" { return Kind.This }
+    *ok = false
+    return Kind.Illegal
+}
+
+Kind operator_kind(string source, int64 start, int64* end, bool* ok) {
+    int64 length = source.length
+    *ok = true
+    if start + 3 <= length && bootstrap_string_slice(source, start, 3) == "..." { *end = start + 3; return Kind.Ellipsis }
+    if start + 2 <= length {
+        string two = bootstrap_string_slice(source, start, 2)
+        if two == "==" { *end=start+2; return Kind.Equal }
+        if two == "!=" { *end=start+2; return Kind.NotEqual }
+        if two == "<=" { *end=start+2; return Kind.LessEqual }
+        if two == ">=" { *end=start+2; return Kind.GreaterEqual }
+        if two == "&&" { *end=start+2; return Kind.AndAnd }
+        if two == "||" { *end=start+2; return Kind.OrOr }
+        if two == "+=" { *end=start+2; return Kind.PlusAssign }
+        if two == "-=" { *end=start+2; return Kind.MinusAssign }
+        if two == "*=" { *end=start+2; return Kind.StarAssign }
+        if two == "/=" { *end=start+2; return Kind.SlashAssign }
+        if two == "%=" { *end=start+2; return Kind.PercentAssign }
+        if two == "->" { *end=start+2; return Kind.Arrow }
+        if two == "=>" { *end=start+2; return Kind.FatArrow }
+        if two == "::" { *end=start+2; return Kind.Scope }
+        if two == "++" { *end=start+2; return Kind.Increment }
+        if two == "--" { *end=start+2; return Kind.Decrement }
+    }
+    if start < length {
+        string one = bootstrap_string_slice(source, start, 1)
+        if one == "(" { *end=start+1; return Kind.LParen }
+        if one == ")" { *end=start+1; return Kind.RParen }
+        if one == "{" { *end=start+1; return Kind.LBrace }
+        if one == "}" { *end=start+1; return Kind.RBrace }
+        if one == "[" { *end=start+1; return Kind.LBracket }
+        if one == "]" { *end=start+1; return Kind.RBracket }
+        if one == "<" { *end=start+1; return Kind.Less }
+        if one == ">" { *end=start+1; return Kind.Greater }
+        if one == "," { *end=start+1; return Kind.Comma }
+        if one == "." { *end=start+1; return Kind.Dot }
+        if one == ":" { *end=start+1; return Kind.Colon }
+        if one == ";" { *end=start+1; return Kind.Semicolon }
+        if one == "+" { *end=start+1; return Kind.Plus }
+        if one == "-" { *end=start+1; return Kind.Minus }
+        if one == "*" { *end=start+1; return Kind.Star }
+        if one == "/" { *end=start+1; return Kind.Slash }
+        if one == "%" { *end=start+1; return Kind.Percent }
+        if one == "=" { *end=start+1; return Kind.Assign }
+        if one == "!" { *end=start+1; return Kind.Bang }
+        if one == "&" { *end=start+1; return Kind.Ampersand }
+        if one == "|" { *end=start+1; return Kind.Pipe }
+        if one == "~" { *end=start+1; return Kind.Tilde }
+        if one == "#" { *end=start+1; return Kind.Hash }
+    }
+    *ok = false
+    *end = start
+    return Kind.Illegal
+}
+
+
+Lexer* LexerNew(string source) {
+    return new Lexer(source)
+}
+
+LexerError[] LexerErrors(Lexer* l) {
+    return l.errs
+}
+
+Position pos(Lexer* l) {
+    return Position(l.offset, l.line, l.column)
+}
+
+bool atEnd(Lexer* l) {
+    return l.offset >= bootstrap_string_length(l.source)
+}
+
+uint8 peekByte(Lexer* l, int64 n) {
+    int64 i = l.offset + n
+    if i < 0 || i >= bootstrap_string_length(l.source) { return 0 }
+    return l.source[i]
+}
+
+uint8 advanceByte(Lexer* l) {
+    if atEnd(l) { return 0 }
+    uint8 b = l.source[l.offset]
+    l.offset += 1
+    if b == '\n' {
+        l.line += 1
+        l.column = 1
+    } else {
+        l.column += 1
+    }
+    return b
+}
+
+int64 advanceRune(Lexer* l) {
+    if atEnd(l) { return 0 }
+    // Stage-one runtime helper preserves the Go implementation's UTF-8 step.
+    int64 size = bootstrap_utf8_rune_size(l.source, l.offset)
+    int64 i = 0
+    while i < size {
+        advanceByte(l)
+        i += 1
+    }
+    return bootstrap_utf8_rune_at(l.source, l.offset - size)
+}
+
+Token makeToken(Lexer* l, Kind kind, Position start) {
+    string lexeme = bootstrap_string_slice(l.source, start.Offset, l.offset - start.Offset)
+    Span token_span = Merge(Span(start, start), Span(pos(l), pos(l)))
+    return make_token_value(kind, lexeme, token_span)
+}
+
+bool isIdentStart(int64 r) {
+    return r == '_' || r > 127 || (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z')
+}
+
+bool isIdentContinue(int64 r) {
+    return isIdentStart(r) || (r >= '0' && r <= '9')
+}
+
+Token scanQuoted(Lexer* l, Position start, uint8 quote, Kind kind) {
+    advanceByte(l)
+    bool escaped = false
+    while atEnd(l) == false {
+        uint8 b = advanceByte(l)
+        if escaped {
+            escaped = false
+            continue
+        }
+        if b == '\\' {
+            escaped = true
+            continue
+        }
+        if b == quote { return makeToken(l, kind, start) }
+        if b == '\n' && quote == '\'' { break }
+    }
+    Span sp = Span(start, pos(l))
+    l.errs = append_lexer_error(l.errs, LexerError(sp, "unterminated literal"))
+    string lexeme = bootstrap_string_slice(l.source, start.Offset, l.offset - start.Offset)
+    return make_token_value(Kind.Illegal, lexeme, sp)
+}
+
+Token scanBacktick(Lexer* l, Position start) {
+    advanceByte(l)
+    bool escaped = false
+    while atEnd(l) == false {
+        uint8 b = advanceByte(l)
+        if escaped {
+            escaped = false
+            continue
+        }
+        if b == '\\' {
+            escaped = true
+            continue
+        }
+        if b == '`' { return makeToken(l, Kind.InterpolatedString, start) }
+    }
+    Span sp = Span(start, pos(l))
+    l.errs = append_lexer_error(l.errs, LexerError(sp, "unterminated backtick string"))
+    string lexeme = bootstrap_string_slice(l.source, start.Offset, l.offset - start.Offset)
+    return make_token_value(Kind.Illegal, lexeme, sp)
+}
+
+
+bool isByteDigit(uint8 b) {
+    return b >= '0' && b <= '9'
+}
+
+Token scanNumber(Lexer* l, Position start) {
+    Kind kind = Kind.Integer
+    uint8 first = peekByte(l, 0)
+    uint8 second = peekByte(l, 1)
+    if first == '0' && (second == 'x' || second == 'X' || second == 'b' || second == 'B' || second == 'o' || second == 'O') {
+        advanceByte(l)
+        advanceByte(l)
+        while atEnd(l) == false {
+            uint8 b = peekByte(l, 0)
+            bool digit = b >= '0' && b <= '9'
+            bool lowerHex = b >= 'a' && b <= 'f'
+            bool upperHex = b >= 'A' && b <= 'F'
+            if b != '_' && digit == false && lowerHex == false && upperHex == false { break }
+            advanceByte(l)
+        }
+        return makeToken(l, kind, start)
+    }
+    while atEnd(l) == false {
+        uint8 b = peekByte(l, 0)
+        if b != '_' && isByteDigit(b) == false { break }
+        advanceByte(l)
+    }
+    if peekByte(l, 0) == '.' && peekByte(l, 1) >= '0' && peekByte(l, 1) <= '9' {
+        kind = Kind.Float
+        advanceByte(l)
+        while atEnd(l) == false {
+            uint8 b = peekByte(l, 0)
+            if b != '_' && isByteDigit(b) == false { break }
+            advanceByte(l)
+        }
+    }
+    uint8 exponent = peekByte(l, 0)
+    if exponent == 'e' || exponent == 'E' {
+        kind = Kind.Float
+        advanceByte(l)
+        if peekByte(l, 0) == '+' || peekByte(l, 0) == '-' { advanceByte(l) }
+        while atEnd(l) == false {
+            uint8 b = peekByte(l, 0)
+            if b != '_' && isByteDigit(b) == false { break }
+            advanceByte(l)
+        }
+    }
+    return makeToken(l, kind, start)
+}
+
+Token Next(Lexer* l) {
+    while atEnd(l) == false {
+        Position start = pos(l)
+        uint8 b = peekByte(l, 0)
+        if b == ' ' || b == '\t' || b == '\r' {
+            advanceByte(l)
+            continue
+        }
+        if b == '\n' {
+            advanceByte(l)
+            return makeToken(l, Kind.Newline, start)
+        }
+        if b == '/' {
+            if peekByte(l, 1) == '/' {
+                while atEnd(l) == false && peekByte(l, 0) != '\n' { advanceByte(l) }
+                continue
+            }
+            if peekByte(l, 1) == '*' {
+                advanceByte(l)
+                advanceByte(l)
+                bool closed = false
+                while atEnd(l) == false {
+                    if peekByte(l, 0) == '*' && peekByte(l, 1) == '/' {
+                        advanceByte(l)
+                        advanceByte(l)
+                        closed = true
+                        break
+                    }
+                    advanceRune(l)
+                }
+                if closed == false {
+                    Span sp = Span(start, pos(l))
+                    l.errs = append_lexer_error(l.errs, LexerError(sp, "unterminated block comment"))
+                    string lexeme = bootstrap_string_slice(l.source, start.Offset, l.offset - start.Offset)
+                    return make_token_value(Kind.Illegal, lexeme, sp)
+                }
+                continue
+            }
+        }
+        if b == '"' { return scanQuoted(l, start, '"', Kind.String) }
+        if b == '\'' { return scanQuoted(l, start, '\'', Kind.Character) }
+        if b == '`' { return scanBacktick(l, start) }
+
+        int64 r = bootstrap_utf8_rune_at(l.source, l.offset)
+        if isIdentStart(r) {
+            advanceRune(l)
+            while atEnd(l) == false {
+                r = bootstrap_utf8_rune_at(l.source, l.offset)
+                if isIdentContinue(r) == false { break }
+                advanceRune(l)
+            }
+            string text = bootstrap_string_slice(l.source, start.Offset, l.offset - start.Offset)
+            bool keywordOk = false
+            Kind keywordKind = keyword_kind(text, &keywordOk)
+            if keywordOk { return makeToken(l, keywordKind, start) }
+            return makeToken(l, Kind.Identifier, start)
+        }
+        if b >= '0' && b <= '9' { return scanNumber(l, start) }
+
+        int64 end = l.offset
+        bool operatorOk = false
+        Kind operatorKind = operator_kind(l.source, l.offset, &end, &operatorOk)
+        if operatorOk {
+            while l.offset < end { advanceByte(l) }
+            return makeToken(l, operatorKind, start)
+        }
+
+        advanceRune(l)
+        Span sp = Span(start, pos(l))
+        string lexeme = bootstrap_string_slice(l.source, start.Offset, l.offset - start.Offset)
+        LexerError err = LexerError(sp, `unexpected character ${lexeme}`)
+        l.errs = append_lexer_error(l.errs, err)
+        return make_token_value(Kind.Illegal, lexeme, sp)
+    }
+    Position p = pos(l)
+    Span eof_span = Merge(Span(p, p), Span(p, p))
+    return make_token_value(Kind.EOF, "", eof_span)
+}
+
+LexResult Lex(string source) {
+    Lexer* l = LexerNew(source)
+    int64 token_count = 0
+    int64 token_capacity = 16
+    Token[] out = array<Token>(token_capacity)
+    while true {
+        Token t = Next(l)
+        if token_count >= token_capacity {
+            token_capacity *= 2
+            out = array<Token>(out, token_capacity)
+        }
+        out[token_count] = t
+        token_count += 1
+        if t.Kind == Kind.EOF { break }
+    }
+    LexResult result
+    result.tokens = array<Token>(out, token_count)
+    result.errors = LexerErrors(l)
+    return result
+}
+
+string Debug(Token[] tokens) {
+    string output = ""
+    int64 i = 0
+    while i < tokens.length {
+        output = bootstrap_string_concat3(output, TokenString(tokens[i]), "\n")
+        i += 1
+    }
+    return output
+}

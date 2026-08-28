@@ -1,0 +1,9 @@
+{
+  "name": "clyth-core",
+  "version": "1.0.0",
+  "dependencies": [],
+  "module-kind": "core",
+  "usage": "compile-time+runtime",
+  "link-by-default": true,
+  "protected": true
+}

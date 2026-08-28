@@ -1,0 +1,8 @@
+import "support/aggregate_import_helper.clyth" as aggregate_helper
+extern C int32 printf(string formatted_string, ...)
+
+int32 main() {
+    ImportedAggregate result = aggregate_helper.imported_aggregate()
+    printf("imported aggregate=%d\n", result.value)
+    return result.value - 42
+}

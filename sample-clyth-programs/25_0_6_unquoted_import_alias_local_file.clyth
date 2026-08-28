@@ -1,0 +1,13 @@
+import "support/import_helper_file.clyth" as helper
+import file-io as io
+
+int32 main() {
+    if helper.imported_answer() != 42 { return 1 }
+
+    string probe = ".clyth-import-alias-probe"
+    io.delete_file(probe)
+    if io.create_file(probe) != 0 { return 2 }
+    if io.file_exists(probe) != 1 { return 3 }
+    if io.delete_file(probe) != 0 { return 4 }
+    return 0
+}

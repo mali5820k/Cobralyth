@@ -1,0 +1,28 @@
+extern C int32 printf(string formatted_string, ...)
+
+struct AggregateBox<T> {
+    T[2] values
+
+    T get(int64 index) {
+        return values[index]
+    }
+}
+
+struct AggregateValue {
+    int32 number
+}
+
+int32 main() {
+    AggregateValue first
+    AggregateValue second
+    first.number = 21
+    second.number = 42
+
+    AggregateBox<AggregateValue> box
+    box.values[0] = first
+    box.values[1] = second
+
+    AggregateValue result = box.get(1)
+    printf("generic aggregate=%d\n", result.number)
+    return result.number - 42
+}

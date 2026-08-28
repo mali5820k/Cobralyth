@@ -1,0 +1,893 @@
+// AUTO-TRANSLATED BOOTSTRAP SEED FROM FROZEN GO V1.0.0 IMPLEMENTATION.
+// Source: compiler/go/internal/packagecmd/package.go
+// This file preserves implementation logic for the Go -> Clyth bootstrap port.
+
+// package packagecmd
+
+// Go imports:
+// "archive/tar"
+// "compress/gzip"
+// "crypto/sha256"
+// "encoding/hex"
+// "encoding/json"
+// "errors"
+// "fmt"
+// "io"
+// "io/fs"
+// "net/http"
+// "os"
+// "os/exec"
+// "path/filepath"
+// "sort"
+// "strings"
+
+struct moduleInfo {
+	string Name
+	string Version
+	string[] Dependencies
+}
+
+struct registry {
+	string Type
+	string Location
+}
+
+struct registryFile {
+	Map<string, registry> Registries
+}
+
+struct registryPackage {
+	string File
+	string SHA256
+	string SourceURL
+	string SourceRevision
+	string LicenseSPDX
+	string LicenseFile
+}
+
+struct registryIndex {
+	Map<string, Map<string, registryPackage>> Packages
+}
+
+struct lockEntry {
+	string Version
+	string Registry
+	string SHA256
+	string Package
+	string Source
+	string SourceRevision
+	string InstallKind
+	string LicenseSPDX
+	string LicenseFile
+}
+
+struct lockFile {
+	Map<string, lockEntry> Packages
+}
+
+string Run(string command, string[] args, out, Writer errOut) {
+	switch command { // TODO lower switch to if/else
+	case "package":
+		if bootstrap_len(args) != 1 {
+			return errors.New("usage: clyth package <module-directory>")
+		}
+		archive, err = Package(args[0])
+		if err == null {
+			fmt.Fprintln(out, archive)
+		}
+		return err
+	case "add-registry", "update-registry":
+		return setRegistry(command == "update-registry", args, out)
+	case "remove-registry":
+		if bootstrap_len(args) != 1 {
+			return errors.New("usage: clyth remove-registry <name>")
+		}
+		return removeRegistry(args[0], out)
+	case "list-registries":
+		return listRegistries(out)
+	case "registry-info":
+		return registryInfo(args, out)
+	case "list":
+		return list_packages(out)
+	case "info":
+		return package_info(args, out)
+	case "init":
+		return init_project(args, out)
+	case "debug":
+		return debug_project(out)
+	case "update":
+		return updatePackages(args, out)
+	case "install":
+		return install(args, out)
+	case "remove":
+		if bootstrap_len(args) != 1 {
+			return errors.New("usage: clyth remove <package>")
+		}
+		return removePackage(args[0], out)
+	case "refresh":
+		return refresh(out)
+	default:
+		return fmt.Errorf("unsupported package command %q", command)
+	}
+}
+
+string clythHome() {
+	if v = os.Getenv("CLYTH_HOME"); v != "" {
+		return v
+	}
+	home, _ = os.UserHomeDir()
+	return filepath.Join(home, ".clyth")
+}
+
+string readJSON(string path, string v) {
+	b, err = os.ReadFile(path)
+	if err != null {
+		return err
+	}
+	return json.Unmarshal(b, v)
+}
+
+string writeJSON(string path, string v) {
+	if err = os.MkdirAll(filepath.Dir(path), 0o755); err != null {
+		return err
+	}
+	b, err = json.MarshalIndent(v, "", "  ")
+	if err != null {
+		return err
+	}
+	return os.WriteFile(path, bootstrap_append(b, '\n'), 0o644)
+}
+
+BootstrapTuple loadRegistries() {
+	r = registryFile{Registries: bootstrap_empty_map()}
+	path = filepath.Join(clythHome(), "registries.json")
+	if err = readJSON(path, &r); err != null && !errors.Is(err, os.ErrNotExist) {
+		return r, err
+	}
+	if r.Registries == null {
+		r.Registries = bootstrap_empty_map()
+	}
+	return r, null
+}
+
+string saveRegistries(registryFile r) {
+	return writeJSON(filepath.Join(clythHome(), "registries.json"), r)
+}
+
+string setRegistry(bool update, string[] args, Writer out) {
+	if bootstrap_len(args) != 3 || (args[1] != "--path" && args[1] != "--url") {
+		return errors.New("usage: clyth add-registry <name> (--path <directory> | --url <remote-url>)")
+	}
+	r, err = loadRegistries()
+	if err != null {
+		return err
+	}
+	_, exists = r.Registries[args[0]]
+	if update && !exists {
+		return fmt.Errorf("registry %q does not exist", args[0])
+	}
+	if !update && exists {
+		return fmt.Errorf("registry %q already exists", args[0])
+	}
+	location = args[2]
+	registry_type = "remote"
+	if args[1] == "--path" {
+		abs, path_err = filepath.Abs(args[2])
+		if path_err != null {
+			return path_err
+		}
+		location = abs
+		registry_type = "filesystem"
+	}
+	r.Registries[args[0]] = registry{Type: registry_type, Location: location}
+	if err = saveRegistries(r); err != null {
+		return err
+	}
+	fmt.Fprintf(out, "%s registry %s -> %s\n", map[bool]string{true: "Updated", false: "Added"}[update], args[0], location)
+	return null
+}
+
+string removeRegistry(string name, Writer out) {
+	r, err = loadRegistries()
+	if err != null {
+		return err
+	}
+	if _, ok = r.Registries[name]; !ok {
+		return fmt.Errorf("registry %q does not exist", name)
+	}
+	delete(r.Registries, name)
+	if err = saveRegistries(r); err != null {
+		return err
+	}
+	fmt.Fprintln(out, "Removed registry", name)
+	return null
+}
+
+string listRegistries(Writer out) {
+	r, err = loadRegistries()
+	if err != null {
+		return err
+	}
+	names = bootstrap_array_with_capacity(bootstrap_len(r.Registries))
+	__range_keys_1 = (r.Registries).keys()
+	for int64 __range_index_1 = 0; __range_index_1 < bootstrap_len(__range_keys_1); __range_index_1 += 1 {
+		n = __range_keys_1[__range_index_1]
+		names = bootstrap_append(names, n)
+	}
+	sort.Strings(names)
+	__range_values_2 = bootstrap_values(names)
+	for int64 __range_index_2 = 0; __range_index_2 < bootstrap_len(__range_values_2); __range_index_2 += 1 {
+		n = __range_values_2[__range_index_2]
+		fmt.Fprintf(out, "%s\t%s\n", n, r.Registries[n].Location)
+	}
+	return null
+}
+
+BootstrapTuple Package(string dir) {
+	abs, err = filepath.Abs(dir)
+	if err != null {
+		return "", err
+	}
+	info moduleInfo var
+	if err = readJSON(filepath.Join(abs, "module-info.json"), &info); err != null {
+		return "", fmt.Errorf("read module-info.json: %w", err)
+	}
+	if info.Name == "" || info.Version == "" {
+		return "", errors.New("module-info.json requires name and version")
+	}
+	buildDir = filepath.Join(abs, "build")
+	if err = os.MkdirAll(buildDir, 0o755); err != null {
+		return "", err
+	}
+	archive = filepath.Join(buildDir, fmt.Sprintf("%s-%s.tar.gz", info.Name, info.Version))
+	f, err = os.Create(archive)
+	if err != null {
+		return "", err
+	}
+	bootstrap_defer(f.Close() // TODO lower defer to explicit cleanup/MECC scope)
+	gz = gzip.NewWriter(f)
+	bootstrap_defer(gz.Close() // TODO lower defer to explicit cleanup/MECC scope)
+	tw = tar.NewWriter(gz)
+	bootstrap_defer(tw.Close() // TODO lower defer to explicit cleanup/MECC scope)
+	rootName = fmt.Sprintf("%s-%s", info.Name, info.Version)
+	skip = map[string]bool{"build": true, ".git": true}
+	err = filepath.WalkDir(abs, func(path string, d fs.DirEntry, walkErr error) error {
+		if walkErr != null {
+			return walkErr
+		}
+		rel, err = filepath.Rel(abs, path)
+		if err != null {
+			return err
+		}
+		if rel == "." {
+			return null
+		}
+		first = strings.Split(rel, string(filepath.Separator))[0]
+		if skip[first] {
+			if d.IsDir() {
+				return filepath.SkipDir
+			}
+			return null
+		}
+		info, err = d.Info()
+		if err != null {
+			return err
+		}
+		hdr, err = tar.FileInfoHeader(info, "")
+		if err != null {
+			return err
+		}
+		hdr.Name = filepath.ToSlash(filepath.Join(rootName, rel))
+		if err = tw.WriteHeader(hdr); err != null {
+			return err
+		}
+		if d.Type().IsRegular() {
+			rf, err = os.Open(path)
+			if err != null {
+				return err
+			}
+			_, cpErr = io.Copy(tw, rf)
+			rf.Close()
+			return cpErr
+		}
+		return null
+	})
+	if err != null {
+		return "", err
+	}
+	if err = tw.Close(); err != null {
+		return "", err
+	}
+	if err = gz.Close(); err != null {
+		return "", err
+	}
+	return archive, null
+}
+
+BootstrapTuple shaFile(string path) {
+	f, err = os.Open(path)
+	if err != null {
+		return "", err
+	}
+	bootstrap_defer(f.Close() // TODO lower defer to explicit cleanup/MECC scope)
+	h = sha256.New()
+	if _, err = io.Copy(h, f); err != null {
+		return "", err
+	}
+	return hex.EncodeToString(h.Sum(null)), null
+}
+
+BootstrapTuple loadLock(string root) {
+	l = lockFile{Packages: bootstrap_empty_map()}
+	err = readJSON(filepath.Join(root, "clyth_package.json"), &l)
+	if err != null && !errors.Is(err, os.ErrNotExist) {
+		return l, err
+	}
+	if l.Packages == null {
+		l.Packages = bootstrap_empty_map()
+	}
+	return l, null
+}
+
+string saveLock(string root, lockFile l) {
+	return writeJSON(filepath.Join(root, "clyth_package.json"), l)
+}
+
+string install(string[] args, Writer out) {
+
+string install_internal(string[] args, Writer out, bool direct) {
+	cwd, _ = os.Getwd()
+	project_root = cwd
+	if discovered, discover_err = find_project_root(cwd); discover_err == null {
+		project_root = discovered
+	}
+	if bootstrap_len(args) == 2 && args[0] == "-f" {
+		return install_local_archive(project_root, args[1], out)
+	}
+	if bootstrap_len(args) == 0 {
+		return refresh(out)
+	}
+	name = args[0]
+	selected = ""
+	build_from_source = false
+	__range_values_3 = bootstrap_values(args[1:])
+	for int64 __range_index_3 = 0; __range_index_3 < bootstrap_len(__range_values_3); __range_index_3 += 1 {
+		a = __range_values_3[__range_index_3]
+		if strings.HasPrefix(a, "--from-registry=") {
+			selected = strings.TrimPrefix(a, "--from-registry=")
+		}
+		if a == "--build-from-source" {
+			build_from_source = true
+		}
+	}
+	regs, err = loadRegistries()
+	if err != null {
+		return err
+	}
+	names = bootstrap_array_with_capacity(bootstrap_len(regs.Registries))
+	__range_keys_4 = (regs.Registries).keys()
+	for int64 __range_index_4 = 0; __range_index_4 < bootstrap_len(__range_keys_4); __range_index_4 += 1 {
+		n = __range_keys_4[__range_index_4]
+		if selected == "" || selected == n {
+			names = bootstrap_append(names, n)
+		}
+	}
+	sort.Strings(names)
+	if selected != "" {
+		if _, ok = regs.Registries[selected]; !ok {
+			return fmt.Errorf("unknown registry %q", selected)
+		}
+	}
+	__range_values_5 = bootstrap_values(names)
+	for int64 __range_index_5 = 0; __range_index_5 < bootstrap_len(__range_values_5); __range_index_5 += 1 {
+		rn = __range_values_5[__range_index_5]
+		reg = regs.Registries[rn]
+		idx, index_err = readRegistryIndex(reg)
+		if index_err != null {
+			continue
+		}
+		versions = idx.Packages[name]
+		if bootstrap_len(versions) == 0 {
+			continue
+		}
+		vs = bootstrap_array_with_capacity(bootstrap_len(versions))
+		__range_keys_6 = (versions).keys()
+		for int64 __range_index_6 = 0; __range_index_6 < bootstrap_len(__range_keys_6); __range_index_6 += 1 {
+			v = __range_keys_6[__range_index_6]
+			vs = bootstrap_append(vs, v)
+		}
+		sort.Strings(vs)
+		v = vs[bootstrap_len(vs)-1]
+		meta = versions[v]
+		if build_from_source {
+			if err = buildFromSource(project_root, name, v, rn, meta, out); err != null {
+				return err
+			}
+			if direct {
+				return record_project_dependency(project_root, name, v)
+			}
+			return null
+		}
+		if reg.Type == "filesystem" {
+			if err = installArchive(project_root, filepath.Join(reg.Location, meta.File), rn, out); err != null {
+				return err
+			}
+			if direct {
+				return record_project_dependency(project_root, name, v)
+			}
+			return null
+		}
+		artifact_url = strings.TrimRight(reg.Location, "/") + "/" + strings.TrimLeft(meta.File, "/")
+		temp_file, temp_err = os.CreateTemp("", "clyth-package-*.tar.gz")
+		if temp_err != null {
+			return temp_err
+		}
+		temp_path = temp_file.Name()
+		temp_file.Close()
+		bootstrap_defer(os.Remove(temp_path) // TODO lower defer to explicit cleanup/MECC scope)
+		resp, fetch_err = http.Get(artifact_url)
+		if fetch_err != null {
+			return fetch_err
+		}
+		bootstrap_defer(resp.Body.Close() // TODO lower defer to explicit cleanup/MECC scope)
+		if resp.StatusCode != http.StatusOK {
+			return fmt.Errorf("package download returned %s", resp.Status)
+		}
+		target, _ = os.Create(temp_path)
+		_, copy_err = io.Copy(target, resp.Body)
+		target.Close()
+		if copy_err != null {
+			return copy_err
+		}
+		if err = installArchive(project_root, temp_path, rn, out); err != null {
+			return err
+		}
+		if direct {
+			return record_project_dependency(project_root, name, v)
+		}
+		return null
+	}
+	return fmt.Errorf("package %q was not found in configured registries", name)
+}
+
+string installArchive(projectRoot, archive, string registryName, Writer out) {
+	abs, err = filepath.Abs(archive)
+	if err != null {
+		return err
+	}
+	hash, err = shaFile(abs)
+	if err != null {
+		return err
+	}
+	f, err = os.Open(abs)
+	if err != null {
+		return err
+	}
+	bootstrap_defer(f.Close() // TODO lower defer to explicit cleanup/MECC scope)
+	gz, err = gzip.NewReader(f)
+	if err != null {
+		return err
+	}
+	bootstrap_defer(gz.Close() // TODO lower defer to explicit cleanup/MECC scope)
+	tr = tar.NewReader(gz)
+	info moduleInfo var
+	var payload []struct {
+		string name
+		fs.FileMode mode
+		uint8[] data
+		bool dir
+	}
+	while true {
+		h, err = tr.Next()
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != null {
+			return err
+		}
+		parts = strings.Split(filepath.ToSlash(h.Name), "/")
+		if bootstrap_len(parts) < 2 {
+			continue
+		}
+		rel = filepath.Join(parts[1:]...)
+		if strings.Contains(rel, "..") {
+			return errors.New("unsafe archive path")
+		}
+		if h.FileInfo().IsDir() {
+			payload = append(payload, struct {
+				string name
+				fs.FileMode mode
+				uint8[] data
+				bool dir
+			}{rel, h.FileInfo().Mode(), null, true})
+			continue
+		}
+		data, err = io.ReadAll(tr)
+		if err != null {
+			return err
+		}
+		payload = append(payload, struct {
+			string name
+			fs.FileMode mode
+			uint8[] data
+			bool dir
+		}{rel, h.FileInfo().Mode(), data, false})
+		if filepath.ToSlash(rel) == "module-info.json" {
+			if err = json.Unmarshal(data, &info); err != null {
+				return err
+			}
+		}
+	}
+	if info.Name == "" || info.Version == "" {
+		return errors.New("package archive lacks valid module-info.json")
+	}
+	dest = filepath.Join(projectRoot, "modules", info.Name, info.Version)
+	if err = os.RemoveAll(dest); err != null {
+		return err
+	}
+	__range_values_7 = bootstrap_values(payload)
+	for int64 __range_index_7 = 0; __range_index_7 < bootstrap_len(__range_values_7); __range_index_7 += 1 {
+		p = __range_values_7[__range_index_7]
+		path = filepath.Join(dest, p.name)
+		if p.dir {
+			if err = os.MkdirAll(path, 0o755); err != null {
+				return err
+			}
+			continue
+		}
+		if err = os.MkdirAll(filepath.Dir(path), 0o755); err != null {
+			return err
+		}
+		if err = os.WriteFile(path, p.data, p.mode.Perm()); err != null {
+			return err
+		}
+	}
+	l, err = loadLock(projectRoot)
+	if err != null {
+		return err
+	}
+	l.Packages[info.Name] = lockEntry{Version: info.Version, Registry: registryName, SHA256: hash, Package: filepath.Base(abs), Source: abs, InstallKind: map[bool]string{true: "registry-prebuilt", false: "local-file"}[registryName != ""]}
+	if err = saveLock(projectRoot, l); err != null {
+		return err
+	}
+	fmt.Fprintf(out, "Installed %s@%s\n", info.Name, info.Version)
+	__range_values_8 = bootstrap_values(info.Dependencies)
+	for int64 __range_index_8 = 0; __range_index_8 < bootstrap_len(__range_values_8); __range_index_8 += 1 {
+		dep = __range_values_8[__range_index_8]
+		if dep != info.Name {
+			if err = install_internal(bootstrap_array(dep), out, false); err != null {
+				return fmt.Errorf("install dependency %s: %w", dep, err)
+			}
+		}
+	}
+	return null
+}
+
+string removePackage(string name, Writer out) {
+	cwd, _ = os.Getwd()
+	root, root_err = find_project_root(cwd)
+	if root_err != null {
+		root = cwd
+	}
+	l, err = loadLock(root)
+	if err != null {
+		return err
+	}
+	e, ok = l.Packages[name]
+	if !ok {
+		return fmt.Errorf("package %q is not installed", name)
+	}
+	if err = os.RemoveAll(filepath.Join(root, "modules", name, e.Version)); err != null {
+		return err
+	}
+	delete(l.Packages, name)
+	if manifest, manifest_err = load_project(root); manifest_err == null {
+		delete(manifest.Dependencies, name)
+		if save_err = save_project(root, manifest); save_err != null {
+			return save_err
+		}
+	}
+	if err = saveLock(root, l); err != null {
+		return err
+	}
+	fmt.Fprintln(out, "Removed", name)
+	return null
+}
+
+string refresh(Writer out) {
+	cwd, _ = os.Getwd()
+	root, err = find_project_root(cwd)
+	if err != null {
+		return err
+	}
+	locked, err = loadLock(root)
+	if err != null {
+		return err
+	}
+	if bootstrap_len(locked.Packages) == 0 {
+		return errors.New("no packages are locked in clyth_package.json")
+	}
+	regs, err = loadRegistries()
+	if err != null {
+		return err
+	}
+	candidate = locked
+	candidate.Packages = make(map[string]lockEntry, bootstrap_len(locked.Packages))
+	__range_keys_9 = (locked.Packages).keys()
+	for int64 __range_index_9 = 0; __range_index_9 < bootstrap_len(__range_keys_9); __range_index_9 += 1 {
+		name = __range_keys_9[__range_index_9]
+		entry = (locked.Packages)[name]
+		candidate.Packages[name] = entry
+	}
+	failures []string var
+	names = bootstrap_array_with_capacity(bootstrap_len(locked.Packages))
+	__range_keys_10 = (locked.Packages).keys()
+	for int64 __range_index_10 = 0; __range_index_10 < bootstrap_len(__range_keys_10); __range_index_10 += 1 {
+		name = __range_keys_10[__range_index_10]
+		names = bootstrap_append(names, name)
+	}
+	sort.Strings(names)
+	__range_values_11 = bootstrap_values(names)
+	for int64 __range_index_11 = 0; __range_index_11 < bootstrap_len(__range_values_11); __range_index_11 += 1 {
+		name = __range_values_11[__range_index_11]
+		entry = locked.Packages[name]
+		if entry.Registry == "" || entry.InstallKind == "local-file" {
+			continue
+		}
+		reg, ok = regs.Registries[entry.Registry]
+		if !ok {
+			failures = bootstrap_append(failures, fmt.Sprintf("%s@%s: registry %q is not configured", name, entry.Version, entry.Registry))
+			continue
+		}
+		idx, index_err = readRegistryIndex(reg)
+		if index_err != null {
+			failures = bootstrap_append(failures, fmt.Sprintf("%s@%s: %v", name, entry.Version, index_err))
+			continue
+		}
+		meta, ok = idx.Packages[name][entry.Version]
+		if !ok {
+			failures = bootstrap_append(failures, fmt.Sprintf("%s@%s: exact locked version not found in registry %q", name, entry.Version, entry.Registry))
+			continue
+		}
+		if entry.SHA256 != "" && meta.SHA256 != "" && entry.SHA256 != meta.SHA256 {
+			failures = bootstrap_append(failures, fmt.Sprintf("%s@%s: registry checksum differs from locked checksum", name, entry.Version))
+			continue
+		}
+		if reg.Type == "filesystem" {
+			entry.Source = filepath.Join(reg.Location, meta.File)
+		} else {
+			entry.Source = strings.TrimRight(reg.Location, "/") + "/" + strings.TrimLeft(meta.File, "/")
+		}
+		entry.Package = meta.File
+		entry.LicenseSPDX = meta.LicenseSPDX
+		entry.LicenseFile = meta.LicenseFile
+		candidate.Packages[name] = entry
+	}
+	if bootstrap_len(failures) > 0 {
+		return fmt.Errorf("refresh failed; clyth_package.json was not modified:\n  %s", strings.Join(failures, "\n  "))
+	}
+	if err = saveLock(root, candidate); err != null {
+		return err
+	}
+	fmt.Fprintf(out, "Refreshed %d locked package locations\n", bootstrap_len(candidate.Packages))
+	return null
+}
+
+// WriteRegistry builds the filesystem registry index expected by clyth install.
+string WriteRegistry(string registryDir) {
+	entries, err = os.ReadDir(registryDir)
+	if err != null {
+		return err
+	}
+	idx = registryIndex{Packages: bootstrap_empty_map()}
+	__range_values_12 = bootstrap_values(entries)
+	for int64 __range_index_12 = 0; __range_index_12 < bootstrap_len(__range_values_12); __range_index_12 += 1 {
+		e = __range_values_12[__range_index_12]
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".tar.gz") {
+			continue
+		}
+		path = filepath.Join(registryDir, e.Name())
+		f, err = os.Open(path)
+		if err != null {
+			return err
+		}
+		gz, err = gzip.NewReader(f)
+		if err != null {
+			f.Close()
+			return err
+		}
+		tr = tar.NewReader(gz)
+		mi moduleInfo var
+		while true {
+			h, er = tr.Next()
+			if errors.Is(er, io.EOF) {
+				break
+			}
+			if er != null {
+				gz.Close()
+				f.Close()
+				return er
+			}
+			if strings.HasSuffix(filepath.ToSlash(h.Name), "/module-info.json") {
+				b, er = io.ReadAll(tr)
+				if er != null {
+					return er
+				}
+				if er = json.Unmarshal(b, &mi); er != null {
+					return er
+				}
+				break
+			}
+		}
+		gz.Close()
+		f.Close()
+		if mi.Name == "" || mi.Version == "" {
+			continue
+		}
+		hash, err = shaFile(path)
+		if err != null {
+			return err
+		}
+		if idx.Packages[mi.Name] == null {
+			idx.Packages[mi.Name] = bootstrap_empty_map()
+		}
+		idx.Packages[mi.Name][mi.Version] = registryPackage{File: e.Name(), SHA256: hash}
+	}
+	return writeJSON(filepath.Join(registryDir, "clyth-package-registry.json"), idx)
+}
+
+string registryInfo(string[] args, Writer out) {
+	if bootstrap_len(args) != 1 {
+		return errors.New("usage: clyth registry-info <registry-name>")
+	}
+	regs, err = loadRegistries()
+	if err != null {
+		return err
+	}
+	reg, ok = regs.Registries[args[0]]
+	if !ok {
+		return fmt.Errorf("registry %q does not exist", args[0])
+	}
+	fmt.Fprintf(out, "%s\ntype: %s\nlocation: %s\n", args[0], reg.Type, reg.Location)
+	return null
+}
+
+BootstrapTuple readRegistryIndex(registry reg) {
+	idx registryIndex var
+	if reg.Type == "filesystem" {
+		return idx, readJSON(filepath.Join(reg.Location, "clyth-package-registry.json"), &idx)
+	}
+	url = strings.TrimRight(reg.Location, "/") + "/clyth-package-registry.json"
+	resp, err = http.Get(url)
+	if err != null {
+		return idx, err
+	}
+	bootstrap_defer(resp.Body.Close() // TODO lower defer to explicit cleanup/MECC scope)
+	if resp.StatusCode != http.StatusOK {
+		return idx, fmt.Errorf("registry returned %s", resp.Status)
+	}
+	err = json.NewDecoder(resp.Body).Decode(&idx)
+	return idx, err
+}
+
+string updatePackages(string[] args, Writer out) {
+	build_from_source = false
+	requested string var
+	__range_values_13 = bootstrap_values(args)
+	for int64 __range_index_13 = 0; __range_index_13 < bootstrap_len(__range_values_13); __range_index_13 += 1 {
+		arg = __range_values_13[__range_index_13]
+		if arg == "--build-from-source" {
+			build_from_source = true
+		} else if requested == "" {
+			requested = arg
+		} else {
+			return errors.New("usage: clyth update [module] [--build-from-source]")
+		}
+	}
+	if requested != "" {
+		install_args = bootstrap_array(requested)
+		if build_from_source {
+			install_args = bootstrap_append(install_args, "--build-from-source")
+		}
+		return install(install_args, out)
+	}
+	cwd, _ = os.Getwd()
+	root, err = find_project_root(cwd)
+	if err != null {
+		return err
+	}
+	lock, err = loadLock(root)
+	if err != null {
+		return err
+	}
+	names = bootstrap_array_with_capacity(bootstrap_len(lock.Packages))
+	__range_keys_14 = (lock.Packages).keys()
+	for int64 __range_index_14 = 0; __range_index_14 < bootstrap_len(__range_keys_14); __range_index_14 += 1 {
+		n = __range_keys_14[__range_index_14]
+		names = bootstrap_append(names, n)
+	}
+	sort.Strings(names)
+	__range_values_15 = bootstrap_values(names)
+	for int64 __range_index_15 = 0; __range_index_15 < bootstrap_len(__range_values_15); __range_index_15 += 1 {
+		name = __range_values_15[__range_index_15]
+		install_args = bootstrap_array(name)
+		if build_from_source {
+			install_args = bootstrap_append(install_args, "--build-from-source")
+		}
+		if err = install(install_args, out); err != null {
+			return fmt.Errorf("update %s: %w", name, err)
+		}
+	}
+	return null
+}
+
+string buildFromSource(project_root, name, version, string registry_name, registryPackage meta, Writer out) {
+	if meta.SourceURL == "" || meta.SourceRevision == "" {
+		return fmt.Errorf("%s@%s does not publish a pinned source URL and revision", name, version)
+	}
+	temp_dir, err = os.MkdirTemp("", "clyth-source-build-*")
+	if err != null {
+		return err
+	}
+	bootstrap_defer(os.RemoveAll(temp_dir) // TODO lower defer to explicit cleanup/MECC scope)
+	source_dir = filepath.Join(temp_dir, name)
+	clone = exec.Command("git", "clone", "--quiet", meta.SourceURL, source_dir)
+	if output, err = clone.CombinedOutput(); err != null {
+		return fmt.Errorf("clone source: %w: %s", err, output)
+	}
+	checkout = exec.Command("git", "-C", source_dir, "checkout", "--quiet", meta.SourceRevision)
+	if output, err = checkout.CombinedOutput(); err != null {
+		return fmt.Errorf("checkout source revision: %w: %s", err, output)
+	}
+	archive, err = Package(source_dir)
+	if err != null {
+		return fmt.Errorf("package locally-built source: %w", err)
+	}
+	if err = installArchive(project_root, archive, registry_name, out); err != null {
+		return err
+	}
+	lock, err = loadLock(project_root)
+	if err != null {
+		return err
+	}
+	entry = lock.Packages[name]
+	entry.InstallKind = "registry-source-build"
+	entry.Source = meta.SourceURL
+	entry.SourceRevision = meta.SourceRevision
+	entry.LicenseSPDX = meta.LicenseSPDX
+	entry.LicenseFile = meta.LicenseFile
+	lock.Packages[name] = entry
+	return saveLock(project_root, lock)
+}
+
+string record_project_dependency(root, name, string version) {
+	manifest, err = load_project(root)
+	if err != null {
+		return null
+	}
+	if manifest.Dependencies == null {
+		manifest.Dependencies = bootstrap_empty_map()
+	}
+	manifest.Dependencies[name] = version
+	return save_project(root, manifest)
+}
+
+string install_local_archive(project_root, string archive, Writer out) {
+	before, _ = loadLock(project_root)
+	if err = installArchive(project_root, archive, "", out); err != null {
+		return err
+	}
+	after, err = loadLock(project_root)
+	if err != null {
+		return err
+	}
+	__range_keys_16 = (after.Packages).keys()
+	for int64 __range_index_16 = 0; __range_index_16 < bootstrap_len(__range_keys_16); __range_index_16 += 1 {
+		name = __range_keys_16[__range_index_16]
+		entry = (after.Packages)[name]
+		if _, existed = before.Packages[name]; !existed || entry.InstallKind == "local-file" {
+			return record_project_dependency(project_root, name, entry.Version)
+		}
+	}
+	return null
+}

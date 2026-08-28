@@ -1,0 +1,173 @@
+{
+  "scopeName": "source.clyth",
+  "name": "Clyth",
+  "patterns": [
+    {
+      "include": "#comments"
+    },
+    {
+      "match": "^\\s*(import)\\s+(\\\"[^\\\"\\n]+\\\")(?:\\s+(as)\\s+([A-Za-z_]\\w*))?",
+      "captures": {
+        "1": {
+          "name": "keyword.declaration.import.clyth"
+        },
+        "2": {
+          "name": "string.quoted.double.path.clyth"
+        },
+        "3": {
+          "name": "keyword.control.as.clyth"
+        },
+        "4": {
+          "name": "variable.other.alias.clyth"
+        }
+      }
+    },
+    {
+      "match": "^\\s*(import)\\s+([A-Za-z_][A-Za-z0-9_-]*(?:/[A-Za-z0-9_.-]+)*)(?:\\s+(as)\\s+([A-Za-z_]\\w*))?",
+      "captures": {
+        "1": {
+          "name": "keyword.declaration.import.clyth"
+        },
+        "2": {
+          "name": "entity.name.namespace.clyth"
+        },
+        "3": {
+          "name": "keyword.control.as.clyth"
+        },
+        "4": {
+          "name": "variable.other.alias.clyth"
+        }
+      }
+    },
+    {
+      "name": "meta.function.lambda.clyth",
+      "match": "\\b([A-Za-z_][A-Za-z0-9_]*(?:\\s*<[^>\\n]+>)?(?:\\s*\\*)?)\\s*(\\()([^()\\n]*)(\\))\\s*(=>)",
+      "captures": {
+        "1": { "name": "storage.type.function.return.clyth" },
+        "2": { "name": "punctuation.definition.parameters.begin.clyth" },
+        "3": { "name": "meta.parameters.lambda.clyth" },
+        "4": { "name": "punctuation.definition.parameters.end.clyth" },
+        "5": { "name": "keyword.operator.lambda.clyth" }
+      }
+    },
+    {
+      "name": "meta.type.callable.clyth",
+      "match": "\\b([A-Za-z_][A-Za-z0-9_]*(?:\\s*<[^>\\n]+>)?)\\s*(\\()([^()\\n]*)(\\))(\\s*\\[\\])?\\s+([A-Za-z_][A-Za-z0-9_]*)",
+      "captures": {
+        "1": {
+          "name": "storage.type.function.return.clyth"
+        },
+        "2": {
+          "name": "punctuation.definition.parameters.begin.clyth"
+        },
+        "3": {
+          "name": "storage.type.function.parameters.clyth"
+        },
+        "4": {
+          "name": "punctuation.definition.parameters.end.clyth"
+        },
+        "5": {
+          "name": "storage.modifier.array.clyth"
+        },
+        "6": {
+          "name": "variable.other.callable.clyth"
+        }
+      }
+    },
+    {
+      "include": "#strings"
+    },
+    {
+      "match": "\\b(struct|protocol)\\s+([A-Za-z_][A-Za-z0-9_]*)",
+      "captures": {
+        "1": {
+          "name": "keyword.declaration.clyth"
+        },
+        "2": {
+          "name": "entity.name.type.clyth"
+        }
+      }
+    },
+    {
+      "name": "keyword.operator.lambda.clyth",
+      "match": "=>"
+    },
+    {
+      "name": "entity.name.type.parameter.clyth",
+      "match": "(?<=[<,])\\s*\\b[A-Z][A-Za-z0-9_]*\\b(?=\\s*[,>])"
+    },
+    {
+      "name": "entity.name.type.clyth",
+      "match": "\\b[A-Z][A-Za-z0-9_]*\\b"
+    },
+    {
+      "name": "keyword.control.clyth",
+      "match": "\\b(if|else|for|while|switch|case|default|break|continue|return)\\b"
+    },
+    {
+      "name": "keyword.declaration.clyth",
+      "match": "\\b(struct|protocol|module|import|extern|new|const|cast|private|public)\\b"
+    },
+    {
+      "name": "storage.modifier.clyth",
+      "match": "\\b(C|this)\\b"
+    },
+    {
+      "name": "constant.language.clyth",
+      "match": "\\b(true|false)\\b"
+    },
+    {
+      "name": "storage.type.clyth",
+      "match": "\\b(void|bool|char|string|int8|int16|int32|int64|uint8|uint16|uint32|uint64|float32|float64)\\b"
+    },
+    {
+      "name": "constant.numeric.clyth",
+      "match": "\\b(?:0[xX][0-9A-Fa-f]+|0[bB][01]+|(?:[0-9]+(?:\\.[0-9]+)?)(?:[eE][+-]?[0-9]+)?)\\b"
+    },
+    {
+      "name": "entity.name.function.clyth",
+      "match": "\\b[A-Za-z_][A-Za-z0-9_]*(?=\\s*\\()"
+    }
+  ],
+  "repository": {
+    "comments": {
+      "patterns": [
+        {
+          "name": "comment.line.double-slash.clyth",
+          "match": "//.*$"
+        },
+        {
+          "name": "comment.block.clyth",
+          "begin": "/\\*",
+          "end": "\\*/"
+        }
+      ]
+    },
+    "strings": {
+      "patterns": [
+        {
+          "name": "string.quoted.double.clyth",
+          "begin": "\"",
+          "end": "\"",
+          "patterns": [
+            {
+              "name": "constant.character.escape.clyth",
+              "match": "\\\\."
+            }
+          ]
+        },
+        {
+          "name": "string.interpolated.clyth",
+          "begin": "f\"",
+          "end": "\"",
+          "patterns": [
+            {
+              "name": "constant.character.escape.clyth",
+              "match": "\\\\."
+            }
+          ]
+        }
+      ]
+    }
+  }
+}

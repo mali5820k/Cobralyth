@@ -1,0 +1,50 @@
+{
+  "name": "clyth-language-support",
+  "displayName": "Clyth Language Support",
+  "description": "Syntax highlighting and LSP support for Clyth.",
+  "version": "0.1.2",
+  "publisher": "clyth",
+  "engines": {
+    "vscode": "^1.95.0"
+  },
+  "categories": [
+    "Programming Languages"
+  ],
+  "activationEvents": [
+    "onLanguage:clyth"
+  ],
+  "main": "./extension.js",
+  "contributes": {
+    "languages": [
+      {
+        "id": "clyth",
+        "aliases": [
+          "Clyth",
+          "clyth"
+        ],
+        "extensions": [
+          ".clyth"
+        ],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "clyth",
+        "scopeName": "source.clyth",
+        "path": "./syntaxes/clyth.tmLanguage.json"
+      }
+    ],
+    "configuration": {
+      "title": "Clyth",
+      "properties": {
+        "clyth.lsp.path": {
+          "type": "string",
+          "default": "",
+          "description": "Optional override for the bundled clyth-lsp executable."
+        }
+      }
+    }
+  },
+  "license": "MIT"
+}

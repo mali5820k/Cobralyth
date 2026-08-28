@@ -1,0 +1,81 @@
+// Clyth Runtime Module: concurrency
+// License: MIT
+//
+// Concurrency is runtime-owned. The compiler should lower async/await and
+// function values into this layer, while explicit POSIX thread access remains
+// available for systems code that wants native-thread control.
+
+extern C int64 clyth_posix_thread_start(int64(int64) entry, int64 arg)
+extern C int32 clyth_posix_thread_completed(int64 thread)
+extern C int64 clyth_posix_thread_result(int64 thread)
+extern C int32 clyth_posix_thread_release(int64 thread)
+extern C int64 clyth_runtime_worker_thread_count()
+extern C void clyth_runtime_set_worker_thread_count(int64 count)
+
+struct RuntimeConfiguration {
+    int64 worker_threads,
+
+    constructor(int64 worker_threads) {
+        this.worker_threads = worker_threads
+    }
+}
+
+struct PosixThread {
+    int64 native_handle,
+
+    constructor(int64 native_handle) {
+        this.native_handle = native_handle
+    }
+
+    bool completed() {
+        return clyth_posix_thread_completed(this.native_handle) == 1
+    }
+
+    int64 result() {
+        return clyth_posix_thread_result(this.native_handle)
+    }
+
+    int32 release() {
+        return clyth_posix_thread_release(this.native_handle)
+    }
+}
+
+int64 runtime_worker_threads() {
+    return clyth_runtime_worker_thread_count()
+}
+
+void configure_runtime(RuntimeConfiguration config) {
+    clyth_runtime_set_worker_thread_count(config.worker_threads)
+}
+
+// Shared worker-pool substrate for runtime modules. Higher-level Clyth modules
+// decide which queues/lane policies to build on top; native code only owns the
+// pthread mechanics and bounded lifetime of the workers.
+extern C int64 clyth_worker_pool_create(int32 workers, int64 stack_bytes)
+extern C int32 clyth_worker_pool_submit(int64 pool, void(int64) work, int64 arg)
+extern C int32 clyth_worker_pool_pending(int64 pool)
+extern C int32 clyth_worker_pool_destroy(int64 pool)
+
+struct WorkerPool {
+    int64 native_handle,
+}
+
+WorkerPool worker_pool(int32 workers, int64 stack_bytes) {
+    WorkerPool pool = WorkerPool()
+    pool.native_handle = clyth_worker_pool_create(workers, stack_bytes)
+    return pool
+}
+
+WorkerPool {
+    int32 submit(void(int64) work, int64 arg) {
+        return clyth_worker_pool_submit(this.native_handle, work, arg)
+    }
+
+    int32 pending() {
+        return clyth_worker_pool_pending(this.native_handle)
+    }
+
+    int32 close() {
+        return clyth_worker_pool_destroy(this.native_handle)
+    }
+}
